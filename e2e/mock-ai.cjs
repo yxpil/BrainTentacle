@@ -360,8 +360,13 @@ const server = http.createServer((req, res) => {
         return respond(res, "E2E-FINAL-FILES: 文件写入与编辑完成", sse);
       }
 
-      // E2E-CMD-SKILL: 轮0 保存技能 → 轮1 搜索技能 → 轮2 最终
+      // E2E-CMD-SKILL: 轮0 保存技能（静默回合，保存后不回灌，见 T21 同源优化）
+      // → 第二条用户消息 E2E-CMD-SKILL2 轮0 搜索 → 轮1 最终
+      if (all.includes("E2E-CMD-SKILL2")) {
+        return respond(res, "E2E-FINAL-SKILL: 技能保存与搜索完成", sse);
+      }
       if (all.includes("E2E-CMD-SKILL")) {
+        // 兼容旧编排：若保存后仍出现反馈轮（非静默路径），继续搜索 → 最终
         if (rounds === 1)
           return respond(
             res,
@@ -818,7 +823,9 @@ const server = http.createServer((req, res) => {
     if (last.includes("E2E-CMD-SLEEP"))
       return respond(
         res,
-        '先执行一个慢命令：\n[{"tool":"shell","params":{"command":"sleep 1.5 && echo e2e-slept"}}]',
+        // sleep 1s（非 1.5s）：Windows 冷启 pwsh 自身耗 0.3~0.6s，1.5+启动开销会越过
+        // FRONT_WINDOW_MS=2000 转后台，T27 忙等断言失准；1s 在三平台都稳留前台窗口内
+        '先执行一个慢命令：\n[{"tool":"shell","params":{"command":"sleep 1 && echo e2e-slept"}}]',
         sse
       );
 
@@ -979,10 +986,17 @@ const server = http.createServer((req, res) => {
         sse
       );
 
+    if (last.includes("E2E-CMD-SKILL2"))
+      return respond(
+        res,
+        '再搜一下已保存的技能：\n[{"tool":"skill","params":{"action":"search","query":"e2e"}}]',
+        sse
+      );
+
     if (last.includes("E2E-CMD-SKILL"))
       return respond(
         res,
-        '保存一条技能：\n[{"tool":"skill","params":{"action":"save","name":"e2e-test-skill","description":"端到端测试技能","content":"console.log(1)"}}]',
+        '保存一条技能：\n[{"tool":"skill","params":{"action":"save","name":"e2e-test-skill","summary":"端到端测试技能"}}]',
         sse
       );
 

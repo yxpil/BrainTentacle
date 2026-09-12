@@ -759,6 +759,8 @@ fn chat_client_ip(ctx: &Arc<Ctx>, headers: &HeaderMap, addr: &std::net::IpAddr) 
 }
 
 async fn list_tools(State(ctx): State<Arc<Ctx>>) -> Json<serde_json::Value> {
+    // worker 回合可能刚 add_tool（写磁盘）：读前合并，远程清单立即看到新工具
+    crate::registry::reload_custom_tools(&ctx);
     let tools = ctx.tools.lock().unwrap().clone();
     Json(json!({ "tools": tools }))
 }
@@ -836,40 +838,17 @@ async fn remove_tool(State(ctx): State<Arc<Ctx>>, Path(id): Path<String>) -> Res
 
 /// GET /api/approvals：列出待审批的工具调用（远程客户端轮询用；本地 UI 走 tool-approval 事件）
 async fn list_approvals(State(ctx): State<Arc<Ctx>>) -> Response {
-    // worker 活着时审批表在子进程里：转发查询
-    if crate::worker::active() && !crate::worker::IN_WORKER.load(std::sync::atomic::Ordering::Relaxed) {
-        return match crate::worker::proxy_list_approvals().await {
-            Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-            Err(e) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("agent worker 不可用: {e}") })),
-            )
-                .into_response(),
-        };
+    // 必须走 engine::list_approvals 的 worker+host 双表合并：
+    // 远程 /api/tools/:id/invoke 与回退进程内回合的审批注册在 host 表，
+    // 只转发 worker 会让远程客户端永远轮询不到、invoke 挂死
+    match crate::engine::list_approvals(&ctx).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
     }
-    let map = ctx.approvals.lock().unwrap();
-    let mut items: Vec<_> = map
-        .iter()
-        .map(|(id, p)| {
-            json!({
-                "id": id,
-                "tool": p.tool,
-                "params": p.params,
-                "age_secs": p.created.elapsed().as_secs(),
-            })
-        })
-        .collect();
-    drop(map);
-    // ap-N 自增 id 按数值排序（字典序会把 ap-10 排在 ap-2 前）
-    items.sort_by_key(|x| {
-        x["id"]
-            .as_str()
-            .unwrap_or_default()
-            .strip_prefix("ap-")
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0)
-    });
-    Json(json!({ "approvals": items })).into_response()
 }
 
 /// POST /api/approvals/{id}：应答审批请求（body: {"allow": bool}）。本地 UI 与远程客户端共用同一张审批表
@@ -911,6 +890,8 @@ async fn invoke_tool(
         .unwrap_or_else(|| "agent:unknown".into());
 
     let params = body.get("params").cloned().unwrap_or(json!({}));
+    // worker 回合里自建工具只更新磁盘+worker 内存：invoke 前重刷，避免调到旧版本
+    crate::registry::reload_custom_tools(&ctx);
     // 审批模式真实生效：ask/auto 下非安全工具须先经审批（本地弹卡片 / 远程轮询应答），
     // 否则远程客户端可绕过审批直接调用 shell 等危险工具。allow_all 一律放行
     let tool_name = {
@@ -1066,6 +1047,8 @@ async fn debug_state(State(ctx): State<Arc<Ctx>>) -> Response {
 
 /// GET /api/debug/sessions：会话列表（不含消息体，含条数与摘要）
 async fn debug_sessions(State(ctx): State<Arc<Ctx>>) -> Response {
+    // 回合在 worker 子进程跑：先合并磁盘（mtime 守卫，无变化零成本）
+    crate::session::refresh_from_disk(&ctx);
     let store = ctx.sessions.lock().unwrap().clone();
     let list: Vec<_> = store
         .sessions
@@ -1086,6 +1069,7 @@ async fn debug_sessions(State(ctx): State<Arc<Ctx>>) -> Response {
 
 /// GET /api/debug/sessions/{id}：单个会话全部消息（含 tool_calls 明细）
 async fn debug_session_detail(State(ctx): State<Arc<Ctx>>, Path(id): Path<String>) -> Response {
+    crate::session::refresh_from_disk(&ctx);
     let store = ctx.sessions.lock().unwrap().clone();
     match store.sessions.iter().find(|s| s.id == id) {
         Some(s) => Json(json!({
@@ -1106,6 +1090,8 @@ async fn debug_session_detail(State(ctx): State<Arc<Ctx>>, Path(id): Path<String
 
 /// GET /api/debug/goals：目标与待办快照（供 E2E / 调试桥断言目标状态）
 async fn debug_goals(State(ctx): State<Arc<Ctx>>) -> Response {
+    // plan 等工具在 worker 进程里写 goals.json/todos.json：读前先同步磁盘
+    crate::goal::refresh_from_disk(&ctx);
     let goals = ctx.goals.lock().unwrap().clone();
     let todos = ctx.todos.lock().unwrap().clone();
     Json(json!({ "goals": goals, "todos": todos })).into_response()
@@ -1160,18 +1146,17 @@ async fn debug_interrupt(State(ctx): State<Arc<Ctx>>, Json(body): Json<serde_jso
         )
             .into_response();
     }
-    let hit = {
-        let map = ctx.interrupts.lock().unwrap();
-        match map.get(&sid) {
-            Some(flag) => {
-                flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                true
-            }
-            None => false,
-        }
+    // 回合在 worker 子进程跑时中断标志注册在 worker 侧：必须走 engine::interrupt 的
+    // worker+host 双查取或，只查 host 表会让远程中断静默失效（T24 实测）
+    let body = match crate::engine::interrupt(&ctx, &sid).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
     };
-    crate::audit::record(&ctx, "remote", "chat.interrupt", &sid, json!({ "was_running": hit }), true);
-    Json(json!({ "id": sid, "interrupted": hit })).into_response()
+    body
 }
 
 /// GET /api/debug/system_prompt?session_id=xxx：返回该会话下一轮将注入的系统提示词。
@@ -1536,8 +1521,21 @@ async fn remote_chat(
         return resp;
     }
 
-    // 远程指定的会话不存在时自动创建（外部客户端可直接开启新会话）
-    ctx.sessions.lock().unwrap().get_or_create_mut(&session_id);
+    // 远程指定的会话不存在时自动创建（外部客户端可直接开启新会话）。
+    // worker 分进程架构下必须先合并磁盘最新再创建并立即落盘：worker 启动后只读磁盘，
+    // 新会话只在 host 内存时它看不见 → 首条消息回退 host 执行，回合中途落盘后第二条
+    // 消息又被 worker 接走，同会话被两进程并发执行（忙等门禁失效）。refresh 的
+    // retain 会删除磁盘没有的内存会话，因此顺序固定为 refresh → create → persist。
+    crate::session::refresh_from_disk(&ctx);
+    {
+        // host 只占位、回合实际在 worker 跑：updated 必须置空，否则秒级时间戳下
+        // host 创建与 worker 首回合落盘同秒，磁盘合并判定相等不替换，host 侧永远
+        // 留着空壳（T41 历史隔离看到 0 条消息的根因）
+        let mut store = ctx.sessions.lock().unwrap();
+        let s = store.get_or_create_mut(&session_id);
+        s.updated = String::new();
+    }
+    crate::session::persist(&ctx);
 
     match crate::engine::chat_auto(&ctx, &session_id, &message, images).await {
         Ok(messages) => {

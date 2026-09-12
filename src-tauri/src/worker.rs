@@ -556,7 +556,10 @@ pub async fn serve(ctx: Arc<Ctx>) -> Result<(), String> {
 
     /// 会话缺失自愈：worker 只在启动时加载 sessions.json，host 之后新建的会话
     /// 它是看不见的 → 对话必报"会话不存在" → host 回退进程内执行（审批/中断表分裂的根源）。
-    /// 这里在跑回合前发现会话缺失就从磁盘合并一次（mtime 守卫，正常路径零开销）。
+    /// 两级自愈：先从磁盘合并一次（mtime 守卫，正常路径零开销）；磁盘也没有
+    /// （远程 /api/chat 的全新会话，host 侧 get_or_create_mut 仅在内存、尚未落盘）
+    /// 则直接在 worker 侧创建——否则首条消息回退 host 执行，回合中途落盘后第二条
+    /// 消息又被 worker 接走，同一会话被两进程并发执行（忙等门禁 T27 失效根因）。
     fn ensure_session(ctx: &Arc<Ctx>, sid: &str) {
         if sid.is_empty() {
             return;
@@ -564,6 +567,10 @@ pub async fn serve(ctx: Arc<Ctx>) -> Result<(), String> {
         let exists = ctx.sessions.lock().unwrap().get_mut(sid).is_some();
         if !exists {
             crate::session::refresh_from_disk(ctx);
+            let mut store = ctx.sessions.lock().unwrap();
+            if store.get_mut(sid).is_none() {
+                store.get_or_create_mut(sid);
+            }
         }
     }
 
@@ -675,19 +682,8 @@ fn reload_state(ctx: &Arc<Ctx>) {
     let dir = ctx.data_dir.clone();
     *ctx.config.lock().unwrap() = crate::config::Config::load(&dir);
     *ctx.ai_config.lock().unwrap() = read_json(&dir.join("ai_config.json")).unwrap_or_default();
-    let tools: Vec<crate::registry::ToolDef> = read_json(&dir.join("tools.json")).unwrap_or_default();
-    let tools = {
-        let builtin = crate::registry::builtin_tools();
-        let builtin_names: std::collections::HashSet<String> = builtin.iter().map(|t| t.name.clone()).collect();
-        let mut custom: Vec<crate::registry::ToolDef> = tools
-            .into_iter()
-            .filter(|t| !matches!(t.kind, crate::registry::ToolKind::Builtin { .. }) && !builtin_names.contains(&t.name))
-            .collect();
-        let mut merged = builtin;
-        merged.append(&mut custom);
-        merged
-    };
-    *ctx.tools.lock().unwrap() = tools;
+    // 工具清单（内置重建 + 自建从 tools.json 合并）与 host 远程调用走同一入口，避免规则漂移
+    crate::registry::reload_custom_tools(ctx);
     *ctx.skills.lock().unwrap() = read_json(&dir.join("skills.json")).unwrap_or_default();
     *ctx.memories.lock().unwrap() = read_json(&dir.join("memories.json")).unwrap_or_default();
     *ctx.goals.lock().unwrap() = read_json(&dir.join("goals.json")).unwrap_or_default();

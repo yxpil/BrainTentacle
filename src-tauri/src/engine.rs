@@ -17,7 +17,10 @@ fn parse_messages(v: serde_json::Value) -> Result<Vec<ChatMessage>, String> {
 /// 回合级结论性错误：worker 已经给出确定结果（如"对话已中断"），回退重跑只会
 /// 重复入历史 + 让 AI 中断后又冒出一段话。这类错误直接透传给前端，绝不 fallback 重跑。
 fn is_turn_final_error(e: &str) -> bool {
-    e.contains("对话已中断")
+    // 忙等拒绝同样必须透传：worker 回合在跑时锁在 worker 进程，host 本地锁是空的——
+    // 若误当 worker 故障回退进程内执行，host 会抢跑同一消息（200 + 状态分裂），
+    // 远程互斥用例 T27 实测到该路径
+    e.contains("对话已中断") || e.contains("正在执行的回合")
 }
 
 /// 带自动推进的流式对话回合（UI 发消息主路径）
@@ -175,4 +178,20 @@ pub async fn list_approvals(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String>
         }));
     }
     Ok(json!({ "approvals": items }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_turn_final_error;
+
+    #[test]
+    fn turn_final_error_classification() {
+        // 中断：透传不重跑
+        assert!(is_turn_final_error("对话已中断"));
+        // 忙等拒绝：必须透传（否则 host 回退进程内抢跑，制造跨进程状态分裂）
+        assert!(is_turn_final_error("该会话已有正在执行的回合，请等待完成后再发送新消息"));
+        // worker 失联等普通错误：仍允许回退进程内执行
+        assert!(!is_turn_final_error("error sending request"));
+        assert!(!is_turn_final_error("connection refused"));
+    }
 }

@@ -635,6 +635,24 @@ mod relax_tests {
     }
 }
 
+/// 从 tools.json 重新合并自建工具到内存清单（内置工具始终以代码为准重建）。
+/// host 的远程 invoke / 工具清单读取前调用：worker 回合里 add_tool 只落盘并更新
+/// worker 内存，host 不重刷就会调到旧版本（T10 实测调到上一轮残留的 tripled 版本）。
+pub fn reload_custom_tools(ctx: &Arc<crate::state::Ctx>) {
+    let disk: Vec<ToolDef> =
+        crate::state::read_json(&ctx.data_dir.join("tools.json")).unwrap_or_default();
+    let builtin = builtin_tools();
+    let builtin_names: std::collections::HashSet<String> =
+        builtin.iter().map(|t| t.name.clone()).collect();
+    let custom: Vec<ToolDef> = disk
+        .into_iter()
+        .filter(|t| !matches!(t.kind, ToolKind::Builtin { .. }) && !builtin_names.contains(&t.name))
+        .collect();
+    let mut merged = builtin;
+    merged.extend(custom);
+    *ctx.tools.lock().unwrap() = merged;
+}
+
 /// 执行工具：内置实现或转发到 Agent 回调端点
 /// `session`：发起调用的会话 id（用于长任务感知主会话中断，可为 None）
 pub async fn invoke(

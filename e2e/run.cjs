@@ -65,6 +65,8 @@ function getSSE(path, body) {
       (res) => {
         let b = "";
         res.on("data", (c) => (b += c));
+        // T58 强杀复活窗口响应被 RST：不监听 res error 会冒泡成 uncaughtException 整个 runner 崩
+        res.on("error", reject);
         res.on("end", () => resolve({ code: res.statusCode, sse: b }));
       }
     );
@@ -90,7 +92,12 @@ function getJson(path) {
     const req = http.request(
       { host: BASE, port: PORT, path, method: "GET",
         headers: { Authorization: `Bearer ${KEY}`, "X-Access-Password": PASSWORD }, timeout: 15000, agent },
-      (res) => { let b = ""; res.on("data", (c) => (b += c)); res.on("end", () => resolve(JSON.parse(b))); }
+      (res) => {
+        let b = "";
+        res.on("data", (c) => (b += c));
+        res.on("error", reject); // 复活窗口 RST 兜底
+        res.on("end", () => resolve(JSON.parse(b)));
+      }
     );
     req.on("error", reject);
     req.end();
@@ -103,7 +110,12 @@ function callGet(path) {
     const req = http.request(
       { host: BASE, port: PORT, path, method: "GET",
         headers: { Authorization: `Bearer ${KEY}`, "X-Access-Password": PASSWORD }, timeout: 15000, agent },
-      (res) => { let b = ""; res.on("data", (c) => (b += c)); res.on("end", () => resolve({ code: res.statusCode, body: b })); }
+      (res) => {
+        let b = "";
+        res.on("data", (c) => (b += c));
+        res.on("error", reject); // T58 kill/复活窗口响应被 RST：由调用方 catch 轮询重试
+        res.on("end", () => resolve({ code: res.statusCode, body: b }));
+      }
     );
     req.on("error", reject);
     req.end();
@@ -115,7 +127,12 @@ function getStatus(path, headers) {
   return new Promise((resolve, reject) => {
     const req = http.request(
       { host: BASE, port: PORT, path, method: "GET", headers, timeout: 15000, agent },
-      (res) => { let b = ""; res.on("data", (c) => (b += c)); res.on("end", () => resolve({ code: res.statusCode, body: b })); }
+      (res) => {
+        let b = "";
+        res.on("data", (c) => (b += c));
+        res.on("error", reject);
+        res.on("end", () => resolve({ code: res.statusCode, body: b }));
+      }
     );
     req.on("error", reject);
     req.end();
@@ -237,10 +254,20 @@ function record(name, ok, detail) {
     record("T6 tool-plan", ok6, `reply=${(r.reply || "").slice(0, 80)}`);
   } catch (e) { record("T6 tool-plan", false, e.message); }
 
-  // T7 skill save → search 跨轮连续调用
+  // T7 skill save → search：save 属沉淀型工具，回合静默结束（不回灌、不触发第二轮，
+  // 与 T21 同源优化）；跨轮链路改为跨两条用户消息：保存静默 → 再发消息触发搜索 → 最终
   try {
-    const r = await chat(sid(7), "E2E-CMD-SKILL go");
-    record("T7 tool-skill-roundtrip", /E2E-FINAL-SKILL/.test(r.reply || ""), `reply=${(r.reply || "").slice(0, 80)}`);
+    const r0 = await chat(sid(7), "E2E-CMD-SKILL go");
+    const saved = (r0.messages || [])
+      .flatMap((m) => m.tool_calls || [])
+      .some((c) => c.tool === "skill" && c.params?.action === "save" && c.ok === true);
+    const r = await chat(sid(7), "E2E-CMD-SKILL2 search");
+    const searched = (r.messages || [])
+      .flatMap((m) => m.tool_calls || [])
+      .some((c) => c.tool === "skill" && c.params?.action === "search" && c.ok === true);
+    record("T7 tool-skill-roundtrip",
+      saved && searched && /E2E-FINAL-SKILL/.test(r.reply || ""),
+      `saved=${saved} searched=${searched} reply=${(r.reply || "").slice(0, 60)}`);
   } catch (e) { record("T7 tool-skill-roundtrip", false, e.message); }
 
   // T8 OpenAI 兼容流式（stream=true 返回 SSE 增量）

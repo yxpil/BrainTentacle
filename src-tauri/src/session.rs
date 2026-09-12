@@ -124,6 +124,10 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &std::path::Path) -> Option<T> 
 }
 
 pub fn persist(ctx: &Arc<crate::state::Ctx>) {
+    // 多进程（host + agent-worker）共用 sessions.json：写前先把磁盘上其他进程
+    // 的回合并入内存（updated 新者胜，不裁剪），否则整仓覆盖会抹掉并发回合
+    // （host/worker 各持一份启动快照时，T41 双设备并发的历史隔离必挂）
+    merge_from_disk(ctx, false);
     let store = ctx.sessions.lock().unwrap();
     let _ = std::fs::write(
         ctx.data_dir.join("sessions.json"),
@@ -139,10 +143,11 @@ fn disk_mtime(ctx: &Arc<crate::state::Ctx>) -> Option<std::time::SystemTime> {
         .ok()
 }
 
-/// 其他进程（bit 命令行等）可能写过 sessions.json：按 id 合并磁盘侧变更（updated 新者胜），
-/// 磁盘上已消失的会话视为被外部删除。mtime 未变则直接返回，避免每次列表都全量解析。
-/// 由 list_sessions / get_session 在读取前调用，让 GUI 无需重启即可看到命令行的会话变更。
-pub fn refresh_from_disk(ctx: &Arc<crate::state::Ctx>) {
+/// 其他进程（bit 命令行等）可能写过 sessions.json：按 id 合并磁盘侧变更（updated 新者胜）。
+/// prune=true 时磁盘上已消失的会话视为被外部删除；prune=false 时保留内存独有会话
+/// （persist 写前合并用：新建会话还只在内存，裁剪会把它丢掉）。
+/// mtime 未变则直接返回，避免每次列表都全量解析。
+fn merge_from_disk(ctx: &Arc<crate::state::Ctx>, prune: bool) {
     let mtime = disk_mtime(ctx);
     {
         let mut seen = ctx.sessions_disk_ts.lock().unwrap();
@@ -167,7 +172,14 @@ pub fn refresh_from_disk(ctx: &Arc<crate::state::Ctx>) {
             None => store.sessions.push(d),
         }
     }
-    store.sessions.retain(|s| disk_ids.contains(&s.id));
+    if prune {
+        store.sessions.retain(|s| disk_ids.contains(&s.id));
+    }
+}
+
+/// 读前刷新（GUI / 调试接口）：外部删除生效，mtime 守卫零成本
+pub fn refresh_from_disk(ctx: &Arc<crate::state::Ctx>) {
+    merge_from_disk(ctx, true);
 }
 
 #[cfg(test)]

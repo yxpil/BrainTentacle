@@ -51,6 +51,23 @@ fn persist(ctx: &Arc<crate::state::Ctx>) {
     );
 }
 
+/// 从磁盘重载目标/待办：桌面端会话在 worker 子进程里跑时，plan 等工具写的是
+/// worker 内存 + goals.json/todos.json，host 的调试/远程接口读取前必须同步，
+/// 否则跨进程看到空表（create_goal 每次都落盘，磁盘即最新状态，直接整体替换）
+pub fn refresh_from_disk(ctx: &Arc<crate::state::Ctx>) {
+    let read = |name: &str| std::fs::read_to_string(ctx.data_dir.join(name)).ok();
+    if let Some(s) = read("goals.json") {
+        if let Ok(g) = serde_json::from_str::<Vec<Goal>>(&s) {
+            *ctx.goals.lock().unwrap() = g;
+        }
+    }
+    if let Some(s) = read("todos.json") {
+        if let Ok(t) = serde_json::from_str::<Vec<Todo>>(&s) {
+            *ctx.todos.lock().unwrap() = t;
+        }
+    }
+}
+
 // ---------- Goal ----------
 
 /// 短数字 id：现有 id 中最大数字 +1（如 "12"）。旧 uuid 长 id 共存——所有查找都是精确匹配。
