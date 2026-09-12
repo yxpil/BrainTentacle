@@ -1999,7 +1999,24 @@ mod tests {
                         "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
                     );
-                    use tokio::io::AsyncWriteExt;
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    // 必须先读完请求头再响应：Windows 下 socket 关闭时若内核接收缓冲里
+                    // 仍有对端未读数据会回 RST，客户端正发送请求即报 10053 ConnectionAborted
+                    //（Linux 走 FIN 时序宽松，CI 上不复现）；GET 请求读完头即可
+                    let mut buf = [0u8; 1024];
+                    let mut filled = 0;
+                    while filled < buf.len() {
+                        match sock.read(&mut buf[filled..]).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                filled += n;
+                                if String::from_utf8_lossy(&buf[..filled]).contains("\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => return,
+                        }
+                    }
                     let _ = sock.write_all(resp.as_bytes()).await;
                 });
             }
