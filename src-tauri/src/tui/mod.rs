@@ -67,12 +67,65 @@ impl Out {
     pub(crate) fn line_with_kind(&self, kind: MsgKind, s: impl Into<String>) {
         let s = s.into();
         match self {
-            Out::Stdout => println!("{}", s),
+            Out::Stdout => {
+                // 真实终端 → ANSI 彩色；管道/E2E → 纯文本
+                use std::io::IsTerminal;
+                if std::io::stdout().is_terminal() {
+                    println!("{}", ansi_colorize(kind, &s));
+                } else {
+                    println!("{}", s);
+                }
+            }
             Out::Chan(tx) => {
                 let _ = tx.send((kind, s));
             }
         }
     }
+}
+
+/// plain 模式 ANSI 真彩色（只在 terminal 上启用）
+fn ansi_colorize(kind: MsgKind, s: &str) -> String {
+    let (fg, bold) = match kind {
+        MsgKind::System => (90, false),      // 深灰 = 次要信息
+        MsgKind::User => (36, true),          // 青粗 = 用户
+        MsgKind::Assistant => (32, false),    // 绿 = AI
+        MsgKind::Tool => (33, false),         // 黄 = 工具
+        MsgKind::Error => (31, true),         // 红粗 = 错误
+        MsgKind::Divider => (90, false),      // 深灰 = 分隔
+    };
+    if bold {
+        format!("\x1b[1;{fg}m{s}\x1b[0m")
+    } else {
+        format!("\x1b[{fg}m{s}\x1b[0m")
+    }
+}
+
+/// plain 模式 prompt 彩色辅助
+pub(crate) fn ansi_prompt(ctx: &Arc<Ctx>) -> String {
+    let (sid, title) = {
+        let store = ctx.sessions.lock().unwrap();
+        let active = store.active.clone();
+        let s = store.sessions.iter().find(|s| s.id == active);
+        match s {
+            Some(s) => (
+                s.id[..s.id.len().min(6)].to_string(),
+                if s.title.trim().is_empty() { "未命名".into() } else { s.title.clone() },
+            ),
+            None => ("------".into(), "未命名".into()),
+        }
+    };
+    let model = ctx
+        .ai_config
+        .lock()
+        .unwrap()
+        .active()
+        .map(|p| p.model.clone())
+        .unwrap_or_else(|| "未配置".into());
+    // 青色会话标题 + 深灰 model/sid + 绿色 bit> 提示符
+    format!(
+        "\x1b[1;36m[{}]\x1b[0;90m {model} · {sid}\x1b[0m \x1b[1;32mbit>\x1b[0m ",
+        title.chars().take(16).collect::<String>()
+    )
 }
 
 /// 由 main.rs 在独立线程调用：按终端形态分流，不返回（进程内退出）
@@ -382,11 +435,28 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                     out.line_with_kind(MsgKind::Assistant, m.content.trim().to_string());
                 }
                 for tc in &m.tool_calls {
-                    let outcome = if tc.ok { "成功" } else { "失败" };
-                    out.line_with_kind(
-                        MsgKind::Tool,
-                        format!("[tool] {} {} → {}", tc.tool, tc.params, outcome),
-                    );
+                    let symbol = if tc.ok { "\u{2713}" } else { "\u{2717}" }; // ✓ / ✗
+                    let head = if tc.ok {
+                        format!("  \u{25B6} {} \u{2192} \u{2713} 成功", tc.tool)
+                    } else {
+                        format!("  \u{25B6} {} \u{2192} \u{2717} 失败", tc.tool)
+                    };
+                    out.line_with_kind(MsgKind::Tool, head);
+                    // 参数单独一行（Value → 字符串，太长时截断）
+                    let params_str = match &tc.params {
+                        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                            serde_json::to_string_pretty(&tc.params).unwrap_or_else(|_| tc.params.to_string())
+                        }
+                        _ => tc.params.to_string(),
+                    };
+                    let preview = if params_str.chars().count() > 140 {
+                        params_str.chars().take(140).collect::<String>() + "…"
+                    } else {
+                        params_str
+                    };
+                    if !preview.trim().is_empty() {
+                        out.line_with_kind(MsgKind::System, format!("    {}", preview.trim()));
+                    }
                 }
             }
         }
