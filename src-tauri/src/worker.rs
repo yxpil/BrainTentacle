@@ -38,6 +38,11 @@ static FAILS: AtomicU32 = AtomicU32::new(0);
 static EVENT_SINK_URL: OnceLock<String> = OnceLock::new();
 /// worker 侧：UI 事件转发通道（单消费者保序）
 static EV_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<(String, serde_json::Value)>> = OnceLock::new();
+
+/// worker 进程内：通过宿主事件通道发一条事件。非 worker 进程内调用 = no-op。
+pub fn event_tx() -> Option<&'static tokio::sync::mpsc::UnboundedSender<(String, serde_json::Value)>> {
+    EV_TX.get()
+}
 /// worker 侧：回合在飞起始时刻 / 最后一次 UI 事件时刻（宿主卡死检测数据源）
 static TURN_SINCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static LAST_EMIT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
@@ -136,28 +141,56 @@ async fn start_event_sink(ctx: &Arc<Ctx>) -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?.to_string();
-    let token = token().to_string();
+    let token_str = crate::worker::token().to_string();
     let app = ctx.app.clone();
 
+    struct EventSinkState {
+        app: tauri::AppHandle,
+        token: String,
+        ctx: Arc<Ctx>,
+    }
+
     async fn receive(
-        State((app, token)): State<(tauri::AppHandle, String)>,
+        State(s): State<Arc<EventSinkState>>,
         headers: HeaderMap,
         Json(body): Json<serde_json::Value>,
     ) -> StatusCode {
-        if headers.get("x-bit-worker-token").and_then(|v| v.to_str().ok()) != Some(token.as_str()) {
+        if headers.get("x-bit-worker-token").and_then(|v| v.to_str().ok()) != Some(s.token.as_str()) {
             return StatusCode::UNAUTHORIZED;
         }
         let (Some(name), Some(payload)) = (body.get("name").and_then(|v| v.as_str()), body.get("payload").cloned()) else {
             return StatusCode::BAD_REQUEST;
         };
+        // 特殊事件：usage-sync — worker 同步 cache_stats 给 host（内存态，不走 webview）
+        if name == "usage-sync" {
+            if let (Some(sid), Some(pt), Some(cr), Some(cw), Some(ct)) = (
+                payload.get("session").and_then(|v| v.as_str()),
+                payload.get("prompt_tokens").and_then(|v| v.as_u64()),
+                payload.get("cache_read_tokens").and_then(|v| v.as_u64()),
+                payload.get("cache_write_tokens").and_then(|v| v.as_u64()),
+                payload.get("completion_tokens").and_then(|v| v.as_u64()),
+            ) {
+                let known = payload.get("cache_known").and_then(|v| v.as_bool()).unwrap_or(false);
+                let usage = crate::ai::TokenUsage {
+                    prompt_tokens: pt,
+                    cache_read_tokens: cr,
+                    cache_write_tokens: cw,
+                    completion_tokens: ct,
+                    cache_known: known,
+                };
+                crate::state::record_usage(&s.ctx, sid, &usage);
+            }
+            return StatusCode::OK;
+        }
         use tauri::Emitter;
-        let _ = app.emit(name, payload);
+        let _ = s.app.emit(name, payload);
         StatusCode::OK
     }
 
+    let sink_state = Arc::new(EventSinkState { app, token: token_str, ctx: ctx.clone() });
     let router = Router::new()
         .route("/host-event", post(receive))
-        .with_state((app, token));
+        .with_state(sink_state);
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });

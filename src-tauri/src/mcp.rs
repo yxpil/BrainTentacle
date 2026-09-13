@@ -2,9 +2,22 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// MCP（Model Context Protocol）接入：Streamable HTTP 传输（JSON-RPC 2.0）。
+/// MCP（Model Context Protocol）接入：支持 Streamable HTTP 和 stdio 两种传输。
 /// 遵循 MCP 规范：initialize 握手 → notifications/initialized → tools/list / tools/call。
-/// 同时兼容返回 application/json 或 text/event-stream 的服务器。
+
+/// 传输方式
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    Http,
+    Stdio,
+}
+
+impl Default for McpTransport {
+    fn default() -> Self {
+        Self::Http
+    }
+}
 
 /// 已接入的 MCP 服务器（持久化到 mcp_servers.json）
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -12,15 +25,28 @@ pub struct McpServer {
     pub id: String,
     /// 服务器自报名称（serverInfo.name）
     pub name: String,
-    /// Streamable HTTP 端点 URL
+    /// Streamable HTTP 端点 URL（http 传输用）
+    #[serde(default)]
     pub url: String,
+    /// 传输方式
+    #[serde(default)]
+    pub transport: McpTransport,
+    /// stdio 传输：启动命令（如 npx / uvx / python）
+    #[serde(default)]
+    pub command: String,
+    /// stdio 传输：命令参数
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// stdio 传输：额外环境变量
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
     /// 服务器版本（serverInfo.version）
     #[serde(default)]
     pub version: String,
     /// 协议版本（initialize 协商结果）
     #[serde(default)]
     pub protocol: String,
-    /// initialize 返回的会话 id（Mcp-Session-Id），后续请求必须携带
+    /// initialize 返回的会话 id（Mcp-Session-Id），仅 http 传输使用
     #[serde(default)]
     pub session: String,
     /// 暂停/继续：false 时该服务器全部工具拒绝调用
@@ -340,6 +366,375 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
     ctx.mcp.lock().unwrap().iter().find(|s| s.id == id).cloned()
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// stdio 传输：JSON-RPC 2.0 over stdin/stdout（换行分隔）
+// ══════════════════════════════════════════════════════════════════════════
+
+/// stdio 子进程 JSON-RPC 会话：持有子进程句柄 + 待处理请求队列
+    pub mod stdio_session {
+        use super::*;
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex as StdMutex};
+
+        /// 一个 stdio MCP 会话：子进程句柄 + 消息收发通道
+        pub struct StdioSession {
+            pub server_id: String,
+            /// tokio 子进程句柄。kill 时 abort（Tokio Child abort 是非阻塞的）
+            pub child_tokio: StdMutex<Option<tokio::process::Child>>,
+            pub next_id: StdMutex<u64>,
+            pub pending: Arc<StdMutex<HashMap<u64, tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>>>>,
+            /// JSON-RPC 请求写入子进程 stdin 的发送端
+            pub tx: StdMutex<tokio::sync::mpsc::Sender<Vec<u8>>>,
+        }
+
+    impl StdioSession {
+        /// 发起一次 JSON-RPC 调用，等待响应
+        pub async fn call(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<serde_json::Value, String> {
+            let id = {
+                let mut n = self.next_id.lock().unwrap();
+                *n += 1;
+                *n
+            };
+            let req = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params,
+            });
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.pending.lock().unwrap().insert(id, tx);
+            let line = serde_json::to_vec(&req)
+                .map_err(|e| format!("序列化请求失败: {e}"))?;
+            {
+                let mut tx_guard = self.tx.lock().unwrap();
+                tx_guard
+                    .send(line)
+                    .await
+                    .map_err(|e| format!("写入子进程 stdin 失败: {e}"))?;
+            }
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                rx,
+            )
+            .await
+            .map_err(|_| format!("stdio MCP {method} 超时"))?
+            .map_err(|_| format!("stdio MCP {method} 通道关闭"))??;
+            Ok(result)
+        }
+
+        /// 发送通知（fire-and-forget）
+        pub async fn notify(&self, method: &str, params: serde_json::Value) {
+            let req = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params,
+            });
+            if let Ok(line) = serde_json::to_vec(&req) {
+                if let Ok(mut tx) = self.tx.lock() {
+                    let _ = tx.send(line).await;
+                }
+            }
+        }
+
+        /// kill 子进程
+        pub fn kill(&self) {
+            if let Ok(mut guard) = self.child_tokio.lock() {
+                if let Some(mut child) = guard.take() {
+                    let _ = child.start_kill();
+                }
+            }
+        }
+    }
+
+    /// Windows 下 npx/uvx 等 npm 命令实际是 .cmd，Rust Command::new("npx") 会找不到。
+    /// 用 cmd /c 包裹在 Windows 上更可靠。
+    #[cfg(windows)]
+    fn build_command(cmd: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
+        let mut c = tokio::process::Command::new("cmd");
+        c.arg("/c").arg(cmd).args(args);
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        c
+    }
+    #[cfg(not(windows))]
+    fn build_command(cmd: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
+        let mut c = tokio::process::Command::new(cmd);
+        c.args(args);
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        c
+    }
+
+    /// spawn 一个 stdio MCP server，做 initialize 握手，返回 StdioSession + 服务器信息
+    pub async fn spawn_and_initialize(
+        id: String,
+        command: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> Result<(Arc<StdioSession>, String, String, String), String> {
+        let mut cmd = build_command(&command, &args, &env);
+        let mut child = cmd.spawn().map_err(|e| format!("启动 {command} 失败: {e}"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "无法获取子进程 stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "无法获取子进程 stdout".to_string())?;
+
+        // 写任务（stdin）：从 mpsc 通道收 Vec<u8>，写 JSON-RPC 行
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+        tauri::async_runtime::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let mut stdin = stdin;
+            while let Some(line) = writer_rx.recv().await {
+                let _ = stdin.write_all(&line).await;
+                let _ = stdin.write_all(b"\n").await;
+                let _ = stdin.flush().await;
+            }
+            let _ = stdin.shutdown().await;
+        });
+
+        // 读任务（stdout）：逐行解析 JSON-RPC 响应，分发给 pending
+        let pending: Arc<StdMutex<HashMap<u64, tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>>>> =
+            Arc::new(StdMutex::new(HashMap::new()));
+        let pending_reader = pending.clone();
+        let server_id_for_reader = id.clone();
+        tauri::async_runtime::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&line) {
+                    let id_val = resp.get("id").and_then(|v| v.as_u64());
+                    if let Some(id) = id_val {
+                        if let Some(tx) = pending_reader.lock().unwrap().remove(&id) {
+                            let result = if let Some(err) = resp.get("error") {
+                                let msg = err
+                                    .get("message")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("MCP error")
+                                    .to_string();
+                                Err(msg)
+                            } else {
+                                Ok(resp.get("result").cloned().unwrap_or(serde_json::Value::Null))
+                            };
+                            let _ = tx.send(result);
+                        }
+                    }
+                }
+            }
+            // 进程退出：清理所有 pending
+            let mut p = pending_reader.lock().unwrap();
+            for (_, tx) in p.drain() {
+                let _ = tx.send(Err(format!("stdio MCP server {} 已退出", server_id_for_reader)));
+            }
+        });
+
+        let session = Arc::new(StdioSession {
+            server_id: id.clone(),
+            child_tokio: StdMutex::new(Some(child)),
+            next_id: StdMutex::new(0),
+            pending: pending.clone(),
+            tx: StdMutex::new(writer_tx),
+        });
+
+        // initialize 握手
+        let init_result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            session.call(
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": { "name": "BIT", "version": env!("CARGO_PKG_VERSION") }
+                }),
+            ),
+        )
+        .await
+        .map_err(|_| "stdio MCP initialize 超时（进程是否正常启动？）".to_string())??;
+
+        let info = init_result.get("serverInfo");
+        let name = info
+            .and_then(|i| i.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("stdio MCP")
+            .to_string();
+        let version = info
+            .and_then(|i| i.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let protocol = init_result
+            .get("protocolVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        session
+            .notify("notifications/initialized", serde_json::json!({}))
+            .await;
+
+        Ok((session, name, version, protocol))
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 进程注册：按 server_id 持有 StdioSession，供 call_tool / list_tools / remove 用
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 进程注册表（放在 state.rs 的 Ctx 里）
+pub type McpProcessRegistry =
+    std::sync::Mutex<std::collections::HashMap<String, ArcStdioSession>>;
+
+// 简化别名（对外暴露给 McpProcessRegistry 用）
+pub type ArcStdioSession = std::sync::Arc<stdio_session::StdioSession>;
+
+/// spawn 并注册一个 stdio MCP server
+pub async fn register_stdio(
+    registry: &McpProcessRegistry,
+    id: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+) -> Result<(ArcStdioSession, String, String, String), String> {
+    let (session, name, version, protocol) =
+        stdio_session::spawn_and_initialize(id.clone(), command, args, env).await?;
+    registry
+        .lock()
+        .unwrap()
+        .insert(id, session.clone());
+    Ok((session, name, version, protocol))
+}
+
+/// 从注册表移除并 kill
+pub fn unregister_stdio(registry: &McpProcessRegistry, id: &str) {
+    if let Some(sess) = registry.lock().unwrap().remove(id) {
+        sess.kill();
+    }
+}
+
+/// 统一入口：list_tools 根据传输方式分发
+pub async fn list_tools_dispatch(
+    server: &McpServer,
+    registry: Option<&McpProcessRegistry>,
+) -> Result<Vec<McpTool>, String> {
+    match server.transport {
+        McpTransport::Http => list_tools(server).await,
+        McpTransport::Stdio => {
+            let reg = registry.ok_or_else(|| "stdio MCP 需要进程注册表".to_string())?;
+            let sess = reg
+                .lock()
+                .unwrap()
+                .get(&server.id)
+                .cloned()
+                .ok_or_else(|| format!("stdio MCP {} 未注册（进程可能已退出）", server.id))?;
+
+            let mut tools: Vec<McpTool> = Vec::new();
+            let mut cursor: Option<String> = None;
+            for _ in 0..100 {
+                let mut params = serde_json::json!({});
+                if let Some(c) = &cursor {
+                    params["cursor"] = serde_json::json!(c);
+                }
+                let result = sess.call("tools/list", params).await?;
+                let arr = result
+                    .get("tools")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                for t in arr {
+                    if let Some(name) = t.get("name").and_then(|v| v.as_str()) {
+                        tools.push(McpTool {
+                            name: name.to_string(),
+                            description: t
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            input_schema: t
+                                .get("inputSchema")
+                                .cloned()
+                                .unwrap_or(serde_json::json!({"type":"object","properties":{}})),
+                        });
+                    }
+                }
+                cursor = result
+                    .get("nextCursor")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.is_empty());
+                if cursor.is_none() { break; }
+            }
+            Ok(tools)
+        }
+    }
+}
+
+/// 统一入口：call_tool 根据传输方式分发
+pub async fn call_tool_dispatch(
+    server: &McpServer,
+    tool: &str,
+    args: serde_json::Value,
+    registry: Option<&McpProcessRegistry>,
+) -> Result<serde_json::Value, String> {
+    let result = match server.transport {
+        McpTransport::Http => call_tool(server, tool, args).await?,
+        McpTransport::Stdio => {
+            let reg = registry.ok_or_else(|| "stdio MCP 需要进程注册表".to_string())?;
+            let sess = reg
+                .lock()
+                .unwrap()
+                .get(&server.id)
+                .cloned()
+                .ok_or_else(|| format!("stdio MCP {} 未注册", server.id))?;
+            sess.call(
+                "tools/call",
+                serde_json::json!({ "name": tool, "arguments": args }),
+            )
+            .await?
+        }
+    };
+
+    // http 路径已经在 call_tool 里做了 text 拼接；stdio 走的是原始 result，这里统一处理
+    match server.transport {
+        McpTransport::Http => Ok(result),
+        McpTransport::Stdio => {
+            let mut text = String::new();
+            if let Some(items) = result.get("content").and_then(|v| v.as_array()) {
+                for item in items {
+                    if item.get("type").and_then(|v| v.as_str()) == Some("text") {
+                        if let Some(t) = item.get("text").and_then(|v| v.as_str()) {
+                            if !text.is_empty() { text.push('\n'); }
+                            text.push_str(t);
+                        }
+                    }
+                }
+            }
+            let is_error = result
+                .get("isError")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_error {
+                return Err(if text.is_empty() { "MCP tool returned an error".to_string() } else { text });
+            }
+            if text.is_empty() { Ok(result) } else { Ok(serde_json::json!({ "text": text, "raw": result })) }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,11 +914,15 @@ mod tests {
             id: "t1".into(),
             name: name.clone(),
             url: url.clone(),
+            transport: McpTransport::Http,
             version,
             protocol,
             session,
             enabled: true,
             connected_at: "now".into(),
+            command: Default::default(),
+            args: Default::default(),
+            env: Default::default(),
         };
         let tools = list_tools(&server).await.unwrap();
         assert_eq!(tools.len(), 2, "分页工具应全部拉取: {tools:?}");
@@ -592,11 +991,15 @@ mod tests {
             id: "ext".into(),
             name,
             url,
+            transport: McpTransport::Http,
             version,
             protocol,
             session,
             enabled: true,
             connected_at: "now".into(),
+            command: Default::default(),
+            args: Default::default(),
+            env: Default::default(),
         };
 
         // 2. 工具清单（SSE 响应路径），3 个工具

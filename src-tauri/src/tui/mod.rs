@@ -40,21 +40,36 @@ pub(crate) enum Flow {
     Exit,
 }
 
+/// 消息种类：用于全屏 TUI 着色；plain 模式忽略，一律按普通行输出
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MsgKind {
+    System,     // 普通信息 / 命令回执
+    User,       // 用户输入回显
+    Assistant,  // AI 回复
+    Tool,       // 工具调用过程 / 结果
+    Error,      // 错误
+    Divider,    // 回合分隔线
+}
+
 /// 命令/对话输出目标：两种界面各取一种，handle 内不直接 println
 #[derive(Clone)]
 pub(crate) enum Out {
     /// 行协议：直接打到 stdout（同步，提示符顺序天然正确）
     Stdout,
-    /// 全屏 UI：送消息 channel，由渲染循环追加到滚动区
-    Chan(tokio::sync::mpsc::UnboundedSender<String>),
+    /// 全屏 UI：送 (kind, text) channel，由渲染循环追加到滚动区
+    Chan(tokio::sync::mpsc::UnboundedSender<(MsgKind, String)>),
 }
 
 impl Out {
     pub(crate) fn line(&self, s: impl Into<String>) {
+        self.line_with_kind(MsgKind::System, s.into());
+    }
+    pub(crate) fn line_with_kind(&self, kind: MsgKind, s: impl Into<String>) {
+        let s = s.into();
         match self {
-            Out::Stdout => println!("{}", s.into()),
+            Out::Stdout => println!("{}", s),
             Out::Chan(tx) => {
-                let _ = tx.send(s.into());
+                let _ = tx.send((kind, s));
             }
         }
     }
@@ -364,10 +379,14 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
         for m in s.messages.iter().skip(before) {
             if m.role == "assistant" {
                 if !m.content.trim().is_empty() {
-                    out.line(m.content.trim().to_string());
+                    out.line_with_kind(MsgKind::Assistant, m.content.trim().to_string());
                 }
                 for tc in &m.tool_calls {
-                    out.line(format!("[tool] {} {} → {}", tc.tool, tc.params, if tc.ok { "成功" } else { "失败" }));
+                    let outcome = if tc.ok { "成功" } else { "失败" };
+                    out.line_with_kind(
+                        MsgKind::Tool,
+                        format!("[tool] {} {} → {}", tc.tool, tc.params, outcome),
+                    );
                 }
             }
         }

@@ -1013,6 +1013,23 @@ async fn debug_state(State(ctx): State<Arc<Ctx>>) -> Response {
         })
     });
     let total_messages: usize = sessions.sessions.iter().map(|s| s.messages.len()).sum();
+    let cache_map = ctx.cache_stats.lock().unwrap().clone();
+    let cache_stats: Vec<serde_json::Value> = cache_map
+        .iter()
+        .map(|(sid, cs)| {
+            let hit_rate = cs.hit_rate();
+            json!({
+                "session": sid,
+                "requests": cs.requests,
+                "prompt_tokens": cs.prompt_tokens,
+                "cache_read": cs.cache_read_tokens,
+                "cache_write": cs.cache_write_tokens,
+                "completion_tokens": cs.completion_tokens,
+                "hit_rate": hit_rate,
+                "known": cs.cache_known_requests > 0,
+            })
+        })
+        .collect();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
@@ -1041,6 +1058,7 @@ async fn debug_state(State(ctx): State<Arc<Ctx>>) -> Response {
         },
         "memories": memories,
         "skills": skills,
+        "cache_stats": cache_stats,
     }))
     .into_response()
 }

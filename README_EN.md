@@ -33,7 +33,9 @@ BIT is a desktop app built on **Tauri 2 + React 18**: an auditable, remotely acc
 
 **Protocols & integration**
 
-- **MCP client**: connect to any standard MCP server (Streamable HTTP / JSON-RPC 2.0); external tools are merged into the registry automatically.
+- **MCP client**: connect to any standard MCP server with two transports:
+  - **Streamable HTTP** — scan port range or enter URL manually, for standalone MCP services
+  - **stdio (JSON-RPC 2.0)** — paste Cursor/Claude Desktop compatible `{ "mcpServers": { ... } }` config JSON (supports `command` + `args` + `env`); on Windows, npm commands like `npx`/`uvx` are automatically wrapped with `cmd /c`; each child process is spawned independently → initialize handshake → tools merged into registry → pause/resume/remove → kill process. Zero new dependencies — reuses existing tokio, serde_json, serde.
 - **MCP server**: BIT itself also exposes a standard MCP endpoint (`POST /mcp`); any MCP client such as Claude Desktop can directly call all of BIT's enabled tools.
 - **OpenAI-compatible endpoint**: `/v1/chat/completions` supports streaming, so third-party apps can use BIT as a local AI gateway.
 

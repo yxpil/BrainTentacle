@@ -1849,11 +1849,15 @@ pub async fn mcp_connect(state: State<'_, Arc<Ctx>>, url: String) -> Result<serd
         id: format!("mcp-{}", uuid::Uuid::new_v4().simple()),
         name: name.clone(),
         url: url.clone(),
+        transport: crate::mcp::McpTransport::Http,
         version,
         protocol,
         session,
         enabled: true,
         connected_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        command: Default::default(),
+        args: Default::default(),
+        env: Default::default(),
     };
     // 同一 URL 只保留一条
     let id = server.id.clone();

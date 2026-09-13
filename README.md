@@ -33,7 +33,18 @@ BIT 是一个基于 **Tauri 2 + React 18** 的桌面应用：一个可审计、�
 
 **协议与集成**
 
-- **MCP 客户端**：接入任意标准 MCP 服务器（Streamable HTTP / JSON-RPC 2.0），外部工具自动并入注册表。
+- **MCP 客户端**：接入任意标准 MCP 服务器，支持两种传输方式：
+  - **Streamable HTTP** — 扫描端口范围或手动填 URL，适合独立部署的 MCP 服务
+  - **stdio（JSON-RPC 2.0）** — 粘贴 `{ "mcpServers": { ... } }` 格式配置（兼容 Cursor / Claude Desktop），支持 `command` + `args` + `env`，Windows 下自动 `cmd /c` 包裹 npx/uvx 等 npm 命令；示例：
+    ```json
+    {
+      "mcpServers": {
+        "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"] },
+        "brave-search": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-brave-search"], "env": { "BRAVE_API_KEY": "xxx" } }
+      }
+    }
+    ```
+    每个子进程独立 spawn → initialize 握手 → tools 自动并入注册表 → 暂停/继续/移除 → kill 进程。
 - **MCP 服务器**：BIT 自身也暴露标准 MCP 端点（`POST /mcp`），Claude Desktop 等任何 MCP 客户端可直接调用 BIT 的全部启用工具。
 - **OpenAI 兼容端点**：`/v1/chat/completions` 支持流式，第三方应用可把 BIT 当本地 AI 网关使用。
 

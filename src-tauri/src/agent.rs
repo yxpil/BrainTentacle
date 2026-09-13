@@ -143,9 +143,25 @@ fn persist_partial(
     visible
 }
 
-/// 累计本会话 token 用量，返回带命中率的 usage 事件负载
+/// 累计本会话 token 用量，返回带命中率的 usage 事件负载。
+/// worker 进程：同时发 usage-sync 事件给 host，让 host 内存态 cache_stats 同步更新
+/// （worker 写 worker 的内存，host 写 host 的内存——debug_state 是 host 的视图）。
 fn record_and_payload(ctx: &Arc<Ctx>, session: &str, usage: &ai::TokenUsage) -> serde_json::Value {
     let stats = crate::state::record_usage(ctx, session, usage);
+    // worker → host：同步 cache_stats（内存态，重启清零；跨进程必须显式同步）
+    if crate::worker::IN_WORKER.load(std::sync::atomic::Ordering::Relaxed) {
+        let sync = serde_json::json!({
+            "session": session,
+            "prompt_tokens": usage.prompt_tokens,
+            "cache_read_tokens": usage.cache_read_tokens,
+            "cache_write_tokens": usage.cache_write_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "cache_known": usage.cache_known,
+        });
+        if let Some(tx) = crate::worker::event_tx() {
+            let _ = tx.send(("usage-sync".to_string(), sync));
+        }
+    }
     json!({
         "requests": stats.requests,
         "prompt_tokens": stats.prompt_tokens,
@@ -169,6 +185,12 @@ pub(crate) async fn request_approval(
     session_id: Option<&str>,
     actor: &str,
 ) -> Result<(), String> {
+    // TUI 模式没有 WebView 审批通道：直接放行（用户主动交互式环境，信任自己的命令）
+    // 审批自动放行在全屏 TUI 的状态栏有 🛡tui-自动 标识；plain 模式打印提示到消息流
+    if std::env::var("BIT_TUI").is_ok() {
+        crate::audit::record(ctx, actor, "tool.approved", tool, json!({ "mode": "tui-auto" }), true);
+        return Ok(());
+    }
     use tauri::Emitter;
     let id = format!("ap-{}", ctx.approval_seq.fetch_add(1, Ordering::Relaxed));
     let (tx, rx) = tokio::sync::oneshot::channel::<bool>();

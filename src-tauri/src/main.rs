@@ -269,6 +269,7 @@ fn main() {
                 // TUI：无窗口、无托盘、无 HTTP 服务、无 Autopilot（与桌面端零冲突）。
                 // 工作区沙箱：Agent 默认只在启动 `bit tui` 的当前目录下工作
                 //（config.workspace_root 显式配置时以配置为准）
+                std::env::set_var("BIT_TUI", "1"); // 标记 TUI 模式，agent 审批自动放行
                 if crate::sandbox::effective_root(&ctx).is_none() {
                     if let Ok(cwd) = std::env::current_dir() {
                         *ctx.workspace_root.lock().unwrap() = Some(cwd);

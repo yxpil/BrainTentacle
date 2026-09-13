@@ -464,6 +464,7 @@ pub fn register_opts(
     tools.push(tool.clone());
     drop(tools);
     ctx.save_tools();
+    crate::worker::notify_reload();
     Ok(tool)
 }
 
@@ -483,6 +484,7 @@ pub fn remove(ctx: &Arc<crate::state::Ctx>, id: &str) -> Result<String, String> 
     }
     drop(tools);
     ctx.save_tools();
+    crate::worker::notify_reload();
     Ok(id.to_string())
 }
 
@@ -496,6 +498,7 @@ pub fn set_enabled(ctx: &Arc<crate::state::Ctx>, id: &str, enabled: bool) -> Res
     tool.enabled = enabled;
     drop(tools);
     ctx.save_tools();
+    crate::worker::notify_reload();
     crate::audit::record(
         ctx,
         "local-app",

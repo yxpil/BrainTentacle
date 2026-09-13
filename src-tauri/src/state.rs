@@ -85,8 +85,10 @@ pub struct Ctx {
     pub sessions: Mutex<SessionStore>,
     /// sessions.json 上次已知 mtime：判断文件是否被其他进程（bit 命令行等）改过
     pub sessions_disk_ts: Mutex<Option<std::time::SystemTime>>,
-    /// 已接入的 MCP 服务器（Streamable HTTP）
+    /// 已接入的 MCP 服务器（Streamable HTTP + stdio）
     pub mcp: Mutex<Vec<crate::mcp::McpServer>>,
+    /// stdio MCP 子进程注册表：server_id → StdioSession。进程存活期间持有；重启需重连
+    pub mcp_stdio: crate::mcp::McpProcessRegistry,
     /// 本地插件列表（toolhomes/plugins/*/plugin.json）
     pub plugins: Mutex<Vec<crate::plugins::Plugin>>,
     /// BIT 作为 MCP 服务器时分配的会话（session_id → 最后活跃时刻）。
@@ -255,6 +257,7 @@ impl Ctx {
             sessions: Mutex::new(sessions),
             sessions_disk_ts: Mutex::new(None),
             mcp: Mutex::new(mcp),
+            mcp_stdio: std::sync::Mutex::new(std::collections::HashMap::new()),
             // 本地插件列表（toolhomes/plugins/*/plugin.json，启动/重扫时刷新）
             plugins: Mutex::new(Vec::new()),
             mcp_sessions: Mutex::new(HashMap::new()),

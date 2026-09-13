@@ -237,11 +237,15 @@ function handleGemini(res, parsed) {
   return sseGemini(res, { text: "好的。" });
 }
 
-// 模拟 token 用量：输入随历史增长；工具反馈轮之后命中缓存（前缀一致）→ cached_tokens 约 80%
+// 模拟 token 用量：输入随历史增长；从第 2 轮对话起（messages ≥ 4，有 system + user1 + assistant1 + user2）
+// 前缀一致 → 模拟缓存命中 80%；有工具反馈轮额外再加 5%（前缀更长）
 function usageFor(messages) {
   const chars = messages.reduce((n, m) => n + contentText(m).length, 0);
   const prompt = Math.max(120, Math.floor(chars / 4));
-  const cached = toolResultCount(messages) > 0 ? Math.floor(prompt * 0.8) : 0;
+  const hasPrefixCache = messages.length >= 4; // system + 至少一轮对话历史 → 前缀可命中
+  const extraForTools = toolResultCount(messages) > 0 ? 0.05 : 0;
+  const hitRate = hasPrefixCache ? 0.8 + extraForTools : 0;
+  const cached = hasPrefixCache ? Math.floor(prompt * hitRate) : 0;
   return {
     prompt_tokens: prompt,
     completion_tokens: 42,
