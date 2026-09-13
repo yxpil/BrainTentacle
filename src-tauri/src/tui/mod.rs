@@ -1,62 +1,48 @@
 // yxpil · BIT
-// TUI 入口与共享命令处理。
-// 两种界面：
-// - plain：行协议 REPL（stdin/stdout 逐行）——管道、无 TTY、E2E、--plain 强制
-// - full：Ratatui 全屏界面（真终端）——状态栏 + 滚动消息区 + 输入框
-// 命令处理（handle）两者共用，输出统一走 Out（plain 直打 stdout，full 送 UI channel）
+// TUI entry + shared command dispatch.
+// Two UIs share handle():
+// - plain: line-reader REPL (no TTY, pipes, --plain)
+// - full:  Ratatui fullscreen (real terminal)
 #[cfg(feature = "tui-ui")]
 mod full;
 mod plain;
 
 use std::sync::Arc;
-
 use crate::state::Ctx;
 
 pub(crate) const HELP: &str = "\
-命令：
-  /help            显示本帮助
-  /sessions        列出会话
-  /new [标题]       新建会话并切换
-  /use <id>        切换会话（id 可只写前几位）
-  /rename [id] <标题>  重命名当前（或指定）会话
-  /delete [id]     删除当前（或指定）会话
-  /clear           清空当前会话的消息（保留会话）
-  /goals           列出目标与状态
-  /todo            列出待办
-  /approval [模式] 查看/切换审批：ask | auto | allow_all
-  /interrupt       中断当前进行中的回合（执行中也可随时输入）
-  /tools           列出工具
-  /runtimes        列出本地解释器运行时
-  /mem <内容>       沉淀一条记忆
-  /mems            查看记忆
-  /pwd             显示工作区（沙箱根）
-  /cd <目录>        切换工作区（Agent 的 shell/文件操作锚定于此）
-  /install-cli     把 bit 命令安装到终端 PATH
-  /quit            退出
-其他任意输入即为对话消息；工具调用过程逐行展示。";
+Commands:
+  /help            Show this help
+  /sessions        List sessions
+  /new [title]     Create and switch session
+  /use <id>        Switch session (prefix OK)
+  /rename [id] <t> Rename session
+  /delete [id]     Delete session
+  /clear           Clear messages (keep session)
+  /goals           List goals
+  /todo            List todos
+  /approval [m]    Approval mode: ask | auto | allow_all
+  /interrupt       Stop current turn
+  /tools           List tools
+  /runtimes        List runtimes
+  /mem <text>      Save a memory
+  /mems            List memories
+  /pwd             Show workspace root
+  /cd <path>       Change workspace
+  /install-cli     Install 'bit' to PATH
+  /quit            Exit
+Anything else → chat with AI.";
 
-pub(crate) enum Flow {
-    Continue,
-    Exit,
-}
+pub(crate) enum Flow { Continue, Exit }
 
-/// 消息种类：用于全屏 TUI 着色；plain 模式忽略，一律按普通行输出
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MsgKind {
-    System,     // 普通信息 / 命令回执
-    User,       // 用户输入回显
-    Assistant,  // AI 回复
-    Tool,       // 工具调用过程 / 结果
-    Error,      // 错误
-    Divider,    // 回合分隔线
+    System, User, Assistant, Tool, Error, Divider,
 }
 
-/// 命令/对话输出目标：两种界面各取一种，handle 内不直接 println
 #[derive(Clone)]
 pub(crate) enum Out {
-    /// 行协议：直接打到 stdout（同步，提示符顺序天然正确）
     Stdout,
-    /// 全屏 UI：送 (kind, text) channel，由渲染循环追加到滚动区
     Chan(tokio::sync::mpsc::UnboundedSender<(MsgKind, String)>),
 }
 
@@ -68,7 +54,6 @@ impl Out {
         let s = s.into();
         match self {
             Out::Stdout => {
-                // 真实终端 → ANSI 彩色；管道/E2E → 纯文本
                 use std::io::IsTerminal;
                 if std::io::stdout().is_terminal() {
                     println!("{}", ansi_colorize(kind, &s));
@@ -76,94 +61,68 @@ impl Out {
                     println!("{}", s);
                 }
             }
-            Out::Chan(tx) => {
-                let _ = tx.send((kind, s));
-            }
+            Out::Chan(tx) => { let _ = tx.send((kind, s)); }
         }
     }
 }
 
-/// plain 模式 ANSI 真彩色（只在 terminal 上启用）
 fn ansi_colorize(kind: MsgKind, s: &str) -> String {
     let (fg, bold) = match kind {
-        MsgKind::System => (90, false),      // 深灰 = 次要信息
-        MsgKind::User => (36, true),          // 青粗 = 用户
-        MsgKind::Assistant => (32, false),    // 绿 = AI
-        MsgKind::Tool => (33, false),         // 黄 = 工具
-        MsgKind::Error => (31, true),         // 红粗 = 错误
-        MsgKind::Divider => (90, false),      // 深灰 = 分隔
+        MsgKind::System => (90, false),
+        MsgKind::User => (36, true),
+        MsgKind::Assistant => (32, false),
+        MsgKind::Tool => (33, false),
+        MsgKind::Error => (31, true),
+        MsgKind::Divider => (90, false),
     };
-    if bold {
-        format!("\x1b[1;{fg}m{s}\x1b[0m")
-    } else {
-        format!("\x1b[{fg}m{s}\x1b[0m")
-    }
+    if bold { format!("\x1b[1;{fg}m{s}\x1b[0m") } else { format!("\x1b[{fg}m{s}\x1b[0m") }
 }
 
-/// plain 模式 prompt 彩色辅助
 pub(crate) fn ansi_prompt(ctx: &Arc<Ctx>) -> String {
     let (sid, title) = {
         let store = ctx.sessions.lock().unwrap();
         let active = store.active.clone();
-        let s = store.sessions.iter().find(|s| s.id == active);
-        match s {
+        match store.sessions.iter().find(|s| s.id == active) {
             Some(s) => (
                 s.id[..s.id.len().min(6)].to_string(),
-                if s.title.trim().is_empty() { "未命名".into() } else { s.title.clone() },
+                if s.title.trim().is_empty() { "Untitled".into() } else { s.title.clone() },
             ),
-            None => ("------".into(), "未命名".into()),
+            None => ("------".into(), "Untitled".into()),
         }
     };
-    let model = ctx
-        .ai_config
-        .lock()
-        .unwrap()
-        .active()
+    let model = ctx.ai_config.lock().unwrap().active()
         .map(|p| p.model.clone())
-        .unwrap_or_else(|| "未配置".into());
-    // 青色会话标题 + 深灰 model/sid + 绿色 bit> 提示符
+        .unwrap_or_else(|| "none".into());
     format!(
         "\x1b[1;36m[{}]\x1b[0;90m {model} · {sid}\x1b[0m \x1b[1;32mbit>\x1b[0m ",
         title.chars().take(16).collect::<String>()
     )
 }
 
-/// 由 main.rs 在独立线程调用：按终端形态分流，不返回（进程内退出）
 pub fn run_blocking(ctx: Arc<Ctx>, app: tauri::AppHandle) -> ! {
     use std::io::IsTerminal;
     let force_plain = std::env::args().any(|a| a == "--plain");
     if force_plain || !std::io::stdout().is_terminal() {
         plain::run(ctx, app)
     } else {
-        #[cfg(feature = "tui-ui")]
-        {
-            full::run(ctx, app)
-        }
-        #[cfg(not(feature = "tui-ui"))]
-        {
-            plain::run(ctx, app)
-        }
+        #[cfg(feature = "tui-ui")] { full::run(ctx, app) }
+        #[cfg(not(feature = "tui-ui"))] { plain::run(ctx, app) }
     }
 }
 
-/// 斜杠命令分发 + 普通对话 Agent 链路。两种界面共用。
 pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow, String> {
-    // 斜杠命令（大小写不敏感）
     if let Some(cmd) = line.strip_prefix('/') {
         let (cmd, arg) = match cmd.split_once(' ') {
             Some((c, a)) => (c.trim(), a.trim()),
             None => (cmd.trim(), ""),
         };
         return match cmd.to_lowercase().as_str() {
-            "help" | "?" => {
-                out.line(HELP);
-                Ok(Flow::Continue)
-            }
+            "help" | "?" => { out.line(HELP); Ok(Flow::Continue) }
             "sessions" => {
                 let store = ctx.sessions.lock().unwrap();
                 for s in &store.sessions {
                     let mark = if s.id == store.active { "*" } else { " " };
-                    out.line(format!("{mark} {}  [{:>2} 条]  {}", &s.id[..s.id.len().min(8)], s.messages.len(), s.title));
+                    out.line(format!("{mark} {}  [{:>2}]  {}", &s.id[..s.id.len().min(8)], s.messages.len(), s.title));
                 }
                 Ok(Flow::Continue)
             }
@@ -177,32 +136,27 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                     store.active = id.clone();
                 }
                 ctx.save_sessions();
-                out.line(format!("已创建会话 {}（已切换）", &id[..8]));
+                out.line(format!("Session {} created and switched", &id[..8]));
                 Ok(Flow::Continue)
             }
             "use" => {
-                let arg = arg.to_string();
-                if arg.is_empty() {
-                    return Err("用法：/use <会话id>".into());
-                }
-                let switched = {
+                if arg.is_empty() { return Err("Usage: /use <id>".into()); }
+                let (sid, title) = {
                     let mut store = ctx.sessions.lock().unwrap();
-                    let hit = store
-                        .sessions
-                        .iter()
-                        .find(|s| s.id.starts_with(&arg))
+                    let hit = store.sessions.iter().find(|s| s.id.starts_with(arg))
                         .map(|s| s.id.clone())
-                        .ok_or("会话不存在")?;
+                        .ok_or_else(|| "Session not found".to_string())?;
                     store.active = hit.clone();
                     let title = store.sessions.iter().find(|s| s.id == hit).map(|s| s.title.clone()).unwrap_or_default();
                     (hit, title)
                 };
                 ctx.save_sessions();
-                out.line(format!("已切换到 {}（{}）", &switched.0[..8], switched.1));
+                out.line(format!("Switched to {} ({})", &sid[..8], title));
                 Ok(Flow::Continue)
             }
             "tools" => {
                 let tools = ctx.tools.lock().unwrap();
+                if tools.is_empty() { out.line("(no tools)"); }
                 for t in tools.iter() {
                     let kind = match &t.kind {
                         crate::registry::ToolKind::Builtin { .. } => "builtin",
@@ -216,19 +170,15 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                 Ok(Flow::Continue)
             }
             "mem" => {
-                if arg.is_empty() {
-                    return Err("用法：/mem <内容>".into());
-                }
+                if arg.is_empty() { return Err("Usage: /mem <text>".into()); }
                 let m = crate::memory::add_memory(ctx, arg, "raw", "user");
                 crate::audit::record(ctx, "local-cli", "memory.add", "memories", serde_json::json!({}), true);
-                out.line(format!("已沉淀记忆 {}", &m.id[..m.id.len().min(8)]));
+                out.line(format!("Memory saved: {}", &m.id[..m.id.len().min(8)]));
                 Ok(Flow::Continue)
             }
             "mems" => {
                 let mems = ctx.memories.lock().unwrap();
-                if mems.is_empty() {
-                    out.line("（暂无记忆）");
-                }
+                if mems.is_empty() { out.line("(no memories)"); }
                 for m in mems.iter().rev() {
                     out.line(format!("{}  {}  {}", &m.id[..m.id.len().min(8)], m.ts, m.content));
                 }
@@ -236,59 +186,47 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
             }
             "install-cli" => {
                 let r = crate::commands::install_cli_impl(ctx)?;
-                out.line(format!("已安装 bit 命令：{}", r["path"].as_str().unwrap_or("")));
+                out.line(format!("bit CLI installed: {}", r["path"].as_str().unwrap_or("")));
                 if let Some(hint) = r["hint"].as_str() {
-                    if !hint.is_empty() {
-                        out.line(format!("提示：{hint}"));
-                    }
+                    if !hint.is_empty() { out.line(format!("Hint: {hint}")); }
                 }
                 Ok(Flow::Continue)
             }
-            // ── 会话整理：重命名 / 删除 / 清空 ──
             "rename" => {
-                if arg.is_empty() {
-                    return Err("用法：/rename [id前缀] <新标题>".into());
-                }
-                // 第一段若能匹配会话 id 则视为指定会话，否则整串都是当前会话的新标题
+                if arg.is_empty() { return Err("Usage: /rename [prefix] <title>".into()); }
                 let (id, title) = {
                     let store = ctx.sessions.lock().unwrap();
                     match arg.split_once(' ') {
                         Some((prefix, rest)) if store.sessions.iter().any(|s| s.id.starts_with(prefix)) => {
-                            let id = store.sessions.iter().find(|s| s.id.starts_with(prefix)).unwrap().id.clone();
-                            (id, rest.trim().to_string())
+                            (store.sessions.iter().find(|s| s.id.starts_with(prefix)).unwrap().id.clone(), rest.trim().to_string())
                         }
                         _ => (store.active.clone(), arg.to_string()),
                     }
                 };
                 {
                     let mut store = ctx.sessions.lock().unwrap();
-                    let s = store.get_mut(&id).ok_or("会话不存在")?;
-                    s.title = if title.trim().is_empty() { "未命名".into() } else { title.trim().to_string() };
+                    let s = store.get_mut(&id).ok_or_else(|| "Session not found".to_string())?;
+                    s.title = if title.trim().is_empty() { "Untitled".into() } else { title.trim().to_string() };
                 }
                 ctx.save_sessions();
-                out.line(format!("已重命名会话 {} → {}", &id[..id.len().min(8)], title.trim()));
+                out.line(format!("Session {} renamed → {}", &id[..id.len().min(8)], title.trim()));
                 Ok(Flow::Continue)
             }
             "delete" | "rm" => {
-                // 无参删当前会话；带参按 id 前缀删。删空自动补默认会话，删的是激活项则切到最后一条
                 let target_id = if arg.is_empty() {
                     ctx.sessions.lock().unwrap().active.clone()
                 } else {
-                    ctx.sessions
-                        .lock()
-                        .unwrap()
-                        .sessions
-                        .iter()
+                    ctx.sessions.lock().unwrap().sessions.iter()
                         .find(|s| s.id.starts_with(arg))
                         .map(|s| s.id.clone())
-                        .ok_or("会话不存在")?
+                        .ok_or_else(|| "Session not found".to_string())?
                 };
                 let (active, removed_title) = {
                     let mut store = ctx.sessions.lock().unwrap();
                     let title = store.sessions.iter().find(|s| s.id == target_id).map(|s| s.title.clone()).unwrap_or_default();
                     store.sessions.retain(|s| s.id != target_id);
                     if store.sessions.is_empty() {
-                        let s = crate::session::Session::new("新对话");
+                        let s = crate::session::Session::new("New Chat");
                         store.active = s.id.clone();
                         store.sessions.push(s);
                     } else if store.active == target_id {
@@ -297,10 +235,9 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                     (store.active.clone(), title)
                 };
                 ctx.save_sessions();
-                out.line(format!("已删除会话 {}（{}）", &target_id[..target_id.len().min(8)], removed_title));
-                let now = ctx.sessions.lock().unwrap();
-                if let Some(s) = now.sessions.iter().find(|s| s.id == active) {
-                    out.line(format!("当前会话：{}（{}）", &s.id[..s.id.len().min(8)], s.title));
+                out.line(format!("Session {} deleted ({})", &target_id[..target_id.len().min(8)], removed_title));
+                if let Some(s) = ctx.sessions.lock().unwrap().sessions.iter().find(|s| s.id == active) {
+                    out.line(format!("Current: {} ({})", &s.id[..s.id.len().min(8)], s.title));
                 }
                 Ok(Flow::Continue)
             }
@@ -308,22 +245,19 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                 let id = ctx.sessions.lock().unwrap().active.clone();
                 let n = {
                     let mut store = ctx.sessions.lock().unwrap();
-                    let s = store.get_mut(&id).ok_or("会话不存在")?;
+                    let s = store.get_mut(&id).ok_or_else(|| "Session not found".to_string())?;
                     let n = s.messages.len();
                     s.messages.clear();
                     s.touch();
                     n
                 };
                 ctx.save_sessions();
-                out.line(format!("已清空 {n} 条消息（会话保留）"));
+                out.line(format!("Cleared {n} messages"));
                 Ok(Flow::Continue)
             }
-            // ── 目标 / 待办速览 ──
             "goals" => {
                 let goals = ctx.goals.lock().unwrap();
-                if goals.is_empty() {
-                    out.line("（暂无目标）");
-                }
+                if goals.is_empty() { out.line("(no goals)"); }
                 for g in goals.iter().rev() {
                     out.line(format!("{:<8} [{}] {}", &g.id[..g.id.len().min(8)], g.status, g.title));
                 }
@@ -331,96 +265,75 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
             }
             "todo" | "todos" => {
                 let todos = ctx.todos.lock().unwrap();
-                if todos.is_empty() {
-                    out.line("（暂无待办）");
-                }
+                if todos.is_empty() { out.line("(no todos)"); }
                 let goals = ctx.goals.lock().unwrap();
                 for t in todos.iter().rev() {
-                    let g = t
-                        .goal_id
-                        .as_deref()
+                    let g = t.goal_id.as_deref()
                         .and_then(|gid| goals.iter().find(|g| g.id == gid))
                         .map(|g| g.title.as_str())
-                        .unwrap_or("独立待办");
+                        .unwrap_or("standalone");
                     out.line(format!("[{}] {:<8} {} · {}", t.status, &t.id[..t.id.len().min(8)], t.content, g));
                 }
                 Ok(Flow::Continue)
             }
-            // ── 审批模式 ──
             "approval" => {
                 if arg.is_empty() {
-                    out.line(format!(
-                        "当前审批模式：{}（ask=每次询问 / auto=危险操作询问 / allow_all=全放行）",
-                        ctx.config.lock().unwrap().tool_approval
-                    ));
+                    out.line(format!("Approval: {} (ask / auto / allow_all)", ctx.config.lock().unwrap().tool_approval));
                     return Ok(Flow::Continue);
                 }
                 match arg {
                     "ask" | "auto" | "allow_all" => {
                         ctx.config.lock().unwrap().tool_approval = arg.to_string();
                         ctx.save_config();
-                        out.line(format!("审批模式已切换为：{arg}"));
+                        out.line(format!("Approval → {arg}"));
                     }
-                    _ => return Err("模式只支持 ask / auto / allow_all".into()),
+                    _ => return Err("Only ask / auto / allow_all".into()),
                 }
                 Ok(Flow::Continue)
             }
-            // ── 运行时速览 ──
             "runtimes" | "rt" => {
                 let runtimes = ctx.runtimes.lock().unwrap();
-                if runtimes.is_empty() {
-                    out.line("（未探测到解释器，可在桌面端工具页刷新）");
-                }
+                if runtimes.is_empty() { out.line("(no runtimes — refresh in desktop app)"); }
                 for r in runtimes.iter() {
                     out.line(format!("{:<3} {:<8} {:<10} {}", if r.enabled { "on" } else { "off" }, r.lang, r.id, r.name));
                 }
                 Ok(Flow::Continue)
             }
-            // ── 工作区沙箱 ──
             "pwd" => {
                 match crate::sandbox::effective_root(ctx) {
                     Some(ws) => out.line(ws.display().to_string()),
-                    None => out.line("（未设置工作区：shell 继承进程目录，文件路径不限）"),
+                    None => out.line("(no workspace — shell uses cwd)"),
                 }
                 Ok(Flow::Continue)
             }
             "cd" => {
                 if arg.is_empty() {
                     return match crate::sandbox::effective_root(ctx) {
-                        Some(ws) => {
-                            out.line(ws.display().to_string());
-                            Ok(Flow::Continue)
-                        }
-                        None => Err("用法：/cd <绝对目录>（当前无工作区）".into()),
+                        Some(ws) => { out.line(ws.display().to_string()); Ok(Flow::Continue) }
+                        None => Err("Usage: /cd <absolute path>".into()),
                     };
                 }
                 let p = std::path::PathBuf::from(arg);
-                if !p.is_absolute() {
-                    return Err("请给绝对目录（工作区必须是绝对路径）".into());
-                }
-                if !p.is_dir() {
-                    return Err(format!("目录不存在或不是目录：{}", p.display()));
-                }
+                if !p.is_absolute() { return Err("Use absolute path".into()); }
+                if !p.is_dir() { return Err(format!("Not a directory: {}", p.display()).into()); }
                 *ctx.workspace_root.lock().unwrap() = Some(p.clone());
-                out.line(format!("工作区已切换：{}", p.display()));
+                out.line(format!("Workspace → {}", p.display()));
                 Ok(Flow::Continue)
             }
-            // ── 中断（全屏下 Esc 即时中断；文本命令作为兜底；plain 的 stdin 线程也会就地拦截）──
             "interrupt" => {
                 let active = ctx.sessions.lock().unwrap().active.clone();
                 if crate::agent::request_stop(ctx, &active) {
-                    out.line("[interrupt] 已请求中断当前回合…".to_string());
+                    out.line("[interrupt] stop requested…".to_string());
                 } else {
-                    out.line("[interrupt] 当前会话没有进行中的回合".to_string());
+                    out.line("[interrupt] no turn in progress".to_string());
                 }
                 Ok(Flow::Continue)
             }
             "quit" | "exit" | "q" => Ok(Flow::Exit),
-            other => Err(format!("未知命令 /{other}，/help 查看帮助")),
+            other => Err(format!("Unknown /{other} — try /help")),
         };
     }
 
-    // 普通对话：走完整 Agent 链路（含工具调用循环），结束后逐行回放本轮过程
     let sid = ctx.sessions.lock().unwrap().active.clone();
     let before = {
         let store = ctx.sessions.lock().unwrap();
@@ -435,14 +348,8 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                     out.line_with_kind(MsgKind::Assistant, m.content.trim().to_string());
                 }
                 for tc in &m.tool_calls {
-                    let symbol = if tc.ok { "\u{2713}" } else { "\u{2717}" }; // ✓ / ✗
-                    let head = if tc.ok {
-                        format!("  \u{25B6} {} \u{2192} \u{2713} 成功", tc.tool)
-                    } else {
-                        format!("  \u{25B6} {} \u{2192} \u{2717} 失败", tc.tool)
-                    };
-                    out.line_with_kind(MsgKind::Tool, head);
-                    // 参数单独一行（Value → 字符串，太长时截断）
+                    let ok_str = if tc.ok { "OK" } else { "FAIL" };
+                    out.line_with_kind(MsgKind::Tool, format!("  \u{25B6} {} → {}", tc.tool, ok_str));
                     let params_str = match &tc.params {
                         serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
                             serde_json::to_string_pretty(&tc.params).unwrap_or_else(|_| tc.params.to_string())
@@ -451,9 +358,7 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                     };
                     let preview = if params_str.chars().count() > 140 {
                         params_str.chars().take(140).collect::<String>() + "…"
-                    } else {
-                        params_str
-                    };
+                    } else { params_str };
                     if !preview.trim().is_empty() {
                         out.line_with_kind(MsgKind::System, format!("    {}", preview.trim()));
                     }
