@@ -193,41 +193,59 @@ jobs:
       - name: UI 冒烟测试（防黑屏包上传）
         shell: pwsh
         run: node e2e/smoke-ui.cjs src-tauri/target/aarch64-pc-windows-msvc/release/BIT.exe
-      - name: 打包便携版（裸 BIT.exe zip，对齐 x64；Compress-Archive 需 pwsh）
-        shell: pwsh
-        run: |
-          $VERSION = node -p "require('./src-tauri/tauri.conf.json').version"
-          Compress-Archive -Path src-tauri/target/aarch64-pc-windows-msvc/release/BIT.exe -DestinationPath "BIT_$VERSION_aarch64-portable.zip" -Force
-      - name: 上传到 Release
+      - name: 打包便携版 + 上传到 Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.ensure-release.outputs.tag }}
-          VERSION: ${{ needs.ensure-release.outputs.tag }}
         shell: pwsh
         run: |
           $TAG = "$env:TAG".Trim()
-          $VERSION = "$env:VERSION".TrimStart('v')
+          $VERSION = "$TAG".TrimStart('v')
           Write-Host "TAG=$TAG VERSION=$VERSION"
+          $ROOT = (Get-Location).Path
+          $EXE = "src-tauri/target/aarch64-pc-windows-msvc/release/BIT.exe"
           $NSIS_DIR = "src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis"
-          Write-Host "NSIS_DIR contents:"
-          Get-ChildItem $NSIS_DIR -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length/1MB,1))MB)" }
-          # 找 arm64 或 aarch64，统一重命名为 aarch64（和 update.rs 契约一致）
-          $found = Get-ChildItem $NSIS_DIR -Filter "BIT_${VERSION}_*setup.exe" | Select-Object -First 1
-          if (-not $found) { Write-Host "ERROR: 找不到 NSIS setup.exe"; exit 1 }
+          $setupPattern = "BIT_${VERSION}_*setup.exe"
+          $setupDestName = "BIT_${VERSION}_aarch64-setup.exe"
+          $portableName = "BIT_${VERSION}_aarch64-portable.zip"
+
+          # 1) 列出工作目录文件，确认 exe 是否存在
+          Write-Host "cwd=$ROOT"
+          if (-not (Test-Path $EXE)) { Write-Host "ERROR: 找不到 BIT.exe ($EXE)"; exit 1 }
+          Write-Host "BIT.exe 存在"
+
+          # 2) 打包便携版（和 exe 同目录压缩成 portable zip）
+          Write-Host "正在打包便携版 → $portableName"
+          Compress-Archive -Path $EXE -DestinationPath $portableName -Force
+          if (-not (Test-Path $portableName)) { Write-Host "ERROR: portable zip 没生成"; exit 1 }
+          Write-Host "portable zip 生成成功: $portableName"
+
+          # 3) 找到 NSIS setup.exe（arm64 或 aarch64 命名都兼容）
+          Write-Host "NSIS_DIR=$NSIS_DIR"
+          Get-ChildItem $NSIS_DIR | ForEach-Object { Write-Host "  nsis/ $($_.Name)" }
+          $found = Get-ChildItem $NSIS_DIR -Filter $setupPattern | Select-Object -First 1
+          if (-not $found) { Write-Host "ERROR: NSIS_DIR 中没有匹配 $setupPattern 的文件"; exit 1 }
+          Write-Host "找到 setup: $($found.Name)"
           $setupPath = $found.FullName
-          $destName = "BIT_${VERSION}_aarch64-setup.exe"
           if ($found.Name -notmatch "aarch64") {
-            Write-Host "重命名: $($found.Name) → $destName"
-            Move-Item -Force $setupPath (Join-Path $NSIS_DIR $destName)
-            $setupPath = Join-Path $NSIS_DIR $destName
-          } else {
-            Write-Host "Tauri 已输出 aarch64 命名: $($found.Name)"
+            Write-Host "重命名 arm64 → aarch64: $($found.Name) → $setupDestName"
+            Move-Item -Force $setupPath (Join-Path $NSIS_DIR $setupDestName)
+            $setupPath = (Join-Path $NSIS_DIR $setupDestName)
           }
-          $portablePath = "BIT_${VERSION}_aarch64-portable.zip"
-          Write-Host "上传: $setupPath + $portablePath → $TAG"
-          gh release upload "$TAG" "$setupPath" "$portablePath" --clobber
+          Write-Host "最终 setup 路径: $setupPath"
+
+          # 4) 验证两个待上传文件都存在
+          Write-Host "--- 上传前最终确认 ---"
+          Write-Host "setup exists? $(Test-Path $setupPath)  size=$([math]::Round((Get-Item $setupPath).Length/1MB,1))MB"
+          Write-Host "portable exists? $(Test-Path $portableName) size=$([math]::Round((Get-Item $portableName).Length/1MB,1))MB"
+
+          # 5) 上传（显式 --repo，确保 gh CLI 有仓库上下文）
+          $repo = "$env:GITHUB_REPOSITORY"
+          Write-Host "gh release upload $TAG $setupPath $portableName --clobber --repo $repo"
+          gh release upload "$TAG" "$setupPath" "$portableName" --clobber --repo "$repo"
           Write-Host "gh exit code: $LASTEXITCODE"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { Write-Host "gh 上传失败"; exit $LASTEXITCODE }
+          Write-Host "=== windows-arm 上传成功 ==="
 
   macos:
     needs: ensure-release
