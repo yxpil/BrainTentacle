@@ -53,7 +53,22 @@ pub struct ShellJob {
     pub cancel: Arc<Notify>,
     /// 后台进程句柄（仅 finish 任务取走）
     pub child: Mutex<Option<Child>>,
+    /// 实时输出缓冲：边读管道边 append，给前端 detail() 和增量事件用；
+    /// 上限 MAX_LOG_LINES 防止大输出泄漏；按行存储，每行带 stream 标记（stdout/stderr）。
+    /// Arc 包装 Mutex 是因为 finish() 的 stdout/stderr 两个并发读取任务要共享同一份缓冲。
+    pub logs: Arc<Mutex<Vec<LogLine>>>,
 }
+
+/// 一条 shell 输出行
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct LogLine {
+    pub stream: String,   // "out" / "err"
+    pub text: String,
+    pub ts_ms: u64,       // 相对 job 启动的 ms
+}
+
+/// 每个后台 job 最多留存这么多行——前端实时 tail 超过这个量就只看尾部
+const MAX_LOG_LINES: usize = 2000;
 
 fn jobs() -> &'static Mutex<HashMap<String, Arc<ShellJob>>> {
     static J: OnceLock<Mutex<HashMap<String, Arc<ShellJob>>>> = OnceLock::new();
@@ -294,6 +309,7 @@ pub async fn run(
         started: std::time::Instant::now(),
         cancel: Arc::new(Notify::new()),
         child: Mutex::new(Some(child)),
+        logs: Arc::new(Mutex::new(Vec::new())),
     });
     jobs().lock().unwrap().insert(job.id.clone(), job.clone());
     emit(ctx, "started", &job, None);
@@ -394,23 +410,85 @@ async fn finish(ctx: Arc<crate::state::Ctx>, job: Arc<ShellJob>) {
         jobs().lock().unwrap().remove(&job.id);
         return;
     };
-    // 并发读 stdout / stderr（管道必须先被读，否则输出大的进程会写满管道被卡死）
+
+    // 实时读：边读管道边存进 job.logs，同时每 500ms / 每 20 行增量广播 shell-job-log
     let so_pipe = child.stdout.take();
     let se_pipe = child.stderr.take();
-    let so_task = tauri::async_runtime::spawn(async move {
-        let mut buf: Vec<u8> = Vec::new();
-        if let Some(mut p) = so_pipe {
-            let _ = p.read_to_end(&mut buf).await;
-        }
-        buf
-    });
-    let se_task = tauri::async_runtime::spawn(async move {
-        let mut buf: Vec<u8> = Vec::new();
-        if let Some(mut p) = se_pipe {
-            let _ = p.read_to_end(&mut buf).await;
-        }
-        buf
-    });
+    let jid = job.id.clone();
+    let jstart = job.started;
+    let mut so_buf = String::new(); // 累积未换行的尾部（跨 chunk 的断行）
+    let mut se_buf = String::new();
+    let mut pending_lines: Vec<LogLine> = Vec::new();
+    let mut last_flush = std::time::Instant::now();
+    let mut total_bytes: usize = 0;
+
+    let mut read_stream = |
+        pipe: Option<tokio::process::ChildStdout>,
+        stream_tag: &'static str,
+        ctx: Arc<crate::state::Ctx>,
+        job_id: String,
+        started: std::time::Instant,
+        logs: std::sync::Arc<std::sync::Mutex<Vec<LogLine>>>,
+        pending: &mut Vec<LogLine>,
+        pending_buf: &mut String,
+        flush_since: &mut std::time::Instant,
+        total_out: &mut usize,
+    | -> tokio::task::JoinHandle<String> {
+        tauri::async_runtime::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut reader = tokio::io::BufReader::new(pipe.unwrap());
+            let mut out = String::new();
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).await;
+                let n = match n {
+                    Ok(0) => break,  // EOF
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                out.push_str(&line);
+                // 累积到 logs + pending
+                let ts_ms = started.elapsed().as_millis() as u64;
+                let ll = LogLine { stream: stream_tag.into(), text: line.trim_end().to_string(), ts_ms };
+                {
+                    let mut v = logs.lock().unwrap();
+                    v.push(ll.clone());
+                    if v.len() > MAX_LOG_LINES {
+                        let drop = v.len() - MAX_LOG_LINES;
+                        v.drain(0..drop);
+                    }
+                }
+                pending.push(ll);
+                *total_out += n;
+                // 节流：每 500ms 或每 20 行广播一次
+                let now = std::time::Instant::now();
+                if now.duration_since(*flush_since).as_millis() >= 500 || pending.len() >= 20 {
+                    let batch: Vec<LogLine> = pending.drain(..).collect();
+                    let payload = serde_json::json!({
+                        "job_id": job_id,
+                        "added": batch.len(),
+                        "lines": batch,
+                    });
+                    emit(&ctx, "log", &serde_json::Value::Null, Some(payload));
+                    *flush_since = now;
+                }
+            }
+            // 管道关闭后 flush 剩余（如果有）
+            if !pending.is_empty() {
+                let batch: Vec<LogLine> = pending.drain(..).collect();
+                let payload = serde_json::json!({
+                    "job_id": job_id,
+                    "added": batch.len(),
+                    "lines": batch,
+                });
+                emit(&ctx, "log", &serde_json::Value::Null, Some(payload));
+            }
+            out
+        })
+    };
+
+    let so_task = read_stream(so_pipe, "out", ctx.clone(), jid.clone(), jstart, job.logs.clone(), &mut pending_lines, &mut so_buf, &mut last_flush, &mut total_bytes);
+    let se_task = read_stream(se_pipe, "err", ctx.clone(), jid.clone(), jstart, job.logs.clone(), &mut pending_lines, &mut se_buf, &mut last_flush, &mut total_bytes);
 
     let timeout_sleep = tokio::time::sleep(std::time::Duration::from_secs(BG_TIMEOUT_SECS));
     tokio::pin!(timeout_sleep);
@@ -633,10 +711,28 @@ pub fn list() -> serde_json::Value {
                 "cwd": j.cwd,
                 "session_id": j.session,
                 "elapsed_ms": j.started.elapsed().as_millis() as u64,
+                "log_lines": j.logs.lock().unwrap().len(),
             })
         })
         .collect();
     serde_json::Value::Array(arr)
+}
+
+/// 单个 job 详情：前端「日志弹窗」打开时一次性拉取，返回命令元信息 + 当前所有日志行。
+/// 已结束的 job 会被 finish 立即 remove，detail 只对运行中的 job 生效——
+/// 但由于我们把日志持续塞进 job.logs，运行中的 job 能看到截至当前的所有输出。
+pub fn detail(id: &str) -> Option<serde_json::Value> {
+    let m = jobs().lock().unwrap();
+    let j = m.get(id)?;
+    let logs = j.logs.lock().unwrap().clone();
+    Some(json!({
+        "job_id": j.id,
+        "command": j.command,
+        "cwd": j.cwd,
+        "session_id": j.session,
+        "elapsed_ms": j.started.elapsed().as_millis() as u64,
+        "logs": logs,
+    }))
 }
 
 /// 重复命令检测：同一会话里是否已有同一条命令在后台跑。返回其 job_id

@@ -29,6 +29,7 @@ import PendingToolCard from "../components/PendingToolCard.jsx";
 import FileCard from "../components/FileCard.jsx";
 import Markdown, { Mermaid } from "../components/Markdown.jsx";
 import { useShellJobs } from "../hooks/useShellJobs.js";
+import ShellLogModal from "../components/ShellLogModal.jsx";
 
 // 对话彩色标签调色板（十六进制色值）
 const TAG_COLORS = [
@@ -47,6 +48,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
   const [renaming, setRenaming] = useState(null); // {id, title}
   // 工具栏：后台任务 popover
   const [bgJobsOpen, setBgJobsOpen] = useState(false);
+  const [shellLogJob, setShellLogJob] = useState(null); // 抽屉里点 job → 打开日志弹窗
   // 后台长命令状态（集中 hook：拉取 + 事件订阅 + 停止）
   const shellJobs = useShellJobs();
   // 会话收藏 / 多选批量删除 / 彩色标签（右滑调出调色板）
@@ -2084,7 +2086,8 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                         return (
                           <li
                             key={j.job_id}
-                            className="group flex items-center gap-1.5 rounded-md bg-neutral-100 px-2 py-1 text-[11px] dark:bg-neutral-800"
+                            onClick={() => setShellLogJob(j)}
+                            className="group flex cursor-pointer items-center gap-1.5 rounded-md bg-neutral-100 px-2 py-1 text-[11px] ring-1 ring-transparent hover:ring-sky-400 dark:bg-neutral-800 dark:hover:ring-sky-600"
                           >
                             <IconTerminal size={11} className="shrink-0 animate-pulse text-sky-500" />
                             <code className="min-w-0 flex-1 truncate font-mono" title={j.command}>
@@ -2092,7 +2095,10 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                             </code>
                             <span className="shrink-0 tabular-nums text-neutral-400">{dur}</span>
                             <button
-                              onClick={() => shellJobs.stopJob(j.job_id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                shellJobs.stopJob(j.job_id);
+                              }}
                               disabled={shellJobs.stopping.includes(j.job_id)}
                               title={`${t("chat.stop")} ${j.job_id}`}
                               className="shrink-0 rounded p-0.5 text-neutral-400 hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
@@ -2570,6 +2576,13 @@ function MessageBubble({ message, onPreview }) {
             />
           ))}
         </div>
+      )}
+      {shellLogJob && (
+        <ShellLogModal
+          job={shellLogJob}
+          onClose={() => setShellLogJob(null)}
+          onStop={() => shellJobs.stopJob(shellLogJob.job_id)}
+        />
       )}
     </div>
   );

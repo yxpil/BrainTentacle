@@ -65,6 +65,7 @@ export const api = {
   stopSubagent: (session_id) => invoke("stop_subagent", { sessionId: session_id }),
   cancelShell: (job_id) => invoke("cancel_shell", { jobId: job_id }),
   listRunningShells: () => invoke("list_running_shells"),
+  getShellDetail: (job_id) => invoke("get_shell_detail", { jobId: job_id }),
   // 远程二维码：网络探测（LAN/公网候选 + NAT 粗判）→ 返回 { payload, svg }
   getRemoteQr: () => invoke("get_remote_qr"),
   getLanInfo: () => invoke("get_lan_info"),

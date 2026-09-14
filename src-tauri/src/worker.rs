@@ -445,6 +445,10 @@ pub async fn proxy_shell_cancel(id: &str) -> Result<serde_json::Value, String> {
     post_worker("/w/shell_cancel", json!({ "id": id })).await
 }
 
+pub async fn proxy_shell_detail(id: &str) -> Result<serde_json::Value, String> {
+    post_worker("/w/shell_detail", json!({ "id": id })).await
+}
+
 // ============================================================================================
 // worker 侧：无 UI 引擎服务
 // ============================================================================================
@@ -673,6 +677,16 @@ pub async fn serve(ctx: Arc<Ctx>) -> Result<(), String> {
         Json(json!({ "cancelled": ok, "job_id": id }))
     }
 
+    /// 单个后台 shell 作业详情（含实时日志缓冲）
+    async fn shell_detail(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
+        let id = body.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let detail = crate::shellbg::detail(&id);
+        Json(match detail {
+            Some(v) => v,
+            None => json!({ "error": "not_found", "job_id": id }),
+        })
+    }
+
     let st = St { ctx, token: expect_token };
     let app = Router::new()
         .route("/w/ping", post(ping))
@@ -685,6 +699,7 @@ pub async fn serve(ctx: Arc<Ctx>) -> Result<(), String> {
         .route("/w/reload", post(reload))
         .route("/w/shells", post(shells))
         .route("/w/shell_cancel", post(shell_cancel))
+        .route("/w/shell_detail", post(shell_detail))
         .layer(axum::middleware::from_fn_with_state(st.clone(), auth))
         .with_state(st);
     axum::serve(listener, app).await.map_err(|e| e.to_string())

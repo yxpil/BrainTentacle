@@ -510,6 +510,7 @@ fn main() {
             commands::stop_subagent,
             commands::cancel_shell,
             commands::list_running_shells,
+            commands::get_shell_detail,
             commands::extract_file,
             commands::fetch_webpage,
             commands::check_port,

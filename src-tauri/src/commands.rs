@@ -482,6 +482,19 @@ pub async fn list_running_shells() -> serde_json::Value {
     serde_json::Value::Array(arr)
 }
 
+/// 单个后台 shell 作业详情（含实时日志缓冲）：优先 worker 侧，worker 不活跃时回退本地表
+#[tauri::command]
+pub async fn get_shell_detail(job_id: String) -> Result<serde_json::Value, String> {
+    if crate::worker::active() && !crate::worker::IN_WORKER.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Ok(v) = crate::worker::proxy_shell_detail(&job_id).await {
+            if !v.get("error").and_then(|e| e.as_str()).is_some() {
+                return Ok(v);
+            }
+        }
+    }
+    crate::shellbg::detail(&job_id).ok_or_else(|| format!("后台命令 {job_id} 不存在或已结束"))
+}
+
 /// AI 行为设置（设置页读写）：自动推进 / 子代理自动委派 / 审批模式 / 敏感词审核 / 兼容模式
 #[tauri::command]
 pub fn get_behavior_settings(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
