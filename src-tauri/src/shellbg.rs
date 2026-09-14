@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 use tokio::sync::Notify;
+use tauri::Emitter;
 
 /// 前台判定窗口：命令在窗口内结束走原有「快命令」路径；否则转后台。
 const FRONT_WINDOW_MS: u128 = 2000;
@@ -432,11 +433,12 @@ async fn finish(ctx: Arc<crate::state::Ctx>, job: Arc<ShellJob>) {
     let jstart = job.started;
 
     // 独立 spawn 两个读任务（不用闭包——Rust 闭包单态化不能同时接受 ChildStdout / ChildStderr）
+    // 命令刚 spawn 完 pipe 一定是 Some，直接 unwrap
     let so_task = tauri::async_runtime::spawn(read_pipe(
-        so_pipe, "out", ctx.clone(), jid.clone(), jstart, job.logs.clone(),
+        so_pipe.unwrap(), "out", ctx.clone(), jid.clone(), jstart, job.logs.clone(),
     ));
     let se_task = tauri::async_runtime::spawn(read_pipe(
-        se_pipe, "err", ctx.clone(), jid.clone(), jstart, job.logs.clone(),
+        se_pipe.unwrap(), "err", ctx.clone(), jid.clone(), jstart, job.logs.clone(),
     ));
 
     let timeout_sleep = tokio::time::sleep(std::time::Duration::from_secs(BG_TIMEOUT_SECS));
@@ -640,7 +642,7 @@ fn push_system_user(ctx: &Arc<crate::state::Ctx>, sid: &str, body: &str) {
 /// 广播 shell-job-log 事件（500ms 或 20 行）。
 /// 接受 ChildStdout / ChildStderr 通用类型（它们都 AsyncRead + Unpin）。
 async fn read_pipe<P>(
-    pipe: Option<P>,
+    pipe: P,
     stream_tag: &'static str,
     ctx: Arc<crate::state::Ctx>,
     job_id: String,
@@ -651,9 +653,6 @@ where
     P: tokio::io::AsyncRead + Unpin,
 {
     use tokio::io::AsyncBufReadExt;
-    let Some(pipe) = pipe else {
-        return String::new();
-    };
     let mut reader = tokio::io::BufReader::new(pipe);
     let mut full = String::new();
     let mut pending: Vec<LogLine> = Vec::new();

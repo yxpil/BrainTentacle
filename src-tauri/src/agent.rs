@@ -978,12 +978,13 @@ pub async fn chat_turn(
                             // ── shell 工具会话级串行锁 ──────────────────────────────────
                             // shell 命令隐式共享 cwd / env / 工作目录下的文件状态，
                             // AI 一轮发多条 shell 时串行排队更合理；其他工具保持原并发度（16）。
-                            let guard = if call.name == "shell" {
-                                // 先 bind Arc 到局部变量，MutexGuard 的 lifetime 跟着 Arc 走
-                                let arc = shell_lock(&target);
-                                Some(arc.lock().await)
+                            let (arc, _guard) = if call.name == "shell" {
+                                // arc 提到外面，确保 MutexGuard 的 lifetime 覆盖整个 tool 执行期
+                                let a = shell_lock(&target);
+                                let g = a.lock().await;
+                                (Some(a), Some(g))
                             } else {
-                                None
+                                (None, None)
                             };
                             tokio::select! {
                                 r = execute_tool_call(ctx, &call.name, &call.args, Some(&target)) => r,
@@ -1481,12 +1482,13 @@ pub async fn chat_turn_stream(
                             // ── shell 工具会话级串行锁 ──────────────────────────────────
                             // shell 命令隐式共享 cwd / env / 工作目录下的文件状态，
                             // AI 一轮发多条 shell 时串行排队更合理；其他工具保持原并发度（16）。
-                            let guard = if call.name == "shell" {
-                                // 先 bind Arc 到局部变量，MutexGuard 的 lifetime 跟着 Arc 走
-                                let arc = shell_lock(&target);
-                                Some(arc.lock().await)
+                            let (arc, _guard) = if call.name == "shell" {
+                                // arc 提到外面，确保 MutexGuard 的 lifetime 覆盖整个 tool 执行期
+                                let a = shell_lock(&target);
+                                let g = a.lock().await;
+                                (Some(a), Some(g))
                             } else {
-                                None
+                                (None, None)
                             };
                             tokio::select! {
                                 r = execute_tool_call(ctx, &call.name, &call.args, Some(&target)) => r,
