@@ -159,11 +159,12 @@ async function main() {
     const code = await tui.waitExit(120000);
     const out = tui.out;
     record("T2 对话(mock 默认回复)", code === 0 && out.includes("好的。"), `exit=${code}`);
-    const toolOk = /\[tool\] shell \{"command":"echo e2e-shell-ok"\} → 成功/.test(out) && /E2E-FINAL-OK/.test(out);
+    // TUI 工具调用回显格式：  ▶ shell → OK / FAIL（mod.rs MsgKind::Tool 渲染）
+    const toolOk = /▶ shell.*→ OK/.test(out) && /E2E-FINAL-OK/.test(out);
     record("T3 工具调用全链路", toolOk, toolOk ? "" : out.slice(-400));
-    const sessOk = out.includes("已创建会话") && /tui-test-session/.test(out);
+    const sessOk = /Session [0-9a-f]+ created and switched/.test(out) && /tui-test-session/.test(out);
     record("T4 会话新建/列表", sessOk, "");
-    const memOk = out.includes("已沉淀记忆") && out.includes("TUI-MEM-ITEM-9527");
+    const memOk = out.includes("Memory saved") && out.includes("TUI-MEM-ITEM-9527");
     record("T5 记忆沉淀/查看", memOk, "");
   }
 
@@ -207,11 +208,11 @@ async function main() {
     const code = await tui.waitExit();
     const out = tui.out;
     const ok =
-      out.includes("未知命令 /foobar") &&
-      out.includes("用法：/use") &&
-      out.includes("会话不存在") &&
-      out.includes("用法：/mem") &&
-      out.includes("未知命令 /install-cli-extra") &&
+      out.includes("Unknown /foobar") &&
+      out.includes("Usage: /use") &&
+      out.includes("Session not found") &&
+      out.includes("Usage: /mem") &&
+      out.includes("Unknown /install-cli-extra") &&
       code === 0;
     record("T8 非法命令/用法错误", ok, `exit=${code}`);
   }
@@ -226,7 +227,7 @@ async function main() {
     tui.send("/q");
     const code = await tui.waitExit();
     // 空白行不应产生"错误"输出
-    const ok = code === 0 && !tui.out.split("BIT TUI")[1]?.includes("错误");
+    const ok = code === 0 && !tui.out.split("BIT TUI")[1]?.includes("Error");
     record("T9 空白输入忽略 + /q 退出", ok, `exit=${code}`);
   }
 
@@ -259,7 +260,7 @@ async function main() {
     tui.send("/quit");
     const code = await tui.waitExit();
     const out = tui.out;
-    const ok = code === 0 && out.includes("AI 尚未配置") && out.includes("shell") && out.includes("Run a shell command");
+    const ok = code === 0 && out.includes("No AI provider configured") && out.includes("shell") && out.includes("Run a shell command");
     record("T12 损坏 ai_config 容错 + 工具描述英文", ok, `exit=${code}`);
   }
 
@@ -277,7 +278,7 @@ async function main() {
     tui.send("/quit");
     const code = await tui.waitExit(120000);
     const out = tui.out;
-    const ok = code === 0 && out.includes("错误：") && out.includes("shell");
+    const ok = code === 0 && out.includes("Error:") && out.includes("shell");
     record("T13 AI 不可达报错恢复", ok, `exit=${code}`);
   }
 
@@ -316,15 +317,15 @@ async function main() {
     // finish_reason 大写变体 MAX_TOKENS：应被归一化识别并显式标注截断
     tui.send("E2E-FMT-MAXTOK");
     for (let i = 0; i < 60 && !tui.out.includes("E2E-FMT-MAXTOK-OK"); i++) await sleep(500);
-    const maxOk = tui.out.includes("E2E-FMT-MAXTOK-OK") && tui.out.includes("截断");
+    const maxOk = tui.out.includes("E2E-FMT-MAXTOK-OK") && /truncat|截断/i.test(tui.out);
     record("T17 MAX_TOKENS 截断归一化", maxOk, maxOk ? "" : tail(tui.out));
     // 完全不可解析的响应体：报错有提示、REPL 存活、可继续退出
     tui.send("E2E-FMT-GARBAGE");
-    for (let i = 0; i < 60 && !tui.out.includes("错误："); i++) await sleep(500);
+    for (let i = 0; i < 60 && !tui.out.includes("Error:"); i++) await sleep(500);
     tui.send("/tools");
     tui.send("/quit");
     const code = await tui.waitExit(60000);
-    const garbOk = code === 0 && tui.out.includes("错误：") && tui.out.includes("Run a shell command");
+    const garbOk = code === 0 && tui.out.includes("Error:") && tui.out.includes("Run a shell command");
     record("T17 垃圾响应容错", garbOk, `exit=${code}`);
   }
 
@@ -335,12 +336,12 @@ async function main() {
     // 18a 参数缺失 → 错误反馈 → 自我纠正
     tui.send("E2E-AI-RETRY");
     for (let i = 0; i < 60 && !tui.out.includes("E2E-AI-RETRY-OK"); i++) await sleep(500);
-    const retryOk = tui.out.includes("E2E-AI-RETRY-OK") && tui.out.includes("失败");
+    const retryOk = tui.out.includes("E2E-AI-RETRY-OK") && tui.out.includes("FAIL");
     record("T18a 参数缺失自纠", retryOk, retryOk ? "" : tail(tui.out));
     // 18b 幻觉工具 → 错误反馈 → 换真实工具
     tui.send("E2E-AI-NOTOOL");
     for (let i = 0; i < 60 && !tui.out.includes("E2E-AI-NOTOOL-OK"); i++) await sleep(500);
-    const notoolOk = tui.out.includes("E2E-AI-NOTOOL-OK") && tui.out.includes("失败");
+    const notoolOk = tui.out.includes("E2E-AI-NOTOOL-OK") && tui.out.includes("FAIL");
     record("T18b 幻觉工具自纠", notoolOk, notoolOk ? "" : tail(tui.out));
     // 18c 围栏 + 散文包裹的工具调用
     tui.send("E2E-AI-FENCED");
@@ -381,7 +382,7 @@ async function main() {
     record("T19c 流中输入模拟", bothOk, bothOk ? "" : tail(tui.out));
     // 19d 流式请求立即 500：报错反馈，REPL 存活
     tui.send("E2E-STREAM-ERR");
-    for (let i = 0; i < 60 && !tui.out.includes("错误："); i++) await sleep(500);
+    for (let i = 0; i < 60 && !tui.out.includes("Error:"); i++) await sleep(500);
     tui.send("/tools");
     tui.send("/quit");
     const code = await tui.waitExit(60000);
@@ -466,8 +467,8 @@ async function main() {
     let ok = false;
     try {
       const snaps = fs.readFileSync(dump, "utf8").trim().split("\n").map(JSON.parse).filter((s) => s.marker === "E2E-CACHE-CHAT");
-      // /mem 回显 "已沉淀记忆 <id>"：记忆索引行格式为 "- about <主题词> [<id>]"
-      const idMatch = [...tui.out.matchAll(/已沉淀记忆 (\S+)/g)].pop();
+      // /mem 回显 "Memory saved: <id>"：记忆索引行格式为 "- about <主题词> [<id>]"
+      const idMatch = [...tui.out.matchAll(/Memory saved: (\S+)/g)].pop();
       const memId = idMatch ? idMatch[1] : "";
       const memLine = memId ? new RegExp(`- about [^\\n]*\\[${memId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]`) : null;
       if (snaps.length === 3 && memLine && snaps.every((s) => s.blocks.length === 2)) {
@@ -502,8 +503,8 @@ async function main() {
     const tui = launchTui(SDIR);
     await tui.ready();
     tui.send("E2E-CACHE-SILENT");
-    // 等工具执行回显，再留 4s 观察是否冒出多余的第二轮请求
-    for (let i = 0; i < 60 && !tui.out.includes("[tool] add_memory"); i++) await sleep(500);
+    // 等工具执行回显（TUI 格式：  ▶ add_memory → OK），再留 4s 观察是否冒出多余的第二轮请求
+    for (let i = 0; i < 60 && !tui.out.includes("▶ add_memory"); i++) await sleep(500);
     await sleep(4000);
     tui.send("/quit");
     await tui.waitExit(30000);
@@ -513,7 +514,7 @@ async function main() {
     try {
       const snaps = fs.existsSync(dump) ? fs.readFileSync(dump, "utf8").trim().split("\n").map(JSON.parse).filter((s) => s.marker === "E2E-CACHE-SILENT") : [];
       const oneRequest = snaps.length === 1 && snaps[0].note === "first-round";
-      const toolShown = tui.out.includes("[tool] add_memory") && tui.out.includes("成功");
+      const toolShown = tui.out.includes("▶ add_memory") && tui.out.includes("→ OK");
       const noBug = !tui.out.includes("E2E-CACHE-SILENT-BUG");
       ok = oneRequest && toolShown && noBug;
       detail = `requests=${snaps.length} notes=[${snaps.map((s) => s.note).join(",")}] toolShown=${toolShown}`;
@@ -550,8 +551,8 @@ async function main() {
     tui.send(`E2E-WS-ESCAPE|${escapeFile} 绝对路径逃逸`);
     await waitFor(tui, "ws-escape-rejected", 20000);
     await sleep(300);
-    // TUI 只回显工具行不打印结果详情：以"→ 失败"计数增加 + 逃逸文件未创建为据
-    const failLines = (tui.out.match(/→ 失败/g) || []).length;
+    // TUI 只回显工具行不打印结果详情：以"→ FAIL"计数增加 + 逃逸文件未创建为据
+    const failLines = (tui.out.match(/→ FAIL/g) || []).length;
     const rejectOk = tui.out.includes("ws-escape-rejected") && failLines > 0 && !fs.existsSync(escapeFile);
 
     tui.send(`/cd ${CDIR}`);
@@ -586,41 +587,42 @@ async function main() {
     await sleep(400);
     tui.send("/sessions");
     await sleep(400);
-    const renameOk = tui.out.includes("已重命名会话") && tui.out.includes("我的测试会话");
+    // mod.rs: "Session {id} renamed → {title}"
+    const renameOk = /Session [0-9a-f]+ renamed → 我的测试会话/.test(tui.out) || tui.out.includes("renamed →") && tui.out.includes("我的测试会话");
 
     tui.send("/goals");
     await sleep(300);
     tui.send("/todo");
     await sleep(300);
-    const listOk = tui.out.includes("（暂无目标）") && tui.out.includes("（暂无待办）");
+    const listOk = tui.out.includes("(no goals)") && tui.out.includes("(no todos)");
 
     tui.send("/approval auto");
     await sleep(300);
     tui.send("/approval");
     await sleep(300);
-    // TUI 不回显输入行：取最后一次"当前审批模式"播报，必须是刚切换的 auto
-    const modeHits = [...tui.out.matchAll(/当前审批模式：(ask|auto|allow_all)/g)];
-    const approvalOk = tui.out.includes("审批模式已切换为：auto") && modeHits.length >= 1 && modeHits.at(-1)[1] === "auto";
+    // TUI 不回显输入行：mod.rs: 设置时 "Approval → {arg}"，查询时 "Approval: {mode} (ask / auto / allow_all)"
+    const modeHits = [...tui.out.matchAll(/Approval: (ask|auto|allow_all)/g)];
+    const approvalOk = tui.out.includes("Approval → auto") && modeHits.length >= 1 && modeHits.at(-1)[1] === "auto";
 
     tui.send("/interrupt");
     await sleep(300);
-    const interruptOk = tui.out.includes("当前会话没有进行中的回合");
+    const interruptOk = tui.out.includes("no turn in progress");
 
     tui.send("/runtimes");
     await sleep(300);
-    const runtimesOk = !tui.out.includes("错误：");
+    const runtimesOk = !tui.out.includes("Error:");
 
     // 先对话产生消息再清空
     tui.send("TUI-MOCK-GREETING");
     for (let i = 0; i < 40 && !tui.out.includes("好的。"); i++) await sleep(500);
     tui.send("/clear");
     await sleep(400);
-    const clearOk = /已清空 \d+ 条消息/.test(tui.out);
+    const clearOk = /Cleared \d+ messages/.test(tui.out);
 
     // 删当前会话（唯一会话 → 自动补新会话）
     tui.send("/delete");
     await sleep(400);
-    const deleteOk = tui.out.includes("已删除会话") && tui.out.includes("当前会话");
+    const deleteOk = /Session [0-9a-f]+ deleted/.test(tui.out) && tui.out.includes("Current: ");
 
     tui.send("/quit");
     await tui.waitExit(30000);

@@ -47,7 +47,7 @@ jobs:
 
   linux:
     needs: ensure-release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -204,14 +204,31 @@ jobs:
         shell: bash
         run: |
           TAG="${{ needs.ensure-release.outputs.tag }}"
-          # Tauri NSIS 对 aarch64 目标输出 *_arm64-setup.exe，而 latest.json 与
-          # update.rs 回退命名统一用 *_aarch64-setup.exe（与 dmg/AppImage 一致）。
-          # 不改名的话 Windows ARM64 自动更新会 404。
           NSIS_DIR=src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          mv "$NSIS_DIR/BIT_${VERSION}_arm64-setup.exe" "$NSIS_DIR/BIT_${VERSION}_aarch64-setup.exe"
+          # Tauri NSIS 对 aarch64 目标的架构命名曾是 "arm64"，新版可能直接输出 "aarch64"。
+          # latest.json / update.rs 回退统一用 *_aarch64-setup.exe（与 dmg/AppImage 一致）。
+          # 此处自动适配两种命名：已正确则跳过，旧名则重命名，都找不到则报错。
+          SETUP_FOUND=""
+          for f in "$NSIS_DIR/BIT_${VERSION}_aarch64-setup.exe" \
+                   "$NSIS_DIR/BIT_${VERSION}_arm64-setup.exe"; do
+            if [ -f "$f" ]; then SETUP_FOUND="$f"; break; fi
+          done
+          if [ -z "$SETUP_FOUND" ]; then
+            echo "ERROR: 找不到 NSIS setup.exe，$NSIS_DIR 目录内容："
+            ls -la "$NSIS_DIR" || true
+            exit 1
+          fi
+          SETUP_NAME=$(basename "$SETUP_FOUND")
+          if echo "$SETUP_NAME" | grep -q "aarch64"; then
+            echo "Tauri 已输出 aarch64 命名，直接使用: $SETUP_NAME"
+          else
+            NEW_NAME=$(echo "$SETUP_NAME" | sed 's/arm64/aarch64/g')
+            echo "重命名: $SETUP_NAME → $NEW_NAME"
+            mv "$SETUP_FOUND" "$NSIS_DIR/$NEW_NAME"
+          fi
           gh release upload "$TAG" \
-            "$NSIS_DIR/BIT_${VERSION}_aarch64-setup.exe" \
+            "$NSIS_DIR"/*-setup.exe \
             "BIT_${VERSION}_aarch64-portable.zip" \
             --clobber --repo "$GITHUB_REPOSITORY"
 
