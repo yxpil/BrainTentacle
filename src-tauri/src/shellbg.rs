@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 use tokio::sync::Notify;
-use tauri::Emitter;
 
 /// 前台判定窗口：命令在窗口内结束走原有「快命令」路径；否则转后台。
 const FRONT_WINDOW_MS: u128 = 2000;
@@ -706,7 +705,7 @@ fn flush_log_batch(ctx: &Arc<crate::state::Ctx>, job_id: &str, pending: &mut Vec
         "added": batch.len(),
         "lines": batch,
     });
-    let _ = ctx.app.emit("shell-job-log", payload);
+    let _ = crate::worker::emit_ui(&ctx.app, "shell-job-log", payload);
 }
 
 /// 用户 / UI 停止一个后台命令：通知其等待任务 kill 进程，事件 killed 会在片刻后广播

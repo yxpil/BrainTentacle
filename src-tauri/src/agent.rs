@@ -11,16 +11,17 @@ use crate::state::{Ctx, CHAT_MAX};
 
 /// 每个会话一把 shell 串行锁：shell 命令隐式共享 cwd / 环境变量 / 文件系统状态，
 /// 并发跑多条 shell 几乎永远比串行更容易出问题（cwd 丢失、文件竞争、退出码错乱）。
-/// 锁用 tokio::sync::Mutex（支持跨 .await），key 是 session id。
-/// （暂时不清理死会话 entry——会话数通常很少，内存泄漏可以忽略；后续加后台管理时再做。）
-fn shell_lock(sid: &str) -> Arc<Mutex<()>> {
-    static LOCKS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+/// 会话级串行锁：用 tokio::sync::Semaphore(1) 替代 Mutex。
+/// 关键优势：SemaphorePermit 是 owned 值，不 borrow Semaphore，彻底规避 lifetime 问题。
+/// key 是 session id。会话数通常很少，不清理死会话 entry。
+fn shell_semaphore(sid: &str) -> Arc<tokio::sync::Semaphore> {
+    static LOCKS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>>> =
         std::sync::OnceLock::new();
     let map = LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let mut map_guard = map.lock().unwrap();
     map_guard
         .entry(sid.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(1)))
         .clone()
 }
 
@@ -978,13 +979,11 @@ pub async fn chat_turn(
                             // ── shell 工具会话级串行锁 ──────────────────────────────────
                             // shell 命令隐式共享 cwd / env / 工作目录下的文件状态，
                             // AI 一轮发多条 shell 时串行排队更合理；其他工具保持原并发度（16）。
-                            let (arc, _guard) = if call.name == "shell" {
-                                // arc 提到外面，确保 MutexGuard 的 lifetime 覆盖整个 tool 执行期
-                                let a = shell_lock(&target);
-                                let g = a.lock().await;
-                                (Some(a), Some(g))
+                            // SemaphorePermit 是 owned 值，不 borrow Semaphore，没有 lifetime 问题
+                            let _permit = if call.name == "shell" {
+                                Some(shell_semaphore(&target).acquire().await.unwrap())
                             } else {
-                                (None, None)
+                                None
                             };
                             tokio::select! {
                                 r = execute_tool_call(ctx, &call.name, &call.args, Some(&target)) => r,
@@ -1482,13 +1481,11 @@ pub async fn chat_turn_stream(
                             // ── shell 工具会话级串行锁 ──────────────────────────────────
                             // shell 命令隐式共享 cwd / env / 工作目录下的文件状态，
                             // AI 一轮发多条 shell 时串行排队更合理；其他工具保持原并发度（16）。
-                            let (arc, _guard) = if call.name == "shell" {
-                                // arc 提到外面，确保 MutexGuard 的 lifetime 覆盖整个 tool 执行期
-                                let a = shell_lock(&target);
-                                let g = a.lock().await;
-                                (Some(a), Some(g))
+                            // SemaphorePermit 是 owned 值，不 borrow Semaphore，没有 lifetime 问题
+                            let _permit = if call.name == "shell" {
+                                Some(shell_semaphore(&target).acquire().await.unwrap())
                             } else {
-                                (None, None)
+                                None
                             };
                             tokio::select! {
                                 r = execute_tool_call(ctx, &call.name, &call.args, Some(&target)) => r,
