@@ -1649,9 +1649,9 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
     let mut manual = manual.to_string();
     if has("shell") {
         if native {
-            manual.push_str("\n7. shell has two modes: `wait:true` = wait for completion before sending next tool (use when next step needs this command's output, e.g. npm install → npm run build; max 10 min); `background:true` = fire-and-forget, chat continues (dev servers, tests, pipelines; result auto-returns). If neither, short commands sync, long ones auto-background.");
+            manual.push_str("\n7. shell has two modes: `wait:true` = wait for completion before sending next tool (use when next step needs this command's output, e.g. npm install → npm run build; max 10 min); `background:true` = fire-and-forget, chat continues (dev servers, tests, pipelines; result auto-returns). If neither, short commands sync, long ones auto-background.\n   After background shell returns a job_id, YOU decide:\n   - Ignore it (dev servers, mirrors, long downloads): keep doing other things; the final result is injected when it finishes.\n   - Care about it (npm install, build, test, migration): call `shell_log(job_id)` once or twice to spot progress/errors early, write a short status to the user, then let the round end naturally — background completion will wake you up.\n   Do NOT tight-loop shell_log; that burns tokens.");
         } else {
-            manual.push_str("\nshell has two modes: wait=true = wait for completion before next tool (use for dependency chains like npm install → npm run build; max 10 min); background=true = fire-and-forget (dev servers, tests, pipelines; result auto-returns). If neither, short sync, long auto-background.");
+            manual.push_str("\nshell has two modes: wait=true = wait for completion before next tool (use for dependency chains like npm install → npm run build; max 10 min); background=true = fire-and-forget (dev servers, tests, pipelines; result auto-returns). If neither, short sync, long auto-bg. After background returns job_id: you decide — ignore (dev servers) and keep going, or care (install/build/test) and call `shell_log(job_id)` once or twice to check progress, then write a status and end your turn so completion wakes you up. No tight loops.");
         }
     }
     if has("sub_agent") {
@@ -1710,7 +1710,7 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
             p.push_str(&format!("\n\n## Tools\n{tools_at_a_glance}"));
         }
         if has("shell") {
-            p.push_str("\nshell: wait=true (sync, use for dependency chains like install→build; max 10 min) or background=true (fire-and-forget; result auto-returns). Short sync / long auto-bg if neither.");
+            p.push_str("\nshell: wait=true (sync, use for dependency chains like install→build; max 10 min) or background=true (fire-and-forget; result auto-returns). Short sync / long auto-bg if neither. After background returns job_id: you decide — ignore (dev servers) and keep going, or care (install/build/test) and call shell_log(job_id) once to check progress. No tight loops.");
         }
         if has("sub_agent") {
             p.push_str("\nsub_agent: {\"task\",\"title\"} for long self-contained subtasks only. No nesting.");

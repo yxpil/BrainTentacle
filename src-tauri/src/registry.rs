@@ -68,6 +68,21 @@ pub fn builtin_tools() -> Vec<ToolDef> {
             }),
             "shell",
         ),
+        // 1.5 查询后台 shell 实时输出（AI 主动查看）
+        mk(
+            "builtin.shell_log",
+            "shell_log",
+            "Read live output of a background shell job while it runs. Pass the job_id returned by shell() (e.g. sh1). Useful when you started a long command (npm install, build, test) in the background and want to check progress or errors before it finishes. Returns lines in chronological order with stream tag (out/err) and elapsed-ms timestamp. If the job already finished you'll get the final output; if the job_id is unknown you'll get an error.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "job_id": { "type": "string", "description": "Job id from a prior shell() call (e.g. sh1, sh2)" },
+                    "tail":   { "type": "integer", "description": "Return only the last N lines (default 200). Use tail=0 for ALL lines (capped at 2000 total)" }
+                },
+                "required": ["job_id"]
+            }),
+            "shell_log",
+        ),
         // 2. 文档编辑（写 / 覆盖整个文件）
         mk(
             "builtin.write_file",
@@ -840,6 +855,50 @@ async fn builtin_invoke(
             let cwd = crate::sandbox::resolve_cwd(ctx, cwd.as_deref())?;
             // 后台 shell：短命令秒回；长命令自动转后台（shell-job 事件 + 可停止 + 完成时顶层 worker 自动唤回会话 AI）
             crate::shellbg::run(ctx, &command, cwd.as_deref(), session, force_bg, wait).await
+        }
+        // ── 1.5 查询后台 shell 实时输出（AI 主动查进度）──
+        "shell_log" => {
+            let job_id = params.get("job_id").and_then(|v| v.as_str()).ok_or("Missing parameter: job_id")?.to_string();
+            let tail = params.get("tail").and_then(|v| v.as_i64()).unwrap_or(200);
+            let Some(detail) = crate::shellbg::detail(&job_id) else {
+                return Err(format!("后台 shell job `{job_id}` 不存在或已结束（日志已随最终结果注入会话）"));
+            };
+            let mut logs = detail.get("logs").and_then(|l| l.as_array()).cloned().unwrap_or_default();
+            let total = logs.len();
+            // tail > 0 取最后 N 行；tail == 0 要全部；但总长度不会超过 shellbg 内部 MAX_LOG_LINES（2000）
+            if tail > 0 && logs.len() as i64 > tail {
+                let drop = logs.len() - tail as usize;
+                logs.drain(0..drop);
+            }
+            // 格式化为 AI 友好的文本：每行 "[out|err 0.123s] text"
+            let elapsed_ms = detail.get("elapsed_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+            let command = detail.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let cwd = detail.get("cwd").and_then(|v| v.as_str());
+            let mut out = String::new();
+            out.push_str(&format!("job_id: {job_id}\n"));
+            out.push_str(&format!("command: {command}\n"));
+            if let Some(c) = cwd { out.push_str(&format!("cwd: {c}\n")); }
+            out.push_str(&format!("elapsed: {:.1}s\n", elapsed_ms as f64 / 1000.0));
+            out.push_str(&format!("lines_total: {total}\n"));
+            out.push_str("─".repeat(40).as_str());
+            out.push('\n');
+            for line in &logs {
+                let stream = line.get("stream").and_then(|v| v.as_str()).unwrap_or("out");
+                let ts_ms  = line.get("ts_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                let text   = line.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                out.push_str(&format!("[{stream} {:.3}s] {text}\n", ts_ms as f64 / 1000.0));
+            }
+            if logs.is_empty() {
+                out.push_str("(no output yet)\n");
+            }
+            Ok(serde_json::json!({
+                "ok": true,
+                "job_id": job_id,
+                "elapsed_ms": elapsed_ms,
+                "lines_total": total,
+                "lines_shown": logs.len(),
+                "output": out,
+            }))
         }
         // ── 2. 文档编辑（写 / 覆盖）──
         "write_file" => {
