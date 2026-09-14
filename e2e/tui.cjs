@@ -560,8 +560,10 @@ async function main() {
     tui.send("E2E-WS-PWD 切换cwd");
     // 轮询直到最后一条 FINAL 的 stdout 已变成 CDIR（ESCAPE 回合后节奏可能拖慢，给足 30s）
     let lastStdout = "";
+    let allFinals = [];
     for (let i = 0; i < 60; i++) {
       const finals = [...tui.out.matchAll(/E2E-FINAL-OK stdout=「([^」]*)」/g)].map((m) => m[1]);
+      allFinals = finals;
       lastStdout = norm(finals.at(-1) || "");
       if (lastStdout.includes(norm(CDIR))) break;
       await sleep(500);
@@ -572,7 +574,7 @@ async function main() {
     await tui.waitExit(30000);
     try { fs.rmSync(escapeFile, { force: true }); } catch {}
     const ok = pwdOk && shellCwdOk && writeOk && rejectOk && cdOk;
-    record("T22 工作区沙箱(cwd/相对/逃逸/cd)", ok, `pwd=${pwdOk} shellCwd=${shellCwdOk} write=${writeOk} reject=${rejectOk} cd=${cdOk}`);
+    record("T22 工作区沙箱(cwd/相对/逃逸/cd)", ok, `pwd=${pwdOk} shellCwd=${shellCwdOk} write=${writeOk} reject=${rejectOk} cd=${cdOk} lastStdout="${lastStdout}" expect="${norm(CDIR)}" finals_count=${allFinals.length}`);
   }
 
   // ── T23 新增 TUI 命令：rename/approval/goals/todo/interrupt/clear/delete/runtimes ──
