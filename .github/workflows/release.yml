@@ -71,6 +71,7 @@ jobs:
           npm run build
       - name: Rust 类型检查（闸门，遇错即停）
         run: cargo check --locked
+        working-directory: src-tauri
 
   linux:
     needs: [ensure-release, compile-check]
