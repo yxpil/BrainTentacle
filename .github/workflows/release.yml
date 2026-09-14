@@ -201,36 +201,37 @@ jobs:
       - name: 上传到 Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+        shell: pwsh
         run: |
-          TAG="${{ needs.ensure-release.outputs.tag }}"
-          NSIS_DIR=src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis
-          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          $TAG = "${{ needs.ensure-release.outputs.tag }}"
+          $NSIS_DIR = "src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis"
+          $VERSION = node -p "require('./src-tauri/tauri.conf.json').version"
           # Tauri NSIS 对 aarch64 目标的架构命名曾是 "arm64"，新版可能直接输出 "aarch64"。
           # latest.json / update.rs 回退统一用 *_aarch64-setup.exe（与 dmg/AppImage 一致）。
           # 遍历两种可能的文件名，找到哪个用哪个，旧名则重命名为 aarch64。
-          SETUP_DEST="$NSIS_DIR/BIT_${VERSION}_aarch64-setup.exe"
-          SETUP_SRC=""
-          for f in "$NSIS_DIR/BIT_${VERSION}_aarch64-setup.exe" \
-                   "$NSIS_DIR/BIT_${VERSION}_arm64-setup.exe"; do
-            if [ -f "$f" ]; then SETUP_SRC="$f"; break; fi
-          done
-          if [ -z "$SETUP_SRC" ]; then
-            echo "ERROR: 找不到 NSIS setup.exe"
-            ls -la "$NSIS_DIR" || echo "(目录不存在)"
+          $setupDest = "$NSIS_DIR\BIT_${VERSION}_aarch64-setup.exe"
+          $setupSrc = $null
+          foreach ($candidate in @(
+            "$NSIS_DIR\BIT_${VERSION}_aarch64-setup.exe",
+            "$NSIS_DIR\BIT_${VERSION}_arm64-setup.exe"
+          )) {
+            if (Test-Path $candidate) { $setupSrc = $candidate; break }
+          }
+          if (-not $setupSrc) {
+            Write-Host "ERROR: 找不到 NSIS setup.exe，目录内容："
+            if (Test-Path $NSIS_DIR) { Get-ChildItem $NSIS_DIR | ForEach-Object { Write-Host $_.Name } }
+            else { Write-Host "  (目录不存在: $NSIS_DIR)" }
             exit 1
-          fi
-          if [ "$SETUP_SRC" != "$SETUP_DEST" ]; then
-            echo "重命名 arm64 → aarch64: $(basename "$SETUP_SRC")"
-            mv "$SETUP_SRC" "$SETUP_DEST"
-          else
-            echo "Tauri 已输出 aarch64 命名，直接使用"
-          fi
-          PORTABLE="BIT_${VERSION}_aarch64-portable.zip"
-          gh release upload "$TAG" \
-            "$SETUP_DEST" \
-            "$PORTABLE" \
-            --clobber --repo "$GITHUB_REPOSITORY"
+          }
+          if ($setupSrc -ne $setupDest) {
+            Write-Host "重命名 arm64 → aarch64: $(Split-Path $setupSrc -Leaf)"
+            Move-Item -Force $setupSrc $setupDest
+          } else {
+            Write-Host "Tauri 已输出 aarch64 命名，直接使用: $(Split-Path $setupSrc -Leaf)"
+          }
+          $portable = "BIT_${VERSION}_aarch64-portable.zip"
+          gh release upload "$TAG" $setupDest $portable --clobber --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) { Write-Host "gh release upload failed (exit=$LASTEXITCODE)"; exit $LASTEXITCODE }
 
   macos:
     needs: ensure-release
