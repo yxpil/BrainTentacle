@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>mermaid ER probe</title></head>
+<body>
+<pre id="out">running</pre>
+<script src="./node_modules/mermaid/dist/mermaid.min.js"></script>
+<script>
+(async () => {
+  const out = document.getElementById("out");
+  try {
+    const code = await (await fetch("/er-code.txt")).text();
+    mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "strict" });
+    let parseOk = null, parseErr = null, renderOk = null, renderErr = null, svgLen = 0;
+    try { parseOk = !!(await mermaid.parse(code)); } catch (e) { parseErr = String(e && e.message || e); }
+    if (parseOk) {
+      try { const r = await mermaid.render("probe1", code); renderOk = true; svgLen = (r.svg || "").length; }
+      catch (e) { renderErr = String(e && e.message || e).slice(0, 400); }
+    }
+    out.textContent = "RESULT=" + JSON.stringify({ parseOk, parseErr, renderOk, renderErr, svgLen, ua: navigator.userAgent.slice(0, 60) });
+  } catch (e) {
+    out.textContent = "FATAL=" + String(e && e.message || e);
+  }
+})();
+</script>
+</body></html>

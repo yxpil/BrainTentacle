@@ -219,23 +219,37 @@ pub async fn run(
     // 但加 WAIT_TIMEOUT_SECS 硬上限防 AI 把 dev server / watch 这种长驻命令也标 wait。
     // 超时后转后台并在 note 里明确告知 AI 它的 wait 被降级了。
     if wait {
+        // 先 take stdout/stderr，避免 select! 里两个 arm 对 child 的所有权争夺
+        let mut so = child.stdout.take();
+        let mut se = child.stderr.take();
+
         let timeout_sleep = tokio::time::sleep(std::time::Duration::from_secs(WAIT_TIMEOUT_SECS));
         tokio::pin!(timeout_sleep);
         let mut timed_out = false;
         let out: std::process::Output = tokio::select! {
-            o = child.wait_with_output() => o.map_err(|e| format!("Failed to collect command output: {e}"))?,
+            status = child.wait() => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut so, &mut stdout).await;
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut se, &mut stderr).await;
+                std::process::Output {
+                    status: status.map_err(|e| format!("Failed to wait command: {e}"))?,
+                    stdout, stderr,
+                }
+            }
             _ = &mut timeout_sleep => {
                 timed_out = true;
                 tree_kill(&mut child);
-                // 杀掉后再等一次拿输出（管道还没关），但最多等 5s
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    child.wait_with_output(),
-                ).await.unwrap_or_else(|_| Ok(std::process::Output {
-                    status: std::process::ExitStatus::default(),
-                    stdout: vec![],
-                    stderr: vec![],
-                })).map_err(|e| format!("Failed to collect output after wait timeout: {e}"))?
+                // 杀掉后等进程退出（最多 5s），再读管道
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut so, &mut stdout).await;
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut se, &mut stderr).await;
+                std::process::Output {
+                    status: child.try_wait().ok().flatten().unwrap_or_default(),
+                    stdout, stderr,
+                }
             }
         };
         let mut result = json!({
@@ -416,79 +430,14 @@ async fn finish(ctx: Arc<crate::state::Ctx>, job: Arc<ShellJob>) {
     let se_pipe = child.stderr.take();
     let jid = job.id.clone();
     let jstart = job.started;
-    let mut so_buf = String::new(); // 累积未换行的尾部（跨 chunk 的断行）
-    let mut se_buf = String::new();
-    let mut pending_lines: Vec<LogLine> = Vec::new();
-    let mut last_flush = std::time::Instant::now();
-    let mut total_bytes: usize = 0;
 
-    let mut read_stream = |
-        pipe: Option<tokio::process::ChildStdout>,
-        stream_tag: &'static str,
-        ctx: Arc<crate::state::Ctx>,
-        job_id: String,
-        started: std::time::Instant,
-        logs: std::sync::Arc<std::sync::Mutex<Vec<LogLine>>>,
-        pending: &mut Vec<LogLine>,
-        pending_buf: &mut String,
-        flush_since: &mut std::time::Instant,
-        total_out: &mut usize,
-    | -> tokio::task::JoinHandle<String> {
-        tauri::async_runtime::spawn(async move {
-            use tokio::io::AsyncBufReadExt;
-            let mut reader = tokio::io::BufReader::new(pipe.unwrap());
-            let mut out = String::new();
-            loop {
-                let mut line = String::new();
-                let n = reader.read_line(&mut line).await;
-                let n = match n {
-                    Ok(0) => break,  // EOF
-                    Ok(n) => n,
-                    Err(_) => break,
-                };
-                out.push_str(&line);
-                // 累积到 logs + pending
-                let ts_ms = started.elapsed().as_millis() as u64;
-                let ll = LogLine { stream: stream_tag.into(), text: line.trim_end().to_string(), ts_ms };
-                {
-                    let mut v = logs.lock().unwrap();
-                    v.push(ll.clone());
-                    if v.len() > MAX_LOG_LINES {
-                        let drop = v.len() - MAX_LOG_LINES;
-                        v.drain(0..drop);
-                    }
-                }
-                pending.push(ll);
-                *total_out += n;
-                // 节流：每 500ms 或每 20 行广播一次
-                let now = std::time::Instant::now();
-                if now.duration_since(*flush_since).as_millis() >= 500 || pending.len() >= 20 {
-                    let batch: Vec<LogLine> = pending.drain(..).collect();
-                    let payload = serde_json::json!({
-                        "job_id": job_id,
-                        "added": batch.len(),
-                        "lines": batch,
-                    });
-                    let _ = ctx.app_handle.emit("shell-job-log", payload);
-                    *flush_since = now;
-                }
-            }
-            // 管道关闭后 flush 剩余（如果有）
-            if !pending.is_empty() {
-                let batch: Vec<LogLine> = pending.drain(..).collect();
-                let payload = serde_json::json!({
-                    "job_id": job_id,
-                    "added": batch.len(),
-                    "lines": batch,
-                });
-                let _ = ctx.app_handle.emit("shell-job-log", payload);
-            }
-            out
-        })
-    };
-
-    let so_task = read_stream(so_pipe, "out", ctx.clone(), jid.clone(), jstart, job.logs.clone(), &mut pending_lines, &mut so_buf, &mut last_flush, &mut total_bytes);
-    let se_task = read_stream(se_pipe, "err", ctx.clone(), jid.clone(), jstart, job.logs.clone(), &mut pending_lines, &mut se_buf, &mut last_flush, &mut total_bytes);
+    // 独立 spawn 两个读任务（不用闭包——Rust 闭包单态化不能同时接受 ChildStdout / ChildStderr）
+    let so_task = tauri::async_runtime::spawn(read_pipe(
+        so_pipe, "out", ctx.clone(), jid.clone(), jstart, job.logs.clone(),
+    ));
+    let se_task = tauri::async_runtime::spawn(read_pipe(
+        se_pipe, "err", ctx.clone(), jid.clone(), jstart, job.logs.clone(),
+    ));
 
     let timeout_sleep = tokio::time::sleep(std::time::Duration::from_secs(BG_TIMEOUT_SECS));
     tokio::pin!(timeout_sleep);
@@ -684,6 +633,81 @@ fn push_system_user(ctx: &Arc<crate::state::Ctx>, sid: &str, body: &str) {
     }
     crate::session::persist(ctx);
     let _ = crate::worker::emit_ui(&ctx.app, "sessions-updated", json!(sid));
+}
+
+/// read_pipe: 单个 pipe（stdout/stderr）的读取循环——BufReader + read_line，
+/// 每读到一行就 push 进全局 logs buffer（MAX_LOG_LINES 截断），同时节流
+/// 广播 shell-job-log 事件（500ms 或 20 行）。
+/// 接受 ChildStdout / ChildStderr 通用类型（它们都 AsyncRead + Unpin）。
+async fn read_pipe<P>(
+    pipe: Option<P>,
+    stream_tag: &'static str,
+    ctx: Arc<crate::state::Ctx>,
+    job_id: String,
+    started_at: std::time::Instant,
+    logs: Arc<std::sync::Mutex<Vec<LogLine>>>,
+) -> String
+where
+    P: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+    let Some(pipe) = pipe else {
+        return String::new();
+    };
+    let mut reader = tokio::io::BufReader::new(pipe);
+    let mut full = String::new();
+    let mut pending: Vec<LogLine> = Vec::new();
+    let mut last_flush = std::time::Instant::now();
+
+    loop {
+        let mut line = String::new();
+        let n = match reader.read_line(&mut line).await {
+            Ok(0) => break,  // EOF —— 进程结束
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        full.push_str(&line);
+        let ts_ms = started_at.elapsed().as_millis() as u64;
+        let ll = LogLine {
+            stream: stream_tag.to_string(),
+            text: line.trim_end().to_string(),
+            ts_ms,
+        };
+        // 全局日志缓冲
+        {
+            let mut v = logs.lock().unwrap();
+            v.push(ll.clone());
+            if v.len() > MAX_LOG_LINES {
+                let drop = v.len() - MAX_LOG_LINES;
+                v.drain(0..drop);
+            }
+        }
+        pending.push(ll);
+        let _ = n;
+        // 节流广播
+        let now = std::time::Instant::now();
+        if now.duration_since(last_flush).as_millis() >= 500 || pending.len() >= 20 {
+            flush_log_batch(&ctx, &job_id, &mut pending);
+            last_flush = now;
+        }
+    }
+    // 管道关闭后 flush 剩余
+    flush_log_batch(&ctx, &job_id, &mut pending);
+    full
+}
+
+/// 把 pending 的 LogLine 批量 drain 掉，组 JSON payload 并通过 tauri emit 广播
+fn flush_log_batch(ctx: &Arc<crate::state::Ctx>, job_id: &str, pending: &mut Vec<LogLine>) {
+    if pending.is_empty() {
+        return;
+    }
+    let batch: Vec<LogLine> = pending.drain(..).collect();
+    let payload = serde_json::json!({
+        "job_id": job_id,
+        "added": batch.len(),
+        "lines": batch,
+    });
+    let _ = ctx.app.emit("shell-job-log", payload);
 }
 
 /// 用户 / UI 停止一个后台命令：通知其等待任务 kill 进程，事件 killed 会在片刻后广播

@@ -1,0 +1,26 @@
+erDiagram
+    USER ||--o{ ORDER : "下单"
+    ORDER ||--|{ ORDER_ITEM : "包含"
+    PRODUCT ||--o{ ORDER_ITEM : "被购买"
+
+    USER {
+        int id PK
+        string name
+        string phone
+    }
+    ORDER {
+        int id PK
+        int user_id FK
+        date created_at
+    }
+    PRODUCT {
+        int id PK
+        string title
+        decimal price
+    }
+    ORDER_ITEM {
+        int id PK
+        int order_id FK
+        int product_id FK
+        int qty
+    }

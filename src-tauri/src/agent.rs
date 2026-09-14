@@ -978,13 +978,13 @@ pub async fn chat_turn(
                             // ── shell 工具会话级串行锁 ──────────────────────────────────
                             // shell 命令隐式共享 cwd / env / 工作目录下的文件状态，
                             // AI 一轮发多条 shell 时串行排队更合理；其他工具保持原并发度（16）。
-                            let _shell_guard = if call.name == "shell" {
-                                // static Mutex guard：LOCKS 是 OnceLock 持有，Arc 让 lifetime 自动够
-                                Some(shell_lock(&target).lock().await)
+                            let guard = if call.name == "shell" {
+                                // 先 bind Arc 到局部变量，MutexGuard 的 lifetime 跟着 Arc 走
+                                let arc = shell_lock(&target);
+                                Some(arc.lock().await)
                             } else {
                                 None
                             };
-                            let _shell_guard2 = _shell_guard.as_ref(); // 保持 guard 不 drop，直到 tool 执行完
                             tokio::select! {
                                 r = execute_tool_call(ctx, &call.name, &call.args, Some(&target)) => r,
                                 _ = wait_interrupt(ctx, &target) => Err(String::new()),
@@ -1481,13 +1481,13 @@ pub async fn chat_turn_stream(
                             // ── shell 工具会话级串行锁 ──────────────────────────────────
                             // shell 命令隐式共享 cwd / env / 工作目录下的文件状态，
                             // AI 一轮发多条 shell 时串行排队更合理；其他工具保持原并发度（16）。
-                            let _shell_guard = if call.name == "shell" {
-                                // static Mutex guard：LOCKS 是 OnceLock 持有，Arc 让 lifetime 自动够
-                                Some(shell_lock(&target).lock().await)
+                            let guard = if call.name == "shell" {
+                                // 先 bind Arc 到局部变量，MutexGuard 的 lifetime 跟着 Arc 走
+                                let arc = shell_lock(&target);
+                                Some(arc.lock().await)
                             } else {
                                 None
                             };
-                            let _shell_guard2 = _shell_guard.as_ref(); // 保持 guard 不 drop，直到 tool 执行完
                             tokio::select! {
                                 r = execute_tool_call(ctx, &call.name, &call.args, Some(&target)) => r,
                                 _ = wait_interrupt(ctx, &target) => Err(String::new()),
