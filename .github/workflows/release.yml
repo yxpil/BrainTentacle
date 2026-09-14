@@ -201,37 +201,33 @@ jobs:
       - name: 上传到 Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.ensure-release.outputs.tag }}
+          VERSION: ${{ needs.ensure-release.outputs.tag }}
         shell: pwsh
         run: |
-          $TAG = "${{ needs.ensure-release.outputs.tag }}"
+          $TAG = "$env:TAG".Trim()
+          $VERSION = "$env:VERSION".TrimStart('v')
+          Write-Host "TAG=$TAG VERSION=$VERSION"
           $NSIS_DIR = "src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis"
-          $VERSION = node -p "require('./src-tauri/tauri.conf.json').version"
-          # Tauri NSIS 对 aarch64 目标的架构命名曾是 "arm64"，新版可能直接输出 "aarch64"。
-          # latest.json / update.rs 回退统一用 *_aarch64-setup.exe（与 dmg/AppImage 一致）。
-          # 遍历两种可能的文件名，找到哪个用哪个，旧名则重命名为 aarch64。
-          $setupDest = "$NSIS_DIR\BIT_${VERSION}_aarch64-setup.exe"
-          $setupSrc = $null
-          foreach ($candidate in @(
-            "$NSIS_DIR\BIT_${VERSION}_aarch64-setup.exe",
-            "$NSIS_DIR\BIT_${VERSION}_arm64-setup.exe"
-          )) {
-            if (Test-Path $candidate) { $setupSrc = $candidate; break }
-          }
-          if (-not $setupSrc) {
-            Write-Host "ERROR: 找不到 NSIS setup.exe，目录内容："
-            if (Test-Path $NSIS_DIR) { Get-ChildItem $NSIS_DIR | ForEach-Object { Write-Host $_.Name } }
-            else { Write-Host "  (目录不存在: $NSIS_DIR)" }
-            exit 1
-          }
-          if ($setupSrc -ne $setupDest) {
-            Write-Host "重命名 arm64 → aarch64: $(Split-Path $setupSrc -Leaf)"
-            Move-Item -Force $setupSrc $setupDest
+          Write-Host "NSIS_DIR contents:"
+          Get-ChildItem $NSIS_DIR -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length/1MB,1))MB)" }
+          # 找 arm64 或 aarch64，统一重命名为 aarch64（和 update.rs 契约一致）
+          $found = Get-ChildItem $NSIS_DIR -Filter "BIT_${VERSION}_*setup.exe" | Select-Object -First 1
+          if (-not $found) { Write-Host "ERROR: 找不到 NSIS setup.exe"; exit 1 }
+          $setupPath = $found.FullName
+          $destName = "BIT_${VERSION}_aarch64-setup.exe"
+          if ($found.Name -notmatch "aarch64") {
+            Write-Host "重命名: $($found.Name) → $destName"
+            Move-Item -Force $setupPath (Join-Path $NSIS_DIR $destName)
+            $setupPath = Join-Path $NSIS_DIR $destName
           } else {
-            Write-Host "Tauri 已输出 aarch64 命名，直接使用: $(Split-Path $setupSrc -Leaf)"
+            Write-Host "Tauri 已输出 aarch64 命名: $($found.Name)"
           }
-          $portable = "BIT_${VERSION}_aarch64-portable.zip"
-          gh release upload "$TAG" $setupDest $portable --clobber --repo "$env:GITHUB_REPOSITORY"
-          if ($LASTEXITCODE -ne 0) { Write-Host "gh release upload failed (exit=$LASTEXITCODE)"; exit $LASTEXITCODE }
+          $portablePath = "BIT_${VERSION}_aarch64-portable.zip"
+          Write-Host "上传: $setupPath + $portablePath → $TAG"
+          gh release upload "$TAG" "$setupPath" "$portablePath" --clobber
+          Write-Host "gh exit code: $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   macos:
     needs: ensure-release
