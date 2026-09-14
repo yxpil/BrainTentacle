@@ -220,8 +220,9 @@ pub async fn run(
     // 超时后转后台并在 note 里明确告知 AI 它的 wait 被降级了。
     if wait {
         // 先 take stdout/stderr，避免 select! 里两个 arm 对 child 的所有权争夺
-        let mut so = child.stdout.take();
-        let mut se = child.stderr.take();
+        // 命令刚 spawn 完 pipe 一定是 Some，直接 unwrap
+        let mut so = child.stdout.take().unwrap();
+        let mut se = child.stderr.take().unwrap();
 
         let timeout_sleep = tokio::time::sleep(std::time::Duration::from_secs(WAIT_TIMEOUT_SECS));
         tokio::pin!(timeout_sleep);
