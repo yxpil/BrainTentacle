@@ -469,7 +469,7 @@ async fn finish(ctx: Arc<crate::state::Ctx>, job: Arc<ShellJob>) {
                         "added": batch.len(),
                         "lines": batch,
                     });
-                    emit(&ctx, "log", &serde_json::Value::Null, Some(payload));
+                    let _ = ctx.app_handle.emit("shell-job-log", payload);
                     *flush_since = now;
                 }
             }
@@ -481,7 +481,7 @@ async fn finish(ctx: Arc<crate::state::Ctx>, job: Arc<ShellJob>) {
                     "added": batch.len(),
                     "lines": batch,
                 });
-                emit(&ctx, "log", &serde_json::Value::Null, Some(payload));
+                let _ = ctx.app_handle.emit("shell-job-log", payload);
             }
             out
         })
@@ -519,8 +519,7 @@ async fn finish(ctx: Arc<crate::state::Ctx>, job: Arc<ShellJob>) {
     )
     .await
     .unwrap_or_default();
-    let stdout = String::from_utf8_lossy(&stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr).into_owned();
+    // so_task/se_task 已经是 String（read_stream 内部 BufReader 累积），不再需要 from_utf8_lossy
     jobs().lock().unwrap().remove(&job.id);
     let ms = job.started.elapsed().as_millis() as u64;
     let code = status.and_then(|st| st.code());
