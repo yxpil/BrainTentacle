@@ -1,11 +1,28 @@
 // yxpil · BIT
 use futures_util::StreamExt;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::ai::{self, ChatMessage};
 use crate::state::{Ctx, CHAT_MAX};
+
+/// 每个会话一把 shell 串行锁：shell 命令隐式共享 cwd / 环境变量 / 文件系统状态，
+/// 并发跑多条 shell 几乎永远比串行更容易出问题（cwd 丢失、文件竞争、退出码错乱）。
+/// 锁用 tokio::sync::Mutex（支持跨 .await），key 是 session id。
+/// （暂时不清理死会话 entry——会话数通常很少，内存泄漏可以忽略；后续加后台管理时再做。）
+fn shell_lock(sid: &str) -> Arc<Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+        std::sync::OnceLock::new();
+    let map = LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut map_guard = map.lock().unwrap();
+    map_guard
+        .entry(sid.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 /// 同会话回合互斥守卫：Drop 时自动释放（覆盖错误路径与 panic），杜绝并发回合交错写会话历史
 pub struct TurnGuard {
@@ -958,6 +975,15 @@ pub async fn chat_turn(
                         if call.name.is_empty() {
                             Err("Missing tool field".to_string())
                         } else {
+                            // ── shell 工具会话级串行锁 ──────────────────────────────────
+                            // shell 命令隐式共享 cwd / env / 工作目录下的文件状态，
+                            // AI 一轮发多条 shell 时串行排队更合理；其他工具保持原并发度（16）。
+                            let _shell_guard: Option<MutexGuard<'static, ()>> = if call.name == "shell" {
+                                // static Mutex guard：LOCKS 是 OnceLock 持有，safe 'static
+                                Some(shell_lock(&target).lock().await)
+                            } else {
+                                None
+                            };
                             tokio::select! {
                                 r = execute_tool_call(ctx, &call.name, &call.args, Some(&target)) => r,
                                 _ = wait_interrupt(ctx, &target) => Err(String::new()),
@@ -1451,6 +1477,15 @@ pub async fn chat_turn_stream(
                         if call.name.is_empty() {
                             Err("Missing tool field".to_string())
                         } else {
+                            // ── shell 工具会话级串行锁 ──────────────────────────────────
+                            // shell 命令隐式共享 cwd / env / 工作目录下的文件状态，
+                            // AI 一轮发多条 shell 时串行排队更合理；其他工具保持原并发度（16）。
+                            let _shell_guard: Option<MutexGuard<'static, ()>> = if call.name == "shell" {
+                                // static Mutex guard：LOCKS 是 OnceLock 持有，safe 'static
+                                Some(shell_lock(&target).lock().await)
+                            } else {
+                                None
+                            };
                             tokio::select! {
                                 r = execute_tool_call(ctx, &call.name, &call.args, Some(&target)) => r,
                                 _ = wait_interrupt(ctx, &target) => Err(String::new()),

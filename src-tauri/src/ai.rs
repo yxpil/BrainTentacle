@@ -1649,9 +1649,9 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
     let mut manual = manual.to_string();
     if has("shell") {
         if native {
-            manual.push_str("\n7. shell background=true for known long tasks (builds/installs/batch); result auto-returns — never poll by re-running.");
+            manual.push_str("\n7. shell has two modes: `wait:true` = wait for completion before sending next tool (use when next step needs this command's output, e.g. npm install → npm run build; max 10 min); `background:true` = fire-and-forget, chat continues (dev servers, tests, pipelines; result auto-returns). If neither, short commands sync, long ones auto-background.");
         } else {
-            manual.push_str("\nshell background=true for known long tasks; result auto-returns — never poll.");
+            manual.push_str("\nshell has two modes: wait=true = wait for completion before next tool (use for dependency chains like npm install → npm run build; max 10 min); background=true = fire-and-forget (dev servers, tests, pipelines; result auto-returns). If neither, short sync, long auto-background.");
         }
     }
     if has("sub_agent") {
@@ -1710,7 +1710,7 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
             p.push_str(&format!("\n\n## Tools\n{tools_at_a_glance}"));
         }
         if has("shell") {
-            p.push_str("\nshell: background=true for known long tasks; result auto-returns. Never poll.");
+            p.push_str("\nshell: wait=true (sync, use for dependency chains like install→build; max 10 min) or background=true (fire-and-forget; result auto-returns). Short sync / long auto-bg if neither.");
         }
         if has("sub_agent") {
             p.push_str("\nsub_agent: {\"task\",\"title\"} for long self-contained subtasks only. No nesting.");

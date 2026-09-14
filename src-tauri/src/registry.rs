@@ -59,9 +59,10 @@ pub fn builtin_tools() -> Vec<ToolDef> {
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The command to execute" },
-                    "cwd": { "type": "string", "description": "Working directory (optional)" },
-                    "background": { "type": "boolean", "description": "Known long tasks: run in background; job_id returns at once, result auto-reports when done" }
+                    "command":     { "type": "string", "description": "The command to execute" },
+                    "cwd":         { "type": "string", "description": "Working directory (optional)" },
+                    "wait":        { "type": "boolean", "description": "Wait for the command to finish before continuing. Use when the next tool depends on the output (e.g. npm install → npm run build). Implicitly forces this shell call to run alone, no parallelism with other shells. Max 10 min, then killed." },
+                    "background":  { "type": "boolean", "description": "Fire-and-forget long-running tasks (dev servers, tests, data pipelines). Starts immediately, returns job_id; result auto-delivers when done. Do NOT use for commands whose output feeds the next tool call." }
                 },
                 "required": ["command"]
             }),
@@ -831,10 +832,14 @@ async fn builtin_invoke(
             let cwd = params.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
             // AI 显式标记长任务：跳过前台窗口直接转后台（对话继续，完成后自动唤回本会话 AI）
             let force_bg = params.get("background").and_then(|v| v.as_bool()).unwrap_or(false);
+            // AI 显式要等完再继续：强制同步路径（跳过前台窗口，直接 await 命令结束，加硬上限 10min）
+            let wait = params.get("wait").and_then(|v| v.as_bool()).unwrap_or(false);
+            // 互斥：wait 优先于 background（两个都传时，等完再继续的语义更强）
+            let (force_bg, wait) = if wait { (false, true) } else { (force_bg, false) };
             // 工作区沙箱：显式 cwd 校验逃逸；未传时 TUI 兜底为启动目录
             let cwd = crate::sandbox::resolve_cwd(ctx, cwd.as_deref())?;
             // 后台 shell：短命令秒回；长命令自动转后台（shell-job 事件 + 可停止 + 完成时顶层 worker 自动唤回会话 AI）
-            crate::shellbg::run(ctx, &command, cwd.as_deref(), session, force_bg).await
+            crate::shellbg::run(ctx, &command, cwd.as_deref(), session, force_bg, wait).await
         }
         // ── 2. 文档编辑（写 / 覆盖）──
         "write_file" => {

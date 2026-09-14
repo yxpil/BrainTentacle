@@ -16,6 +16,9 @@ use tokio::sync::Notify;
 
 /// 前台判定窗口：命令在窗口内结束走原有「快命令」路径；否则转后台。
 const FRONT_WINDOW_MS: u128 = 2000;
+/// wait=true 强制同步模式的硬上限（秒）：AI 显式要等完再继续，但如果命令跑超过这个值，
+/// 为了不让 agent 回合永久挂死，自动回退到后台模式并在 note 里告知 AI 转换发生了。
+const WAIT_TIMEOUT_SECS: u64 = 600;
 /// 后台命令硬上限（小时）：防止程序失控后作业永久挂起泄漏。正常作业由用户/结果终止。
 const BG_TIMEOUT_SECS: u64 = 6 * 3600;
 
@@ -165,12 +168,15 @@ fn emit(ctx: &Arc<crate::state::Ctx>, phase: &str, job: &ShellJob, extra: Option
 
 /// shell 工具入口：短命令照旧秒回；超过前台窗口的命令转后台（含登记 + 事件 + 自动唤回）。
 /// force_background=true（AI 显式标记长任务）时跳过前台窗口，spawn 后直接转后台。
+/// wait=true 时强制同步等完（跳过前台窗口，不转后台），供 AI 显式表达「命令产物要喂给下一步」。
+/// wait=true 与 force_background=true 互斥，wait 优先。
 pub async fn run(
     ctx: &Arc<crate::state::Ctx>,
     command: &str,
     cwd: Option<&str>,
     session: Option<&str>,
     force_background: bool,
+    wait: bool,
 ) -> Result<serde_json::Value, String> {
     // 重复命令拦截：同一会话同一命令正在后台跑时，不重复执行，提示等待或停止
     if let Some(jid) = find_running(session, command) {
@@ -192,6 +198,55 @@ pub async fn run(
     cmd.stderr(std::process::Stdio::piped());
     cmd.kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn command: {e}"))?;
+
+    // ── wait=true 强制同步路径 ──────────────────────────────────────
+    // AI 显式说「等完再继续」：跳过前台窗口，直接等 child.wait_with_output()，
+    // 但加 WAIT_TIMEOUT_SECS 硬上限防 AI 把 dev server / watch 这种长驻命令也标 wait。
+    // 超时后转后台并在 note 里明确告知 AI 它的 wait 被降级了。
+    if wait {
+        let timeout_sleep = tokio::time::sleep(std::time::Duration::from_secs(WAIT_TIMEOUT_SECS));
+        tokio::pin!(timeout_sleep);
+        let mut timed_out = false;
+        let out: std::process::Output = tokio::select! {
+            o = child.wait_with_output() => o.map_err(|e| format!("Failed to collect command output: {e}"))?,
+            _ = &mut timeout_sleep => {
+                timed_out = true;
+                tree_kill(&mut child);
+                // 杀掉后再等一次拿输出（管道还没关），但最多等 5s
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    child.wait_with_output(),
+                ).await.unwrap_or_else(|_| Ok(std::process::Output {
+                    status: std::process::ExitStatus::default(),
+                    stdout: vec![],
+                    stderr: vec![],
+                })).map_err(|e| format!("Failed to collect output after wait timeout: {e}"))?
+            }
+        };
+        let mut result = json!({
+            "code": out.status.code(),
+            "stdout": crate::registry::safe_trunc(&String::from_utf8_lossy(&out.stdout), 60000),
+            "stderr": crate::registry::safe_trunc(&String::from_utf8_lossy(&out.stderr), 60000),
+        });
+        if timed_out {
+            // wait 超时降级为后台：job 刚被 kill，AI 收到的是 killed 状态而不是 done；
+            // 把状态标注出来让 AI 知道这次 wait 被强制终止、不是正常完成。
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("status".into(), json!("wait_killed"));
+                obj.insert(
+                    "note".into(),
+                    json!(format!(
+                        "wait=true but command exceeded {}s and was killed. If this is a long-running task (dev server, watch loop, data pipeline), run again with `background: true` instead.",
+                        WAIT_TIMEOUT_SECS
+                    )),
+                );
+            }
+        }
+        if let (Some(obj), Some(w)) = (result.as_object_mut(), amp_warning) {
+            obj.insert("warning".into(), json!(w));
+        }
+        return Ok(result);
+    }
 
     // 前台判定：显式标记后台 → 跳过窗口直接转后台；否则窗口内轮询是否已退出
     let mut exited: Option<std::process::ExitStatus> = None;
