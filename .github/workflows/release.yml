@@ -208,28 +208,28 @@ jobs:
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           # Tauri NSIS 对 aarch64 目标的架构命名曾是 "arm64"，新版可能直接输出 "aarch64"。
           # latest.json / update.rs 回退统一用 *_aarch64-setup.exe（与 dmg/AppImage 一致）。
-          # 此处自动适配两种命名：已正确则跳过，旧名则重命名，都找不到则报错。
-          SETUP_FOUND=""
+          # 遍历两种可能的文件名，找到哪个用哪个，旧名则重命名为 aarch64。
+          SETUP_DEST="$NSIS_DIR/BIT_${VERSION}_aarch64-setup.exe"
+          SETUP_SRC=""
           for f in "$NSIS_DIR/BIT_${VERSION}_aarch64-setup.exe" \
                    "$NSIS_DIR/BIT_${VERSION}_arm64-setup.exe"; do
-            if [ -f "$f" ]; then SETUP_FOUND="$f"; break; fi
+            if [ -f "$f" ]; then SETUP_SRC="$f"; break; fi
           done
-          if [ -z "$SETUP_FOUND" ]; then
-            echo "ERROR: 找不到 NSIS setup.exe，$NSIS_DIR 目录内容："
-            ls -la "$NSIS_DIR" || true
+          if [ -z "$SETUP_SRC" ]; then
+            echo "ERROR: 找不到 NSIS setup.exe"
+            ls -la "$NSIS_DIR" || echo "(目录不存在)"
             exit 1
           fi
-          SETUP_NAME=$(basename "$SETUP_FOUND")
-          if echo "$SETUP_NAME" | grep -q "aarch64"; then
-            echo "Tauri 已输出 aarch64 命名，直接使用: $SETUP_NAME"
+          if [ "$SETUP_SRC" != "$SETUP_DEST" ]; then
+            echo "重命名 arm64 → aarch64: $(basename "$SETUP_SRC")"
+            mv "$SETUP_SRC" "$SETUP_DEST"
           else
-            NEW_NAME=$(echo "$SETUP_NAME" | sed 's/arm64/aarch64/g')
-            echo "重命名: $SETUP_NAME → $NEW_NAME"
-            mv "$SETUP_FOUND" "$NSIS_DIR/$NEW_NAME"
+            echo "Tauri 已输出 aarch64 命名，直接使用"
           fi
+          PORTABLE="BIT_${VERSION}_aarch64-portable.zip"
           gh release upload "$TAG" \
-            "$NSIS_DIR"/*-setup.exe \
-            "BIT_${VERSION}_aarch64-portable.zip" \
+            "$SETUP_DEST" \
+            "$PORTABLE" \
             --clobber --repo "$GITHUB_REPOSITORY"
 
   macos:
