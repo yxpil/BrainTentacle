@@ -2282,6 +2282,13 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
           </div>
         )}
       </div>
+      {shellLogJob && (
+        <ShellLogModal
+          job={shellLogJob}
+          onClose={() => setShellLogJob(null)}
+          onStop={() => shellJobs.stopJob(shellLogJob.job_id)}
+        />
+      )}
     </div>
   );
 }
@@ -2576,13 +2583,6 @@ function MessageBubble({ message, onPreview }) {
             />
           ))}
         </div>
-      )}
-      {shellLogJob && (
-        <ShellLogModal
-          job={shellLogJob}
-          onClose={() => setShellLogJob(null)}
-          onStop={() => shellJobs.stopJob(shellLogJob.job_id)}
-        />
       )}
     </div>
   );
