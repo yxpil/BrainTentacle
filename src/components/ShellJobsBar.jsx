@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { useLang } from "../i18n";
-import { IconStop, IconTerminal, IconX } from "./Icons";
+import { IconStop, IconTerminal } from "./Icons";
+import ShellLogModal from "./ShellLogModal.jsx";
 
 /**
  * 后台长命令状态条（挂在聊天页输入框上方，子代理状态条之下）。
