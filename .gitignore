@@ -15,6 +15,18 @@ release-notes.md
 tmp/
 __pycache__/
 
+# 一次性调试残留（截图/探针脚本/报错暂存），不入库
+bitwin*.png
+debug-*.md
+dist-probe/
+probe-mermaid.*
+probe-live*.js
+probe-*.mjs
+test-er-repro.mjs
+er-code.txt
+ermsg.txt
+rescued.txt
+
 # 本地打包产物（npm pack / 本地构建输出，不入库）
 packaging/npm/*.tgz
 *.dmg
