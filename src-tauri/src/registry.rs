@@ -909,8 +909,11 @@ async fn builtin_invoke(
                 let _ = std::fs::create_dir_all(parent);
             }
             let path_str = path.to_string_lossy();
-            std::fs::write(&path, content).map_err(|e| format!("Failed to write: {e}"))?;
-            Ok(serde_json::json!({ "path": path_str, "bytes": content.len() }))
+            // .bat/.cmd 自动转 GBK 落盘：cmd.exe 按系统 ANSI 代码页解析批处理，
+            // UTF-8 中文会乱码；含 GBK 外字符时回退 UTF-8 + @chcp 65001
+            let enc = crate::console_codec::encode_script_write(&path_str, content);
+            std::fs::write(&path, &enc).map_err(|e| format!("Failed to write: {e}"))?;
+            Ok(serde_json::json!({ "path": path_str, "bytes": enc.len() }))
         }
         // ── 2.2 read_file：分块读取 + 行号（模型可直接按行号 edit）──
         "read_file" => {
@@ -927,7 +930,8 @@ async fn builtin_invoke(
                     "`{path}` looks like a binary file (NUL byte found); use view_image for pictures or shell commands for other binary data"
                 ));
             }
-            let text = String::from_utf8_lossy(&raw);
+            // bat/cmd 可能是上次 write 写的 GBK：按扩展名解码，避免把乱码灌进上下文
+            let text = crate::console_codec::decode_script_read(path, &raw);
             let lines: Vec<&str> = text.lines().collect();
             let total = lines.len();
             let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
@@ -1210,7 +1214,9 @@ async fn builtin_invoke(
                 params.get("start_line").and_then(|v| v.as_u64()),
                 params.get("end_line").and_then(|v| v.as_u64()),
             ) {
-                let text = std::fs::read_to_string(path).map_err(|e| format!("Failed to read: {e}"))?;
+                let raw = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
+                // bat/cmd 可能是上次 write 写的 GBK：按扩展名解码后再按行处理
+                let text = crate::console_codec::decode_script_read(path, &raw);
                 let mut lines: Vec<String> = text.lines().map(String::from).collect();
                 let total = lines.len();
                 let (sl, el) = (sl as usize, el as usize);
@@ -1226,7 +1232,8 @@ async fn builtin_invoke(
                 if text.ends_with('\n') {
                     updated.push('\n');
                 }
-                std::fs::write(path, &updated).map_err(|e| format!("Failed to write back: {e}"))?;
+                let enc = crate::console_codec::encode_script_write(path, &updated);
+                std::fs::write(path, &enc).map_err(|e| format!("Failed to write back: {e}"))?;
                 let replaced = el - sl + 1;
                 let res = serde_json::json!({ "path": path, "mode": "line_range", "replaced_lines": replaced, "total_lines": lines.len() });
                 let warn = crate::syntax::check(ctx, path).await;
@@ -1238,7 +1245,9 @@ async fn builtin_invoke(
             if old.is_empty() {
                 return Err("old_string cannot be empty".into());
             }
-            let text = std::fs::read_to_string(path).map_err(|e| format!("Failed to read: {e}"))?;
+            let raw = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
+            // bat/cmd 可能是上次 write 写的 GBK：按扩展名解码，保证 old_string 能匹配
+            let text = crate::console_codec::decode_script_read(path, &raw);
             // 精确匹配失败时自动适配换行风格（文件 CRLF / 模型给 LF，或反过来）
             let mut count = text.matches(old).count();
             let mut old_eff = old.to_string();
