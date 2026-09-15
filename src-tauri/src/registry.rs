@@ -909,8 +909,8 @@ async fn builtin_invoke(
                 let _ = std::fs::create_dir_all(parent);
             }
             let path_str = path.to_string_lossy();
-            // .bat/.cmd 自动转 GBK 落盘：cmd.exe 按系统 ANSI 代码页解析批处理，
-            // UTF-8 中文会乱码；含 GBK 外字符时回退 UTF-8 + @chcp 65001
+            // Windows 脚本自动转码：.bat/.cmd 转 GBK（cmd.exe 按 ANSI 代码页解析）；
+            // .ps1/.psm1/.psd1 加 UTF-8 BOM（PS 5.1/7 双兼容）。其余原样 UTF-8
             let enc = crate::console_codec::encode_script_write(&path_str, content);
             std::fs::write(&path, &enc).map_err(|e| format!("Failed to write: {e}"))?;
             Ok(serde_json::json!({ "path": path_str, "bytes": enc.len() }))

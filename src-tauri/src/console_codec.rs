@@ -31,20 +31,37 @@ pub fn is_batch(path: &str) -> bool {
     lower.ends_with(".bat") || lower.ends_with(".cmd")
 }
 
-/// 写盘编码：.bat/.cmd 转为 GBK —— cmd.exe 按系统 ANSI 代码页（中文 Windows = GBK）
-/// 逐行解析批处理文件，UTF-8 中文会乱码甚至改变命令语义。
-/// 内容含 GBK 无法表示的字符（emoji 等）时回退为 UTF-8 并自动插入
-/// `@chcp 65001 >nul`（无 BOM，防首行 BOM 报错），让 cmd 切到 UTF-8 代码页解析。
-/// 其他扩展名一律原样 UTF-8。
+/// 是否为 PowerShell 脚本：PS 5.1 无 BOM 按 ANSI(GBK) 解析、PS 7 无 BOM 按 UTF-8
+/// 解析，两者都认 UTF-8 BOM —— BOM 是跨版本唯一可靠选择
+pub fn is_powershell(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".ps1") || lower.ends_with(".psm1") || lower.ends_with(".psd1")
+}
+
+/// 写盘编码：
+/// - .bat/.cmd 转 GBK —— cmd.exe 按系统 ANSI 代码页（中文 Windows = GBK）逐行解析
+///   批处理，UTF-8 中文会乱码甚至改变命令语义。内容含 GBK 无法表示的字符（emoji 等）
+///   时回退为 UTF-8 并自动插入 `@chcp 65001 >nul`（无 BOM，防首行 BOM 报错）。
+/// - .ps1/.psm1/.psd1 加 UTF-8 BOM —— PS 5.1（ANSI 回退）与 PS 7（UTF-8 默认）都认
+///   BOM，且能无损保留全部 Unicode。
+/// - 其他扩展名一律原样 UTF-8。
 pub fn encode_script_write(path: &str, content: &str) -> Vec<u8> {
-    if !is_batch(path) {
-        return content.as_bytes().to_vec();
+    if is_batch(path) {
+        let (bytes, _, had_errors) = encoding_rs::GBK.encode(content);
+        if !had_errors {
+            return bytes.into_owned();
+        }
+        return prepend_chcp(content).into_bytes();
     }
-    let (bytes, _, had_errors) = encoding_rs::GBK.encode(content);
-    if !had_errors {
-        return bytes.into_owned();
+    if is_powershell(path) {
+        // 已有 BOM 字符则去重后统一补一个 BOM
+        let body = content.strip_prefix('\u{feff}').unwrap_or(content);
+        let mut out = Vec::with_capacity(body.len() + 3);
+        out.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        out.extend_from_slice(body.as_bytes());
+        return out;
     }
-    prepend_chcp(content).into_bytes()
+    content.as_bytes().to_vec()
 }
 
 /// 在批处理内容里插入 chcp 65001：首行为 @echo off 时插在其后（保持回显抑制），
@@ -65,15 +82,17 @@ fn prepend_chcp(content: &str) -> String {
     }
 }
 
-/// 读盘解码：.bat/.cmd 用 decode_console（UTF-8 直通 / GBK 兜底），
-/// 保证 write 写成 GBK 的批处理再次被 read_file / edit 读回时不乱码；
-/// 其他文件保持 UTF-8 lossy 行为不变。
+/// 读盘解码：.bat/.cmd/.ps1/.psm1/.psd1 用 decode_console（UTF-8 直通 / GBK 兜底），
+/// 保证 write 写出的脚本再次被 read_file / edit 读回时不乱码；
+/// 其他文件保持 UTF-8 lossy 行为不变。读取结果统一剥掉 UTF-8 BOM 字符
+/// （write 给 ps1 加的 BOM、外部编辑器加的 BOM 都不污染首行匹配）。
 pub fn decode_script_read(path: &str, raw: &[u8]) -> String {
-    if is_batch(path) {
+    let text = if is_batch(path) || is_powershell(path) {
         decode_console(raw)
     } else {
         String::from_utf8_lossy(raw).into_owned()
-    }
+    };
+    text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text)
 }
 
 #[cfg(test)]
@@ -131,6 +150,25 @@ mod tests {
         // chcp 插在 @echo off 之后，emoji 保留（UTF-8 代码页解析）
         assert!(text.starts_with("@echo off\r\n@chcp 65001 >nul\r\n"));
         assert!(text.contains("🙂"));
+    }
+
+    #[test]
+    fn ps1_write_utf8_bom_roundtrip() {
+        let content = "Write-Host \"你好 🎉\"\r\n";
+        let bytes = encode_script_write("run.ps1", content);
+        assert!(bytes.starts_with(&[0xEF, 0xBB, 0xBF])); // UTF-8 BOM
+        // BOM 后是原样 UTF-8，Unicode 无损（不转 GBK，emoji 保留）
+        assert_eq!(&bytes[3..], content.as_bytes());
+        // 已含 BOM 字符的内容不重复加
+        let bommed = format!("\u{feff}{content}");
+        assert_eq!(encode_script_write("run.ps1", &bommed), bytes);
+        // 读回剥 BOM，内容一致
+        assert_eq!(decode_script_read("run.ps1", &bytes), content);
+        // .psm1 / .psd1 同样处理
+        assert!(encode_script_write("m.psm1", "x").starts_with(&[0xEF, 0xBB, 0xBF]));
+        assert!(encode_script_write("d.psd1", "x").starts_with(&[0xEF, 0xBB, 0xBF]));
+        // 非 PowerShell 文件不加 BOM
+        assert_eq!(encode_script_write("x.txt", content), content.as_bytes());
     }
 
     #[test]
