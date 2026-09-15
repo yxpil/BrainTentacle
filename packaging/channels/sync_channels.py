@@ -23,7 +23,7 @@ SCOOP = "yxpil/scoop-bit"
 APT = "yxpil/apt-repo"
 PACMAN = "yxpil/pacman-repo"
 DNF = "yxpil/dnf-repo"
-DL = "https://github.com/yxpil/bit/releases/download/{v}/{f}"
+DL = "https://github.com/yxpil/BreanInTentacle/releases/download/{v}/{f}"
 # brew/scoop 渠道必需的资产；apt 各架构缺失时跳过不阻塞
 BREW_ASSETS = ["BIT_{v}_aarch64.dmg", "BIT_{v}_x64.dmg"]
 SCOOP_ASSETS = ["BIT_{v}_x64-portable.zip"]
@@ -112,10 +112,10 @@ CASK_TPL = '''cask "bit" do
   sha256 arm:   "{arm}",
          intel: "{intel}"
 
-  url "https://github.com/yxpil/bit/releases/download/v#{{version}}/BIT_#{{version}}_#{{arch}}.dmg"
+  url "https://github.com/yxpil/BreanInTentacle/releases/download/v#{{version}}/BIT_#{{version}}_#{{arch}}.dmg"
   name "BIT"
   desc "Local-first AI agent hub with MCP, tool registry and skills"
-  homepage "https://github.com/yxpil/bit"
+  homepage "https://github.com/yxpil/BreanInTentacle"
 
   livecheck do
     url :homepage
@@ -141,11 +141,11 @@ def sync_brew(version, token, tmp, dry):
 SCOOP_TPL = '''{{
     "version": "{version}",
     "description": "BIT - 本地优先的 AI Agent 工具集（MCP / 工具注册 / 技能）",
-    "homepage": "https://github.com/yxpil/bit",
+    "homepage": "https://github.com/yxpil/BreanInTentacle",
     "license": "Apache-2.0",
     "architecture": {{
         "64bit": {{
-            "url": "https://github.com/yxpil/bit/releases/download/v{version}/BIT_{version}_x64-portable.zip",
+            "url": "https://github.com/yxpil/BreanInTentacle/releases/download/v{version}/BIT_{version}_x64-portable.zip",
             "hash": "{hash}"
         }}
     }},
@@ -160,7 +160,7 @@ SCOOP_TPL = '''{{
     "autoupdate": {{
         "architecture": {{
             "64bit": {{
-                "url": "https://github.com/yxpil/bit/releases/download/v$version/BIT_$version_x64-portable.zip"
+                "url": "https://github.com/yxpil/BreanInTentacle/releases/download/v$version/BIT_$version_x64-portable.zip"
             }}
         }}
     }}
@@ -371,7 +371,7 @@ def main():
     if not a.token:
         sys.exit("需要 --token 或 GITHUB_TOKEN / gh auth token")
     # 校验 release 存在且非预发布
-    rel = gh("GET", f"/repos/yxpil/bit/releases/tags/{a.version}", a.token)
+    rel = gh("GET", f"/repos/yxpil/BreanInTentacle/releases/tags/{a.version}", a.token)
     if rel.get("prerelease"):
         sys.exit(f"{a.version} 是预发布版本，跳过渠道同步")
     tmp = Path(tempfile.mkdtemp(prefix="bit-channels-"))

@@ -86,6 +86,6 @@ jobs:
           $v = "${{ needs.channels.outputs.version }}".TrimStart("v")
           irm https://aka.ms/wingetcreate/latest -OutFile wg.exe
           ./wg.exe update yxpil.BIT --version $v `
-            --urls "https://github.com/yxpil/bit/releases/download/v$v/BIT_${v}_x64-setup.exe" `
-                   "https://github.com/yxpil/bit/releases/download/v$v/BIT_${v}_aarch64-setup.exe" `
+            --urls "https://github.com/yxpil/BreanInTentacle/releases/download/v$v/BIT_${v}_x64-setup.exe" `
+                   "https://github.com/yxpil/BreanInTentacle/releases/download/v$v/BIT_${v}_aarch64-setup.exe" `
             --submit --token $env:WINGET_TOKEN

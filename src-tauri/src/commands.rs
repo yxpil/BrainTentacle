@@ -1314,7 +1314,7 @@ fn notify_done(app: &tauri::AppHandle, ctx: &Arc<Ctx>, session_id: &str, message
         .iter()
         .find(|s| s.id == session_id)
         .map(|s| s.title.clone())
-        .unwrap_or_else(|| "BIT".to_string());
+        .unwrap_or_else(|| "触手怪".to_string());
     let reply = messages
         .iter()
         .rev()
@@ -1325,7 +1325,7 @@ fn notify_done(app: &tauri::AppHandle, ctx: &Arc<Ctx>, session_id: &str, message
     let _ = app
         .notification()
         .builder()
-        .title(format!("BIT · {title}"))
+        .title(format!("触手怪 · {title}"))
         .body(if reply.is_empty() { "任务执行完成".to_string() } else { reply })
         .show();
 }

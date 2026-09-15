@@ -302,7 +302,7 @@ fn main() {
                     "main",
                     tauri::WebviewUrl::default(),
                 )
-                .title("BIT")
+                .title("触手怪")
                 .inner_size(1120.0, 740.0)
                 .min_inner_size(920.0, 620.0)
                 .center()

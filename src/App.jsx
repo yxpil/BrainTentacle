@@ -378,9 +378,9 @@ export default function App() {
             className="card max-h-[calc(100vh-32px)] w-[380px] max-w-[calc(100vw-24px)] overflow-y-auto text-center"
             onClick={(e) => e.stopPropagation()}
           >
-            <img src={logoUrl} alt="BIT" className="mx-auto mb-2 h-14 w-14 rounded-full" />
+            <img src={logoUrl} alt="触手怪" className="mx-auto mb-2 h-14 w-14 rounded-full" />
             <div className="flex items-center justify-center gap-2">
-              <h2 className="text-lg font-bold leading-tight">BIT</h2>
+              <h2 className="text-lg font-bold leading-tight">触手怪</h2>
               {appVersion && (
                 <span className="chip px-2 py-0 font-mono text-[10px]">v{appVersion}</span>
               )}
@@ -546,7 +546,7 @@ export default function App() {
                 {t("app.qqGroup")}
               </button>
               <button
-                onClick={() => invoke("open_external", { url: "https://github.com/yxpil/bit" }).catch(() => {})}
+                onClick={() => invoke("open_external", { url: "https://github.com/yxpil/BreanInTentacle" }).catch(() => {})}
                 className="pill pill-outline pill-hover px-3 py-1 text-xs"
               >
                 GitHub

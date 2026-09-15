@@ -14,7 +14,7 @@ pub fn create(app: &tauri::AppHandle, ctx: &Arc<Ctx>) -> tauri::Result<()> {
 
     let tray = TrayIconBuilder::with_id("bit-tray")
         .icon(app.default_window_icon().unwrap().clone())
-        .tooltip("BIT - Agent Tool Hub")
+        .tooltip("触手怪 - Agent Tool Hub")
         .menu(&menu)
         // 左键点击切换窗口显示
         .on_tray_icon_event(|tray, event| {
@@ -106,9 +106,9 @@ pub fn refresh(app: &tauri::AppHandle) {
 /// 托盘 tooltip：一句话概括运行状态
 fn tooltip_text(ctx: &Arc<Ctx>) -> String {
     if crate::worker::busy(ctx) {
-        "BIT · 工作中…".to_string()
+        "触手怪 · 工作中…".to_string()
     } else {
-        "BIT · 空闲".to_string()
+        "触手怪 · 空闲".to_string()
     }
 }
 
