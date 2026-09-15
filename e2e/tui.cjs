@@ -109,6 +109,29 @@ function launchTui(dir, extraEnv = {}, opts = {}) {
   return { proc, get out() { return out; }, send, close, waitExit, ready };
 }
 
+// 读取会话存储：SQLite 迁移后数据唯一存于 bit.db（sessions 表），旧 sessions.json 仅作兼容回退。
+// 需要 node --experimental-sqlite（Node 22.5+）；不可用时仅回退旧文件，找不到则返回 null
+function readSessions(dir) {
+  const dbPath = path.join(dir, "bit.db");
+  if (fs.existsSync(dbPath)) {
+    try {
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        return db.prepare("SELECT data FROM sessions ORDER BY ord").all().map((r) => JSON.parse(r.data));
+      } finally { db.close(); }
+    } catch (e) {
+      console.error(`[readSessions] bit.db 读取失败（${e.message}），回退 sessions.json`);
+    }
+  }
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, "sessions.json"), "utf8"));
+    return j.sessions || j;
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   // 停掉同路径旧实例（单实例保护会让新实例秒退）
   const pids = findConflicts();
@@ -242,7 +265,7 @@ async function main() {
     // 回复正常 + 200KB 消息完整落库（TUI 不回显输入，从会话存储验证）
     let longOk = false;
     try {
-      const sessions = JSON.parse(fs.readFileSync(path.join(DIR, "sessions.json"), "utf8"));
+      const sessions = readSessions(DIR) || [];
       const msgs = (sessions.sessions || sessions).flatMap((s) => s.messages || []);
       longOk = msgs.some((m) => typeof m.content === "string" && /^LONG-A+-END$/.test(m.content) && m.content.length === 5 + 200 * 1024 + 4);
     } catch {}
@@ -290,9 +313,9 @@ async function main() {
     tui.close(); // 不发 /quit，直接 EOF
     const code = await tui.waitExit(120000);
     let ok = code === 0;
-    // 30 条 /new 全部生效（sessions.json 落盘）
+    // 30 条 /new 全部生效（会话存储落盘：bit.db 会话表）
     try {
-      const sessions = JSON.parse(fs.readFileSync(path.join(DIR, "sessions.json"), "utf8"));
+      const sessions = readSessions(DIR) || [];
       const storms = (sessions.sessions || sessions).filter?.((s) => (s.title || "").startsWith("storm-")) || [];
       ok = ok && storms.length >= 30;
     } catch (e) { ok = false; }
@@ -392,13 +415,20 @@ async function main() {
 
   // ── T7 桌面端 + TUI 同数据目录并行：互不干扰 ──
   {
-    // 桌面端配置：开启远程访问（8611），TUI 启动不应抢掉该端口也不应被单实例顶掉
+    // 全新目录：SQLite 迁移后 db 内 config 文档优先于 config.json，
+    // DIR 的 bit.db 已被前面的用例初始化（remote 关闭），写 config.json 不会再生效。
+    // 首启导入（>3 键的 config.json 会进库）才能让远程配置如约生效
+    const FDIR = fs.mkdtempSync(path.join(os.tmpdir(), "bit-tui-t7-"));
     fs.writeFileSync(
-      path.join(DIR, "config.json"),
-      JSON.stringify({ remote_enabled: true, host: "127.0.0.1", port: PORT, client_key: "bit_e2e_tui_key", password_enabled: false, revision: 1 })
+      path.join(FDIR, "config.json"),
+      JSON.stringify({ compat_mode: true, remote_enabled: true, host: "127.0.0.1", port: PORT, client_key: "bit_e2e_tui_key", password_enabled: false, revision: 1 })
+    );
+    fs.writeFileSync(
+      path.join(FDIR, "ai_config.json"),
+      JSON.stringify({ providers: [{ id: "mock", name: "mock", protocol: "openai", base_url: "http://127.0.0.1:9901/v1", api_key: "e2e", model: "mock", active: true }] })
     );
     const desktop = spawn(BIN, [], {
-      env: { ...process.env, BIT_DATA_DIR: DIR, BIT_HEADLESS: "1" },
+      env: { ...process.env, BIT_DATA_DIR: FDIR, BIT_HEADLESS: "1" },
       stdio: ["ignore", "ignore", "pipe"],
     });
     let deskErr = "";
@@ -414,7 +444,7 @@ async function main() {
 
     if (up) {
       // TUI 与桌面端同时运行：对话仍可用（共用数据目录无冲突）
-      const tui = launchTui(DIR);
+      const tui = launchTui(FDIR);
       await tui.ready();
       tui.send("TUI-PARALLEL-CHECK");
       // 轮询等待回复（最多 30s）

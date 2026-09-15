@@ -47,8 +47,8 @@ jobs:
 
       - name: Run TUI E2E (unix)
         if: runner.os != 'Linux'
-        run: node e2e/tui.cjs "src-tauri/target/release/bit${{ runner.os == 'Windows' && '.exe' || '' }}"
+        run: node --experimental-sqlite e2e/tui.cjs "src-tauri/target/release/bit${{ runner.os == 'Windows' && '.exe' || '' }}"
 
       - name: Run TUI E2E (linux, xvfb for desktop-parallel case)
         if: runner.os == 'Linux'
-        run: xvfb-run -a node e2e/tui.cjs "src-tauri/target/release/bit"
+        run: xvfb-run -a node --experimental-sqlite e2e/tui.cjs "src-tauri/target/release/bit"
