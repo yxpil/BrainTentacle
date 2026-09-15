@@ -1,0 +1,204 @@
+name: release-retry
+
+# 发布补跑：只重建失败的 job，不重跑已成功部分。
+# napi 原生产物复用原 run 的 artifact（download-artifact@v4 跨 run 下载），
+# gui-linux / musl / exotic / finalize 按 input 开关选择性重建。
+# 注意：仅适用于"失败原因不在工作流定义"或工作流定义已在 main 修复后的场景。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要补跑的 tag（如 v0.6.24）"
+        required: true
+      napi_run_id:
+        description: "提供 native-* artifact 的原 release run id（复用 napi 构建产物）"
+        required: true
+      rebuild_linux_gui:
+        description: "重建 linux GUI（AppImage/deb/rpm + 冒烟）"
+        type: boolean
+        required: false
+        default: true
+      rebuild_musl:
+        description: "重建 musl bit-cli"
+        type: boolean
+        required: false
+        default: false
+      rebuild_exotic:
+        description: "重建 exotic bit-cli（riscv64/loongarch64/ppc64le）"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  TAG: ${{ inputs.tag }}
+
+jobs:
+  gui-linux:
+    if: inputs.rebuild_linux_gui
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64,   os: ubuntu-24.04,     napi: linux-x64,   arch: amd64 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, napi: linux-arm64, arch: aarch64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: 安装冒烟依赖（Electron 运行库 + xvfb）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0t64 libnss3 libasound2t64 libgbm1 \
+            libxss1 libxkbcommon0 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 \
+            libpango-1.0-0 libcairo2 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64
+      - name: 前端构建
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.napi }}
+          path: packaging/native
+          run-id: ${{ inputs.napi_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 恢复 sidecar 执行位
+        run: chmod +x packaging/native/bit-cli
+      - name: electron-builder（AppImage + deb + rpm）
+        run: |
+          VERSION="${TAG#v}"
+          npx electron-builder --linux AppImage deb rpm \
+            "-c.artifactName=BIT_${VERSION}_${{ matrix.arch }}.\${ext}" --publish never
+      - name: 冒烟测试
+        run: |
+          ls -la release/linux-unpacked | head -20
+          BIN=$(find release/linux-unpacked -maxdepth 1 -type f -executable \
+            ! -name 'chrome-sandbox' ! -name 'chrome_crashpad_handler' ! -name '*.so*' | head -1)
+          echo "smoke target: $BIN"
+          xvfb-run -a node e2e/smoke-ui.cjs "$BIN" 120
+      - name: 上传到 Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" release/*.AppImage release/*.deb release/*.rpm --clobber --repo "$GITHUB_REPOSITORY"
+
+  linux-musl:
+    if: inputs.rebuild_musl
+    continue-on-error: true
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: 容器内构建 bit-cli（alpine ${{ matrix.arch }}）
+        run: |
+          VERSION="${{ inputs.tag }}"
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -v "$PWD":/repo -w /repo \
+            alpine:edge \
+            sh -c "apk add --no-cache bash && bash packaging/musl/build.sh ${{ matrix.arch }} \"${VERSION#v}\""
+      - name: 上传到 Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" packaging/musl/out/bit-cli_*-musl.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
+
+  linux-exotic:
+    if: inputs.rebuild_exotic
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: riscv64
+            image: debian:trixie
+            platform: linux/riscv64
+          # loong64 社区镜像的 manifest 架构名是非标准的 "loong64"，按 digest 固定拉取
+          - arch: loongarch64
+            image: ghcr.io/loong64/debian@sha256:df06b06128d3b935288d4f601bab42ba68fd61730fd0957b1ef197f1df79346c
+            platform: ""
+          - arch: ppc64le
+            image: debian:trixie
+            platform: linux/ppc64le
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: 安装 QEMU 模拟器
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-loongarch64"
+          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-riscv64"
+          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-ppc64le"
+      - name: 容器内构建 bit-cli（${{ matrix.arch }}）
+        run: |
+          VERSION="${{ inputs.tag }}"
+          PLATFORM="${{ matrix.platform }}"
+          docker run --rm ${PLATFORM:+--platform $PLATFORM} \
+            -v "$PWD":/repo -w /repo \
+            ${{ matrix.image }} \
+            bash packaging/exotic/build.sh ${{ matrix.arch }} "${VERSION#v}"
+      - name: 上传到 Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" \
+            packaging/exotic/out/bit-cli_*.deb \
+            packaging/exotic/out/bit-cli_*.tar.gz \
+            --clobber --repo "$GITHUB_REPOSITORY"
+      - name: 刷新 Pages 镜像（exotic 资产晚于 finalize 上传）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run mirror-pages.yml -f tag="$TAG" --repo "$GITHUB_REPOSITORY"
+
+  # 收尾：GUI 资产齐了就生成 latest.json（键位只覆盖 GUI，exotic/musl 不阻塞）
+  finalize:
+    needs: [gui-linux, linux-musl, linux-exotic]
+    if: >-
+      always() && !cancelled() &&
+      (needs.gui-linux.result == 'success' || needs.gui-linux.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 生成 latest.json + 触发镜像/渠道
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          NOTES=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body | head -c 300)
+          BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          jq -n --arg v "$VERSION" --arg n "$NOTES" --arg u "https://yxpil.github.io/BrainTentacle/$VERSION/" \
+            --arg w64 "$BASE/BIT_${VERSION}_x64-setup.exe" \
+            --arg war "$BASE/BIT_${VERSION}_aarch64-setup.exe" \
+            --arg maa "$BASE/BIT_${VERSION}_aarch64-app.zip" \
+            --arg max "$BASE/BIT_${VERSION}_x64-app.zip" \
+            --arg lx64 "$BASE/BIT_${VERSION}_amd64.AppImage" \
+            --arg larm "$BASE/BIT_${VERSION}_aarch64.AppImage" \
+            '{version: $v, notes: $n, url: $u, assets: {
+              "windows-x64": $w64, "windows-arm64": $war,
+              "macos-arm64": $maa, "macos-x64": $max,
+              "linux-x64": $lx64, "linux-arm64": $larm
+            }}' > latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+          gh workflow run mirror-pages.yml -f tag="$TAG" --repo "$GITHUB_REPOSITORY"
+          gh workflow run sync-channels.yml -f tag="$TAG" --repo "$GITHUB_REPOSITORY"
+          echo "latest.json 已上传，Pages 镜像与渠道同步已触发（tag=$TAG）"
