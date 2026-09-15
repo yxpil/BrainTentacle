@@ -1,10 +1,11 @@
 name: e2e
 
 # TUI 终端模式 E2E：三平台矩阵验证（ubuntu 需要 xvfb 供桌面端并行用例）
+# M4 起 GUI 归 Electron，TUI/E2E 目标二进制为 workspace 的 bit-cli（crates/bit-core）
 on:
   push:
     branches: [main]
-    paths: ["src-tauri/**", "e2e/**", ".github/workflows/e2e.yml"]
+    paths: ["crates/**", "e2e/**", ".github/workflows/e2e.yml"]
   workflow_dispatch:
 
 jobs:
@@ -22,15 +23,14 @@ jobs:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux deps (webkit/gtk + xvfb)
+      - name: Install Linux deps (libxdo/openssl + xvfb)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev xvfb
+          sudo apt-get install -y pkg-config libssl-dev libxdo-dev xvfb
 
-      - name: Build BIT
-        working-directory: src-tauri
-        run: cargo build --release
+      - name: Build bit-cli
+        run: cargo build --release --locked -p bit-core --bin bit-cli
 
       - name: Start mock-ai (unix)
         if: runner.os != 'Windows'
@@ -47,8 +47,8 @@ jobs:
 
       - name: Run TUI E2E (unix)
         if: runner.os != 'Linux'
-        run: node --experimental-sqlite e2e/tui.cjs "src-tauri/target/release/bit${{ runner.os == 'Windows' && '.exe' || '' }}"
+        run: node --experimental-sqlite e2e/tui.cjs "target/release/bit-cli${{ runner.os == 'Windows' && '.exe' || '' }}"
 
       - name: Run TUI E2E (linux, xvfb for desktop-parallel case)
         if: runner.os == 'Linux'
-        run: xvfb-run -a node --experimental-sqlite e2e/tui.cjs "src-tauri/target/release/bit"
+        run: xvfb-run -a node --experimental-sqlite e2e/tui.cjs "target/release/bit-cli"

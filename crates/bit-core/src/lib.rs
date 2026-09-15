@@ -11,6 +11,7 @@ pub mod ai;
 pub mod api;
 pub mod audit;
 pub mod autopilot;
+pub mod commands_api;
 pub mod config;
 pub mod console_codec;
 pub mod crash;

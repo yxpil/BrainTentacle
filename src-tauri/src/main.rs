@@ -136,7 +136,12 @@ fn main() {
     // 守护进程模式：本进程由主进程拉起用于看门狗守护，不进入 GUI / TUI（握手文件与日志路径由参数传入）
     let argv: Vec<String> = std::env::args().collect();
     if argv.len() >= 4 && argv[1] == guardian::GUARDIAN_FLAG {
-        guardian::run_guardian(argv[2].clone().into(), argv[3].clone().into());
+        guardian::run_guardian(
+            argv[2].clone().into(),
+            argv[3].clone().into(),
+            argv.get(4).map(std::path::PathBuf::from),
+            argv.iter().skip(5).cloned().collect(),
+        );
         return;
     }
 
@@ -211,6 +216,7 @@ fn main() {
                     app_version: app.package_info().version.to_string(),
                     worker_exe: None,
                     app_exe: None,
+                    app_args: Vec::new(),
                 });
                 crash::install(&ctx.data_dir);
                 trace::init(&ctx.data_dir);
@@ -253,6 +259,7 @@ fn main() {
                 app_version: app.package_info().version.to_string(),
                 worker_exe: None,
                 app_exe: None,
+                app_args: Vec::new(),
             });
             // 全局 panic 钩子：崩溃信息（含回溯）追加到数据目录 crash.log，诊断报告展示
             crash::install(&ctx.data_dir);

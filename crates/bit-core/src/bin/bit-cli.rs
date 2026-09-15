@@ -10,9 +10,14 @@ use bit_core::{crash, guardian, state, task, trace, tui, worker};
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
 
-    // ── 看门狗守护进程：主进程拉起，握手文件与日志路径由参数传入 ──
+    // ── 看门狗守护进程：主进程拉起，握手文件/日志路径/复活目标/复活参数由参数传入 ──
     if argv.len() >= 4 && argv[1] == guardian::GUARDIAN_FLAG {
-        guardian::run_guardian(argv[2].clone().into(), argv[3].clone().into());
+        guardian::run_guardian(
+            argv[2].clone().into(),
+            argv[3].clone().into(),
+            argv.get(4).map(std::path::PathBuf::from),
+            argv.iter().skip(5).cloned().collect(),
+        );
         return;
     }
 
@@ -38,6 +43,7 @@ fn main() {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             worker_exe: None,
             app_exe: None,
+            app_args: Vec::new(),
         });
         crash::install(&ctx.data_dir);
         trace::init(&ctx.data_dir);
@@ -61,6 +67,7 @@ fn main() {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         worker_exe: None,
         app_exe: None,
+        app_args: Vec::new(),
     });
     crash::install(&ctx.data_dir);
     bit_core::audit::record(&ctx, "local-cli", "app.start", "tui", serde_json::json!({}), true);

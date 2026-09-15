@@ -1,13 +1,16 @@
 name: release
 
+# Electron 发布链（M4）：
+#   compile-check（闸门）→ napi 矩阵（六目标 bit.node + bit-cli）→ gui 矩阵（electron-builder 五平台 + 冒烟）
+#   → musl/exotic（只编 bit-cli，无 GUI）→ finalize（latest.json 键位不变）
 # 手动触发（可指定已有 tag 补发资产）或推送 v* tag 自动触发
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要构建并上传资产的 tag（如 v0.4.0）"
+        description: "要构建并上传资产的 tag（如 v0.6.24）"
         required: true
-        default: "v0.4.0"
+        default: "v0.6.24"
       include_macos:
         description: "是否同时构建 macOS 包"
         type: boolean
@@ -40,14 +43,13 @@ jobs:
     steps:
       - id: tag
         run: echo "tag=${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
-      - run: gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG >/dev/null 2>&1 || gh release create "$TAG" --title "触手怪 $TAG（煎饼 Gen1）" --generate-notes --repo "$GITHUB_REPOSITORY"
+      - run: gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG >/dev/null 2>&1 || gh release create "$TAG" --title "触手怪 $TAG（煎饼 Gen1 · Electron）" --generate-notes --repo "$GITHUB_REPOSITORY"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
 
-  # 廉价编译闸门：只做前端构建 + cargo check（不链接/不打包），
-  # 专门拦截 E0716/E0277 这类类型错误。所有平台 job 依赖它——
-  # 代码有错只烧这一个 job，其余平台根本不启动，避免赌错白烧算力。
+  # 廉价编译闸门：只做前端构建 + workspace cargo check（不链接/不打包），
+  # 专门拦截类型错误。所有平台 job 依赖它——代码有错只烧这一个 job。
   compile-check:
     needs: ensure-release
     runs-on: ubuntu-24.04
@@ -60,317 +62,78 @@ jobs:
           node-version: 20
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
-      - name: 安装 Linux 系统依赖
+      - name: 安装 Linux 系统依赖（src-tauri 过渡期壳仍在 workspace，需要 webkit 头）
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - name: 前端构建 + 静态检查
         run: |
           npm ci
           npm run lint
           npm run build
-      - name: Rust 类型检查（闸门，遇错即停）
+      - name: Rust 类型检查（workspace 闸门，遇错即停）
         run: cargo check --locked
-        working-directory: src-tauri
 
-  linux:
+  # napi 矩阵：六目标原生构建（bit.node 进 Electron 主进程 + bit-cli sidecar）
+  napi:
     needs: [ensure-release, compile-check]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # 手动补发时检出 main（包含最新兼容性修复），tag 推送时检出对应 tag
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-      - name: 安装 Linux 系统依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
-      - name: 构建
-        run: |
-          npm ci
-          # 前端静态检查（no-undef 闸门：漏声明变量渲染期 ReferenceError → 黑屏，构建前拦截）
-          npm run lint
-          npx tauri build
-      - name: UI 冒烟测试（无头启动验证前端渲染树完整挂载，防黑屏包上传）
-        run: xvfb-run -a node e2e/smoke-ui.cjs src-tauri/target/release/bit
-      - name: 打包通用二进制 tar.gz（Gentoo/Void 等无 deb/rpm 系发行版）
-        run: |
-          VERSION="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          VERSION="${VERSION#v}"
-          tar -czf "bit_${VERSION}_x86_64.tar.gz" -C src-tauri/target/release bit
-          # 运行时依赖（webkit2gtk-4.1 等）由发行版提供
-      - name: 上传到 Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          gh release upload "$TAG" \
-            src-tauri/target/release/bundle/deb/*.deb \
-            src-tauri/target/release/bundle/rpm/*.rpm \
-            src-tauri/target/release/bundle/appimage/*.AppImage \
-            bit_*_x86_64.tar.gz \
-            --clobber --repo "$GITHUB_REPOSITORY"
-
-  linux-arm:
-    needs: [ensure-release, compile-check]
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # 手动补发时检出 main（包含最新兼容性修复），tag 推送时检出对应 tag
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - uses: dtolnay/rust-toolchain@stable
-      - name: 安装 Linux 系统依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
-      - name: 构建
-        run: |
-          npm ci
-          # 前端静态检查（no-undef 闸门）
-          npm run lint
-          npx tauri build
-      - name: UI 冒烟测试（防黑屏包上传）
-        run: xvfb-run -a node e2e/smoke-ui.cjs src-tauri/target/release/bit
-      - name: 打包通用二进制 tar.gz（Gentoo/Void 等无 deb/rpm 系发行版）
-        run: |
-          VERSION="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          VERSION="${VERSION#v}"
-          tar -czf "bit_${VERSION}_aarch64.tar.gz" -C src-tauri/target/release bit
-          # 运行时依赖（webkit2gtk-4.1 等）由发行版提供
-      - name: 上传到 Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          gh release upload "$TAG" \
-            src-tauri/target/release/bundle/deb/*.deb \
-            src-tauri/target/release/bundle/rpm/*.rpm \
-            src-tauri/target/release/bundle/appimage/*.AppImage \
-            bit_*_aarch64.tar.gz \
-            --clobber --repo "$GITHUB_REPOSITORY"
-
-  windows:
-    # Windows x64：MSI + NSIS 双格式（WiX 对 x64 支持完善）
-    needs: [ensure-release, compile-check]
-    if: github.event_name == 'push' || inputs.include_windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-      - name: 构建
-        run: |
-          npm ci
-          npx tauri build
-      - name: 打包便携版（免安装单文件 exe）
-        shell: pwsh
-        env:
-          TAG: ${{ needs.ensure-release.outputs.tag }}
-        run: |
-          # Tauri v2 在 MSVC 目标下静态链接 WebView2LoaderStatic（见 webview2-com-sys/src/lib.rs），
-          # BIT.exe 自包含，无需携带 WebView2Loader.dll；运行时仅依赖系统 WebView2 Runtime
-          Test-Path src-tauri/target/release/BIT.exe
-          Compress-Archive -Path src-tauri/target/release/BIT.exe -DestinationPath "BIT_$($env:TAG.TrimStart('v'))_x64-portable.zip" -Force
-      - name: 上传到 Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          TAG="${{ needs.ensure-release.outputs.tag }}"
-          gh release upload "$TAG" \
-            src-tauri/target/release/bundle/msi/*.msi \
-            src-tauri/target/release/bundle/nsis/*-setup.exe \
-            BIT_*_x64-portable.zip \
-            --clobber --repo "$GITHUB_REPOSITORY"
-
-  windows-arm:
-    needs: [ensure-release, compile-check]
-    # Windows ARM64（Surface / 骁龙 X 笔记本）：MSI 的 WiX 工具链对 ARM64 支持差，用 NSIS
-    if: github.event_name == 'push' || inputs.include_windows
-    runs-on: windows-11-arm
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-pc-windows-msvc
-      - name: 构建
-        run: |
-          npm ci
-          # 前端静态检查（no-undef 闸门）
-          npm run lint
-          npx tauri build --target aarch64-pc-windows-msvc --bundles nsis
-      - name: UI 冒烟测试（防黑屏包上传）
-        shell: pwsh
-        run: node e2e/smoke-ui.cjs src-tauri/target/aarch64-pc-windows-msvc/release/BIT.exe
-      - name: 打包便携版 + 上传到 Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.ensure-release.outputs.tag }}
-        shell: pwsh
-        run: |
-          $TAG = "$env:TAG".Trim()
-          $VERSION = "$TAG".TrimStart('v')
-          Write-Host "TAG=$TAG VERSION=$VERSION"
-          $ROOT = (Get-Location).Path
-          $EXE = "src-tauri/target/aarch64-pc-windows-msvc/release/BIT.exe"
-          $NSIS_DIR = "src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis"
-          $setupPattern = "BIT_${VERSION}_*setup.exe"
-          $setupDestName = "BIT_${VERSION}_aarch64-setup.exe"
-          $portableName = "BIT_${VERSION}_aarch64-portable.zip"
-
-          # 1) 列出工作目录文件，确认 exe 是否存在
-          Write-Host "cwd=$ROOT"
-          if (-not (Test-Path $EXE)) { Write-Host "ERROR: 找不到 BIT.exe ($EXE)"; exit 1 }
-          Write-Host "BIT.exe 存在"
-
-          # 2) 打包便携版（和 exe 同目录压缩成 portable zip）
-          Write-Host "正在打包便携版 → $portableName"
-          Compress-Archive -Path $EXE -DestinationPath $portableName -Force
-          if (-not (Test-Path $portableName)) { Write-Host "ERROR: portable zip 没生成"; exit 1 }
-          Write-Host "portable zip 生成成功: $portableName"
-
-          # 3) 找到 NSIS setup.exe（arm64 或 aarch64 命名都兼容）
-          Write-Host "NSIS_DIR=$NSIS_DIR"
-          Get-ChildItem $NSIS_DIR | ForEach-Object { Write-Host "  nsis/ $($_.Name)" }
-          $found = Get-ChildItem $NSIS_DIR -Filter $setupPattern | Select-Object -First 1
-          if (-not $found) { Write-Host "ERROR: NSIS_DIR 中没有匹配 $setupPattern 的文件"; exit 1 }
-          Write-Host "找到 setup: $($found.Name)"
-          $setupPath = $found.FullName
-          if ($found.Name -notmatch "aarch64") {
-            Write-Host "重命名 arm64 → aarch64: $($found.Name) → $setupDestName"
-            Move-Item -Force $setupPath (Join-Path $NSIS_DIR $setupDestName)
-            $setupPath = (Join-Path $NSIS_DIR $setupDestName)
-          }
-          Write-Host "最终 setup 路径: $setupPath"
-
-          # 4) 验证两个待上传文件都存在
-          Write-Host "--- 上传前最终确认 ---"
-          Write-Host "setup exists? $(Test-Path $setupPath)  size=$([math]::Round((Get-Item $setupPath).Length/1MB,1))MB"
-          Write-Host "portable exists? $(Test-Path $portableName) size=$([math]::Round((Get-Item $portableName).Length/1MB,1))MB"
-
-          # 5) 上传（显式 --repo，确保 gh CLI 有仓库上下文）
-          $repo = "$env:GITHUB_REPOSITORY"
-          Write-Host "gh release upload $TAG $setupPath $portableName --clobber --repo $repo"
-          gh release upload "$TAG" "$setupPath" "$portableName" --clobber --repo "$repo"
-          Write-Host "gh exit code: $LASTEXITCODE"
-          if ($LASTEXITCODE -ne 0) { Write-Host "gh 上传失败"; exit $LASTEXITCODE }
-          Write-Host "=== windows-arm 上传成功 ==="
-
-  macos:
-    needs: [ensure-release, compile-check]
-    if: github.event_name == 'push' || inputs.include_macos
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - name: 构建 arm64 + x86_64
-        run: |
-          npm ci
-          # 前端静态检查（no-undef 闸门）
-          npm run lint
-          # --bundles app：只打 .app，跳过 tauri 自带的 bundle_dmg（hdiutil 偶发
-          # 挂死导致整个 job 失败）；dmg 在下方"重打 dmg"步骤用 hdiutil 手工生成
-          npx tauri build --target aarch64-apple-darwin --bundles app
-          npx tauri build --target x86_64-apple-darwin --bundles app
-      - name: UI 冒烟测试（无头启动验证前端渲染树完整挂载，防黑屏包上传；Runner 为 arm64，冒烟 arm64 产物）
-        run: node e2e/smoke-ui.cjs src-tauri/target/aarch64-apple-darwin/release/bit
-      - name: 补全 ad-hoc bundle 签名（避免 Gatekeeper 报"已损坏"）
-        run: |
-          # tauri bundler 只对二进制做 linker 签名，bundle 缺 CodeResources/PkgInfo，
-          # 下载后带 quarantine 属性时 macOS 会判定签名不自洽 → "已损坏，无法打开"。
-          # 此处补 PkgInfo 并对整个 .app 做 ad-hoc 深签名，使 bundle 签名自洽。
-          for T in aarch64-apple-darwin x86_64-apple-darwin; do
-            APP="src-tauri/target/$T/release/bundle/macos/BIT.app"
-            printf 'APPL????' > "$APP/Contents/PkgInfo"
-            codesign --force --deep --sign - "$APP"
-            codesign --verify --deep --strict "$APP"
-          done
-      - name: 重打 dmg + 打包便携版 .app zip（包含签名修复后的 .app）
-        run: |
-          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          for T in aarch64-apple-darwin x86_64-apple-darwin; do
-            case $T in aarch64*) DMGARCH=aarch64;; *) DMGARCH=x64;; esac
-            APP="src-tauri/target/$T/release/bundle/macos/BIT.app"
-            DMGDIR="src-tauri/target/$T/release/bundle/dmg"
-            # --bundles app 模式下 bundler 不创建 dmg 目录，hdiutil 输出路径父目录缺失会直接报
-            # "No such file or directory"（v0.6.15 实锤），先补目录
-            mkdir -p "$DMGDIR"
-            STAGE=$(mktemp -d)
-            cp -R "$APP" "$STAGE/BIT.app"
-            ln -s /Applications "$STAGE/Applications"
-            rm -f "$DMGDIR"/BIT_*.dmg
-            hdiutil create -volname "BIT" -srcfolder "$STAGE" -ov -format UDZO -fs HFS+ "$DMGDIR/BIT_${VERSION}_${DMGARCH}.dmg"
-            rm -rf "$STAGE"
-            # 便携版：免安装 .app zip（对齐 Windows portable 产物）
-            # 必须用 ditto 保留代码签名与扩展属性，普通 zip 会破坏签名导致"已损坏"
-            ditto -c -k --keepParent --sequesterRsrc "$APP" "$DMGDIR/BIT_${VERSION}_${DMGARCH}-app.zip"
-          done
-      - name: 上传到 Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          gh release upload "$TAG" \
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg \
-            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg \
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*-app.zip \
-            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*-app.zip \
-            --clobber --repo "$GITHUB_REPOSITORY"
-
-  linux-exotic:
-    needs: [ensure-release, compile-check]
-    # 国产/新兴架构：龙芯 LoongArch64（3A5000/3A6000）、RISC-V 64（VisionFive 2 等）与
-    # ppc64le（POWER9/10 小端，Raptor/Talos 工作站）。GitHub 无原生 runner，
-    # 用 QEMU binfmt 跑对应架构 Debian 容器原生编译（模拟编译较慢，约 1~3 小时）。
-    # 产出 deb + 裸二进制 tar.gz（AppImageKit 不支持这三种架构）。
-    # armv7/armhf 无法支持：WebKitGTK 上游已放弃 32 位构建，wry 硬依赖 webkit。
-    # 申威 SW64 无 Rust 工具链，无法支持。s390x 因大端生态缺失同样放弃。
-    # 飞腾/鲲鹏/麒麟 ARM = linux-arm 的 aarch64 包；兆芯/海光 = linux 的 x86_64 包。
-    if: github.event_name == 'push' || inputs.include_exotic != false
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: riscv64
-            image: debian:trixie
-            platform: linux/riscv64
-          # loong64 社区镜像的 manifest 架构名是非标准的 "loong64"，按 digest 固定拉取
-          # （digest 对应 trixie 版 loong64 变体），运行时靠 binfmt 的 qemu-loongarch64 处理
-          - arch: loongarch64
-            image: ghcr.io/loong64/debian@sha256:df06b06128d3b935288d4f601bab42ba68fd61730fd0957b1ef197f1df79346c
-            platform: ""
-          # ppc64le：trixie 官方架构，libwebkit2gtk-4.1-dev 有构建，rustup 分发官方 rustup-init
-          - arch: ppc64le
-            image: debian:trixie
-            platform: linux/ppc64le
+          - { name: windows-x64,   os: windows-latest,   triple: x86_64-pc-windows-msvc,    lib: bit_napi.dll }
+          - { name: windows-arm64, os: windows-11-arm,   triple: aarch64-pc-windows-msvc,   lib: bit_napi.dll }
+          - { name: linux-x64,     os: ubuntu-24.04,     triple: x86_64-unknown-linux-gnu,  lib: libbit_napi.so }
+          - { name: linux-arm64,   os: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, lib: libbit_napi.so }
+          - { name: macos-arm64,   os: macos-14,         triple: aarch64-apple-darwin,      lib: libbit_napi.dylib }
+          - { name: macos-x64,     os: macos-14,         triple: x86_64-apple-darwin,       lib: libbit_napi.dylib }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 安装 Linux 系统依赖（enigo/libxdo + openssl）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev build-essential file libxdo-dev
+      - name: 构建（${{ matrix.triple }}）
+        run: cargo build --release --locked --target ${{ matrix.triple }} -p bit-napi -p bit-core
+      - name: 归一物料名（bit.node + bit-cli → packaging/native）
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force packaging/native | Out-Null
+          Copy-Item "target/${{ matrix.triple }}/release/${{ matrix.lib }}" packaging/native/bit.node
+          $cli = "target/${{ matrix.triple }}/release/bit-cli"
+          if (Test-Path "$cli.exe") { Copy-Item "$cli.exe" packaging/native/bit-cli.exe } else { Copy-Item $cli packaging/native/bit-cli }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.name }}
+          path: packaging/native/*
+          if-no-files-found: error
+
+  # GUI 矩阵：electron-builder 五平台出包 + 打包后冒烟（防黑屏包上传）
+  gui:
+    needs: [ensure-release, napi]
+    if: >-
+      always() && !cancelled() &&
+      needs.ensure-release.result == 'success' && needs.napi.result == 'success' &&
+      (github.event_name == 'push' || inputs.include_windows || matrix.name != 'windows-x64' && matrix.name != 'windows-arm64') &&
+      (github.event_name == 'push' || inputs.include_macos || matrix.name != 'macos-arm64' && matrix.name != 'macos-x64')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64,   os: windows-latest,   napi: windows-x64,   arch: x64,     plat: win }
+          - { name: windows-arm64, os: windows-11-arm,   napi: windows-arm64, arch: aarch64, plat: win }
+          - { name: linux-x64,     os: ubuntu-24.04,     napi: linux-x64,     arch: amd64,   plat: linux }
+          - { name: linux-arm64,   os: ubuntu-24.04-arm, napi: linux-arm64,   arch: aarch64, plat: linux }
+          - { name: macos-arm64,   os: macos-14,         napi: macos-arm64,   arch: aarch64, plat: mac }
+          - { name: macos-x64,     os: macos-14,         napi: macos-x64,     arch: x64,     plat: mac }
+    env:
+      TAG: ${{ needs.ensure-release.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -378,53 +141,117 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: 构建前端 dist（宿主机 x64 完成，容器内只编译 Rust）
+          cache: npm
+      - name: 安装 Linux 冒烟依赖（Electron 运行库 + xvfb）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0t64 libnss3 libasound2t64 libgbm1 \
+            libxss1 libxkbcommon0 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 \
+            libpango-1.0-0 libcairo2 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64
+      - name: 前端构建
         run: |
           npm ci
-          npm run lint
           npm run build
-      - name: 安装 QEMU 模拟器（riscv64 + loongarch64 + ppc64le）
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.napi }}
+          path: packaging/native
+      - name: 恢复 sidecar 执行位（artifact 下载不保留权限）
+        if: runner.os != 'Windows'
+        run: chmod +x packaging/native/bit-cli
+      - name: electron-builder（${{ matrix.plat }} ${{ matrix.arch }}）
+        shell: bash
         run: |
-          # tonistiigi/binfmt 不含 loongarch64，改用 Ubuntu 自带 qemu-user-static（qemu 8.2，含 loongarch64）
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user-static
-          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-loongarch64"
-          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-riscv64"
-          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-ppc64le"
-      - name: 容器内构建（${{ matrix.arch }}）
+          VERSION="${TAG#v}"
+          case "${{ matrix.plat }}" in
+            win)
+              # pwsh 会吞 ${ext} 宏；win 的 artifactName 全字面量，不经宏
+              npx electron-builder --win nsis --${{ matrix.arch == 'x64' && 'x64' || 'arm64' }} \
+                "-c.artifactName=BIT_${VERSION}_${{ matrix.arch }}-setup.exe" --publish never
+              ;;
+            linux)
+              # bash 双引号里 \${ext} 转义为字面量，交 electron-builder 展开
+              npx electron-builder --linux AppImage deb rpm \
+                "-c.artifactName=BIT_${VERSION}_${{ matrix.arch }}.\${ext}" --publish never
+              ;;
+            mac)
+              # 只出 .app：ad-hoc 深签名后手工 hdiutil/ditto（对齐旧 Tauri 流程，防 Gatekeeper"已损坏"）
+              if [ "${{ matrix.arch }}" = "x64" ]; then
+                npx electron-builder --mac --dir --x64 --publish never
+              else
+                npx electron-builder --mac --dir --publish never
+              fi
+              ;;
+          esac
+      - name: macOS ad-hoc 深签名 + dmg/zip
+        if: runner.os == 'macOS'
         run: |
-          VERSION="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          PLATFORM="${{ matrix.platform }}"
-          docker run --rm ${PLATFORM:+--platform $PLATFORM} \
-            -v "$PWD":/repo -w /repo \
-            ${{ matrix.image }} \
-            bash packaging/exotic/build.sh ${{ matrix.arch }} "${VERSION#v}"
-      - name: 上传到 Release
+          VERSION="${TAG#v}"
+          APP=$(ls -d release/mac*/BIT.app | head -1)
+          printf 'APPL????' > "$APP/Contents/PkgInfo"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          mkdir -p release/dmg
+          STAGE=$(mktemp -d)
+          cp -R "$APP" "$STAGE/BIT.app"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "BIT" -srcfolder "$STAGE" -ov -format UDZO -fs HFS+ "release/dmg/BIT_${VERSION}_${{ matrix.arch }}.dmg"
+          rm -rf "$STAGE"
+          # 便携版：ditto 保留签名与扩展属性（普通 zip 破坏签名导致"已损坏"）
+          ditto -c -k --keepParent --sequesterRsrc "$APP" "release/dmg/BIT_${VERSION}_${{ matrix.arch }}-app.zip"
+      # 打包后冒烟：隔离数据目录无头启动，audit.json 出现 ui.mounted 才放行（防黑屏包）
+      - name: 冒烟测试（win）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node e2e/smoke-ui.cjs release/win-unpacked/BIT.exe 120
+      - name: 冒烟测试（linux）
+        if: runner.os == 'Linux'
+        run: |
+          # linux-unpacked 主程序名随 productName 消毒规则变化（BIT/bit），按可执行文件探测
+          BIN=$(find release/linux-unpacked -maxdepth 1 -type f -executable ! -name '*.so*' | head -1)
+          echo "smoke target: $BIN"
+          xvfb-run -a node e2e/smoke-ui.cjs "$BIN" 120
+      - name: 冒烟测试（mac）
+        if: runner.os == 'macOS'
+        run: node e2e/smoke-ui.cjs "$(ls -d release/mac*/BIT.app)/Contents/MacOS/BIT" 120
+      - name: Windows 便携版 zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          $VERSION = "$env:TAG".TrimStart('v')
+          Compress-Archive -Path release/win-unpacked/* -DestinationPath "release/BIT_${VERSION}_$env:ARCH-portable.zip" -Force
+          Test-Path "release/BIT_${VERSION}_$env:ARCH-portable.zip"
+      - name: 上传到 Release（win）
+        if: runner.os == 'Windows'
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ needs.ensure-release.outputs.tag }}"
-          gh release upload "$TAG" \
-            packaging/exotic/out/bit_*.deb \
-            packaging/exotic/out/bit_*.tar.gz \
-            --clobber --repo "$GITHUB_REPOSITORY"
-      - name: 刷新镜像（exotic 晚于 finalize 上传，mirror 需单独同步）
+          $repo = "$env:GITHUB_REPOSITORY"
+          gh release upload "$env:TAG" "release/BIT_*-setup.exe" "release/BIT_*-portable.zip" --clobber --repo "$repo"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 上传到 Release（linux）
+        if: runner.os == 'Linux'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # finalize 先于本 job 完成，其触发的 mirror-pages 同步拿不到 exotic 资产
-          # （0.5.5 的龙芯/RISC-V 包因此从未上镜像）。上传完成后补一次同步；两条 matrix 各触发一次，幂等。
-          gh workflow run mirror-pages.yml -f tag="${{ needs.ensure-release.outputs.tag }}" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" release/*.AppImage release/*.deb release/*.rpm --clobber --repo "$GITHUB_REPOSITORY"
+      - name: 上传到 Release（mac）
+        if: runner.os == 'macOS'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" release/dmg/*.dmg release/dmg/*-app.zip --clobber --repo "$GITHUB_REPOSITORY"
 
-  # Alpine (musl) 构建：裸二进制 tar.gz（webkit 等运行时依赖由用户侧 apk 提供）。
-  # musl 生态对 Tauri 无官方支持，构建可能因上游 crate 兼容性失败——允许失败，不阻塞发布。
+  # Alpine (musl)：只编 bit-cli（无 GUI——Electron 无 musl 二进制，已拍板）
   linux-musl:
     needs: [ensure-release, compile-check]
     if: github.event_name == 'push' || inputs.include_exotic != false
     continue-on-error: true
-    # aarch64 用 ARM 原生 runner（ubuntu-24.04-arm）跑 alpine 容器：
-    # QEMU 用户态模拟下 Alpine edge 的 rustc（Scudo 分配器）会 SIGBUS 崩溃
-    # （rustc --version 都起不来，exit 135 Bus error），原生执行无此问题
+    # aarch64 用 ARM 原生 runner：QEMU 模拟下 Alpine edge 的 rustc 会 SIGBUS
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
@@ -438,15 +265,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: 构建前端 dist（宿主机 x64 完成，容器内只编译 Rust）
-        run: |
-          npm ci
-          npm run lint
-          npm run build
-      - name: 容器内构建（alpine ${{ matrix.arch }}）
+      - name: 容器内构建 bit-cli（alpine ${{ matrix.arch }}）
         run: |
           VERSION="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           PLATFORM="${{ matrix.platform }}"
@@ -460,23 +279,69 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.ensure-release.outputs.tag }}"
+          gh release upload "$TAG" packaging/musl/out/bit-cli_*-musl.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
+
+  # 国产/新兴架构（riscv64 / loongarch64 / ppc64le）：只编 bit-cli + deb（无 GUI，QEMU 模拟编译较慢）
+  linux-exotic:
+    needs: [ensure-release, compile-check]
+    if: github.event_name == 'push' || inputs.include_exotic != false
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: riscv64
+            image: debian:trixie
+            platform: linux/riscv64
+          # loong64 社区镜像的 manifest 架构名是非标准的 "loong64"，按 digest 固定拉取
+          - arch: loongarch64
+            image: ghcr.io/loong64/debian@sha256:df06b06128d3b935288d4f601bab42ba68fd61730fd0957b1ef197f1df79346c
+            platform: ""
+          - arch: ppc64le
+            image: debian:trixie
+            platform: linux/ppc64le
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+      - name: 安装 QEMU 模拟器
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-loongarch64"
+          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-riscv64"
+          ls /proc/sys/fs/binfmt_misc/ | grep -qx "qemu-ppc64le"
+      - name: 容器内构建 bit-cli（${{ matrix.arch }}）
+        run: |
+          VERSION="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          PLATFORM="${{ matrix.platform }}"
+          docker run --rm ${PLATFORM:+--platform $PLATFORM} \
+            -v "$PWD":/repo -w /repo \
+            ${{ matrix.image }} \
+            bash packaging/exotic/build.sh ${{ matrix.arch }} "${VERSION#v}"
+      - name: 上传到 Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.ensure-release.outputs.tag }}"
           gh release upload "$TAG" \
-            packaging/musl/out/bit_*-musl.tar.gz \
+            packaging/exotic/out/bit-cli_*.deb \
+            packaging/exotic/out/bit-cli_*.tar.gz \
             --clobber --repo "$GITHUB_REPOSITORY"
+      - name: 刷新镜像（exotic 晚于 finalize 上传，mirror 需单独同步）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run mirror-pages.yml -f tag="${{ needs.ensure-release.outputs.tag }}" --repo "$GITHUB_REPOSITORY"
 
   # 收尾：核心平台构建完成后，自动生成 latest.json 上传到 Release，
-  # 并触发 mirror-pages 刷新 GitHub Pages 镜像（更新检测三级回退的第一级）。
-  # exotic（QEMU 模拟编译）耗时不稳定，失败不阻塞发布。
+  # 并触发 mirror-pages 刷新镜像 + sync-channels 渠道同步。
+  # 资产键位与 Tauri 时代完全一致（客户端 pick_asset / sync-channels 零改动）。
   finalize:
-    needs: [ensure-release, linux, linux-arm, windows, windows-arm, macos]
+    needs: [ensure-release, gui]
     if: >-
       always() && !cancelled() &&
-      needs.ensure-release.result == 'success' &&
-      (needs.linux.result == 'success' || needs.linux.result == 'skipped') &&
-      (needs.linux-arm.result == 'success' || needs.linux-arm.result == 'skipped') &&
-      (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
-      (needs.windows-arm.result == 'success' || needs.windows-arm.result == 'skipped') &&
-      (needs.macos.result == 'success' || needs.macos.result == 'skipped')
+      needs.ensure-release.result == 'success' && needs.gui.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: 生成 latest.json + 触发 Pages 镜像

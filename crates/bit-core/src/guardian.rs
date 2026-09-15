@@ -221,7 +221,23 @@ pub fn arm(ctx: &Arc<Ctx>) {
         Ok(p) => p,
         Err(_) => return,
     };
-    let Some(hash) = sha256_file(&exe) else { return };
+    // 守护二进制与复活目标分离（Electron 形态）：
+    //   守护二进制 = worker_exe（bit-cli sidecar，认识 --bit-guardian）；缺省回落本进程二进制
+    //   复活目标   = app_exe（Electron 启动器）；缺省回落本进程二进制
+    // bin_hash 始终是复活目标的哈希（防借壳复活的完整性基准）
+    let target = ctx
+        .app_exe
+        .as_ref()
+        .filter(|p| p.is_file())
+        .cloned()
+        .unwrap_or_else(|| exe.clone());
+    let guardian_bin = ctx
+        .worker_exe
+        .as_ref()
+        .filter(|p| p.is_file())
+        .cloned()
+        .unwrap_or_else(|| target.clone());
+    let Some(hash) = sha256_file(&target) else { return };
     let state_path = ctx.data_dir.join("guardian.json");
     let log_path = ctx.data_dir.join("guardian.log");
     let my_pid = std::process::id();
@@ -248,7 +264,7 @@ pub fn arm(ctx: &Arc<Ctx>) {
     state.expect_exit = false;
     state.bin_hash = hash;
     write_state_signed(&state, &state_path, &key);
-    spawn_guardian(&exe, &state_path, &log_path);
+    spawn_guardian(&guardian_bin, &target, &ctx.app_args, &state_path, &log_path);
     // 磁盘 key 漂移自愈：config.json 的 client_key 与内存不一致（带外改动）时以内存为准回写，
     // 避免守护进程用磁盘 key 验签永久失败导致反复重布防
     if load_client_key(&ctx.data_dir).as_deref() != Some(key.as_str()) {
@@ -259,11 +275,15 @@ pub fn arm(ctx: &Arc<Ctx>) {
     }
 }
 
-fn spawn_guardian(exe: &Path, state_path: &Path, log_path: &Path) -> Option<()> {
-    std::process::Command::new(exe)
+fn spawn_guardian(guardian_bin: &Path, target: &Path, app_args: &[String], state_path: &Path, log_path: &Path) -> Option<()> {
+    // 复活目标 + 启动参数原样排进守护 argv（bit-cli 解析：argv[4]=exe，argv[5..]=启动参数）。
+    // Electron 形态 target 是 electron.exe，必须带 [main.cjs]——裸拉只会打开默认欢迎页
+    std::process::Command::new(guardian_bin)
         .arg(GUARDIAN_FLAG)
         .arg(state_path)
         .arg(log_path)
+        .arg(target) // 复活目标：Electron 下 ≠ 守护二进制（bit-cli 拉起的是 Electron 启动器）
+        .args(app_args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -332,12 +352,19 @@ pub fn drain_log(ctx: &Arc<Ctx>) {
     }
 }
 
-/// 守护进程主循环（本进程以 `bit --bit-guardian <握手文件> <日志>` 启动，不进入 GUI/TUI）。
-/// 巡检：被新实例接管 → 退出；主进程正常退出 → 退出；主进程意外死亡 → 校验完整性后接力拉起。
+/// 守护进程主循环（本进程以 `<守护二进制> --bit-guardian <握手文件> <日志> <复活目标> [复活参数...]` 启动，
+/// 不进入 GUI/TUI）。巡检：被新实例接管 → 退出；主进程正常退出 → 退出；
+/// 主进程意外死亡 → 校验完整性后接力拉起复活目标 + 透传启动参数（Electron 下 = electron.exe main.cjs）。
 /// 握手文件被删/损坏/验签失败：沿用内存中最后可信状态继续守望（删除/篡改不能解除布防）；
 /// 启动时无法验签则退出（主进程 5s 内重新布防重写签名状态）
-pub fn run_guardian(state_path: PathBuf, log_path: PathBuf) {
-    let Some(exe) = std::env::current_exe().ok() else { return };
+pub fn run_guardian(state_path: PathBuf, log_path: PathBuf, target: Option<PathBuf>, app_args: Vec<String>) {
+    let exe = match target {
+        Some(t) => t,
+        None => match std::env::current_exe() {
+            Ok(p) => p,
+            Err(_) => return,
+        },
+    };
     let my_pid = std::process::id();
     let data_dir = state_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     // 守护进程只读 config.json 取验签密钥；读不到则无法验签——立即退出让主进程重布防
@@ -385,6 +412,7 @@ pub fn run_guardian(state_path: PathBuf, log_path: PathBuf) {
             }
         }
         match std::process::Command::new(&exe)
+            .args(&app_args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

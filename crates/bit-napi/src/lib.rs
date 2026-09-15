@@ -6,6 +6,7 @@
 //! 密钥材料（device_key/BITENC1/DPAPI）只在 Rust 侧，不暴露任何解密原语到导出面。
 mod bridge;
 mod emitter_napi;
+mod host_napi;
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -23,8 +24,16 @@ fn ctx() -> napi::Result<Arc<bit_core::state::Ctx>> {
 /// 宿主点火：装 napi 托管 tokio 运行时的 Handle（async fn 体运行在该 runtime 上，
 /// Handle::current() 即正确 Handle —— 装错症状 = core 任务静默失效，M1 专项验证过），
 /// 装载 Ctx（数据目录与 Tauri 版同源，bit.db 无感共享）。
+/// app_args_json：复活目标启动参数（JSON 数组字符串）——Electron 传 ["<main.cjs>"]，
+/// guardian 复活时透传给 electron.exe（裸拉只会打开默认欢迎页）
 #[napi]
-pub async fn host_start(data_dir: Option<String>, version: Option<String>) -> Result<()> {
+pub async fn host_start(
+    data_dir: Option<String>,
+    version: Option<String>,
+    worker_exe: Option<String>,
+    app_exe: Option<String>,
+    app_args_json: Option<String>,
+) -> Result<()> {
     bit_core::task::init(tokio::runtime::Handle::current());
     let dir = data_dir
         .filter(|s| !s.trim().is_empty())
@@ -35,14 +44,22 @@ pub async fn host_start(data_dir: Option<String>, version: Option<String>) -> Re
         .cloned()
         .map(|e| e as Arc<dyn bit_core::emitter::UiEmitter>)
         .unwrap_or_else(|| Arc::new(bit_core::emitter::NoopEmitter));
+    let app_args: Vec<String> = app_args_json
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     let ctx = bit_core::state::Ctx::load(bit_core::state::LoadOpts {
         data_dir: dir,
         emitter,
-        host: Arc::new(bit_core::emitter::NoopHost), // M3：Electron HostHooks（托盘/热键/退出）
+        host: Arc::new(host_napi::ElectronHostHooks),
         app_version: version.unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
-        // worker 子进程：Electron 形态指向 extraResources 的 bit-cli sidecar（M2 接管）
-        worker_exe: None,
-        app_exe: None,
+        // worker 子进程：Electron 形态指向 extraResources 的 bit-cli sidecar（main.cjs 传入）
+        worker_exe: worker_exe
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from),
+        app_exe: app_exe
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from),
+        app_args,
     });
     bit_core::crash::install(&ctx.data_dir);
     bit_core::trace::init(&ctx.data_dir);
@@ -51,6 +68,12 @@ pub async fn host_start(data_dir: Option<String>, version: Option<String>) -> Re
     bit_core::audit::record(&ctx, "local-app", "app.start", "BIT-napi", serde_json::json!({}), true);
     let _ = CTX.set(ctx);
     Ok(())
+}
+
+/// 注册退出回调（core quit_app → ElectronHostHooks::exit_app → 这里的 JS 回调 → app.quit()）
+#[napi]
+pub fn on_host_exit(callback: JsFunction) -> Result<()> {
+    host_napi::install_exit_callback(callback)
 }
 
 /// 注册 UI 事件回调（全应用唯一一条 TSFN；重复注册以最后一次为准）

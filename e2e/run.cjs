@@ -931,13 +931,13 @@ function record(name, ok, detail) {
       Array.isArray(p1.methods?.direct6) &&
       p1.methods?.relay === `http://127.0.0.1:${RPORT}/relay/${p1.rid}`;
     const natOk = ["none", "cone", "symmetric", "unknown"].includes(p1.nat);
-    // 3) 识别码持久化：二次获取一致 + 实例数据目录 config.json 落盘一致
+    // 3) 识别码持久化：二次获取一致 + 全量配置（bit.db "config" 行）落盘一致
+    //    （SQLite 迁移后 config.json 仅剩引导锚点，relay_id 从 /api/debug/config 读）
     const p2 = JSON.parse((await callGet("/api/qr")).body || "{}");
     let persisted = p2.rid === p1.rid;
     if (persisted) {
       try {
-        const dd = String(JSON.parse((await callGet("/api/debug/state")).body).data_dir || "");
-        persisted = JSON.parse(fs.readFileSync(dd + "/config.json", "utf8")).relay_id === p1.rid;
+        persisted = JSON.parse((await callGet("/api/debug/config")).body || "{}").relay_id === p1.rid;
       } catch { persisted = false; }
     }
     // 4) 隧道 GET：/api/health 经中继转发回本地 API（真鉴权头原样透传 + bitsign-v2 签名）
@@ -1133,14 +1133,19 @@ function record(name, ok, detail) {
   // ── T48 设备凭证：自动注册落盘（bitdev_* + 时间戳 + 指纹哈希）且幂等稳定 ──
   try {
     const dd = String(JSON.parse((await callGet("/api/debug/state")).body).data_dir || "");
-    const read = () => JSON.parse(fs.readFileSync(dd + "/config.json", "utf8"));
-    const c1 = read();
-    const keyOk = /^bitdev_[0-9a-f]{32}$/.test(c1.device_key || "");
+    // device_key 在引导锚点 config.json（守护进程验签前置读取）；时间戳/指纹哈希在 bit.db
+    // 全量配置行（config.json 仅剩锚点两键）——从 /api/debug/config 读取
+    const anchor = () => JSON.parse(fs.readFileSync(dd + "/config.json", "utf8"));
+    const full = async () => JSON.parse((await callGet("/api/debug/config")).body || "{}");
+    const c1a = anchor();
+    const c1 = await full();
+    const keyOk = /^bitdev_[0-9a-f]{32}$/.test(c1a.device_key || "");
     const tsOk = Number.isInteger(c1.device_registered_at) && c1.device_registered_at > 1_600_000_000;
     const fpOk = /^[0-9a-f]{16}$/.test(c1.device_fp_hash || "");
     // 幂等：再取一致（稳定锚点，不轮换）
-    const c2 = read();
-    const stable = c1.device_key === c2.device_key && c1.device_registered_at === c2.device_registered_at &&
+    const c2a = anchor();
+    const c2 = await full();
+    const stable = c1a.device_key === c2a.device_key && c1.device_registered_at === c2.device_registered_at &&
       c1.device_fp_hash === c2.device_fp_hash;
     // 材料口径：E2E 派生材料与 sign.cjs/device.rs 同源（MAT 已由 devMat() 成功派生即为佐证）
     const matOk = /^[0-9a-f]{16}$/.test(MAT);
@@ -1155,8 +1160,8 @@ function record(name, ok, detail) {
     await call("/api/debug/config", { cloud_relay_url: `http://127.0.0.1:${RPORT}` });
     // BIT poller 已用本机 device_fp_hash poll 过 → 绑定生效；status 应返回绑定设备前 8 hex
     const rid49 = JSON.parse((await callGet("/api/qr")).body).rid;
-    const dd = String(JSON.parse((await callGet("/api/debug/state")).body).data_dir || "");
-    const fp = JSON.parse(fs.readFileSync(dd + "/config.json", "utf8")).device_fp_hash || "";
+    // device_fp_hash 在 bit.db 全量配置行（config.json 仅剩引导锚点）
+    const fp = JSON.parse((await callGet("/api/debug/config")).body || "{}").device_fp_hash || "";
     const statusRaw = await new Promise((resolve, reject) => {
       const req = http.request({ host: BASE, port: RPORT, path: `/relay/status/${rid49}`, method: "GET", agent },
         (res) => { let b = ""; res.on("data", (c) => (b += c)); res.on("end", () => resolve({ code: res.statusCode, body: b })); });

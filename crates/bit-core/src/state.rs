@@ -78,6 +78,10 @@ pub struct LoadOpts {
     pub app_version: String,
     pub worker_exe: Option<PathBuf>,
     pub app_exe: Option<PathBuf>,
+    /// 宿主主程序启动参数（guardian 复活时原样透传）：Electron 形态传 [main.cjs]，
+    /// 否则裸拉 electron.exe 只会打开默认欢迎页而非本应用
+    #[allow(dead_code)]
+    pub app_args: Vec<String>,
 }
 
 pub struct Ctx {
@@ -91,6 +95,8 @@ pub struct Ctx {
     pub worker_exe: Option<PathBuf>,
     /// 宿主主程序路径（guardian 布防校验对象）；None = current_exe()
     pub app_exe: Option<PathBuf>,
+    /// 宿主主程序启动参数（guardian 复活透传；Electron = [main.cjs]，单二进制形态为空）
+    pub app_args: Vec<String>,
     pub data_dir: PathBuf,
     pub config: Mutex<crate::config::Config>,
     pub ai_config: Mutex<AiConfig>,
@@ -324,6 +330,7 @@ impl Ctx {
             app_version: opts.app_version,
             worker_exe: opts.worker_exe,
             app_exe: opts.app_exe,
+            app_args: opts.app_args,
             data_dir,
             config: Mutex::new(config),
             ai_config: Mutex::new(ai_config),

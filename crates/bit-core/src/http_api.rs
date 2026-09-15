@@ -163,6 +163,7 @@ pub fn build_router(ctx: Arc<Ctx>) -> Router {
         .route("/api/debug/mcp", get(debug_mcp))
         .route("/api/debug/interrupt", post(debug_interrupt))
         .route("/api/debug/config", post(debug_config))
+        .route("/api/debug/config", get(debug_config_get))
         .route("/api/debug/quit", post(debug_quit))
         .route("/api/debug/system_prompt", get(debug_system_prompt))
         .route("/mcp", post(mcp_endpoint).delete(mcp_delete))
@@ -1208,6 +1209,28 @@ async fn debug_quit(State(ctx): State<Arc<Ctx>>) -> Response {
     });
     ctx.host.exit_app();
     Json(json!({ "quitting": true })).into_response()
+}
+
+/// POST /api/debug/config：运行时调整幻觉防护阈值 / 对话限速 / 审批模式（E2E 熔断用例 / 调试桥），仅接受列出的键，同步落盘
+/// GET /api/debug/config：持久化配置快照（脱敏）。
+/// SQLite 迁移后全量配置在 bit.db，config.json 仅剩 {device_key, client_key} 引导锚点——
+/// E2E / 诊断需要读 relay_id / device_* 等持久化字段时从此取，密钥类只出 hint 不出原文
+async fn debug_config_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    let cfg = ctx.config.lock().unwrap().clone();
+    Json(json!({
+        "device_key_hint": cfg.device_key.as_deref().map(key_hint),
+        "client_key_hint": key_hint(&cfg.client_key),
+        "device_registered_at": cfg.device_registered_at,
+        "device_fp_hash": cfg.device_fp_hash,
+        "relay_id": cfg.relay_id,
+        "cloud_relay_url": cfg.cloud_relay_url,
+        "port": cfg.port,
+        "host": cfg.host,
+        "revision": cfg.revision,
+        "tool_approval": cfg.tool_approval,
+        "compat_mode": cfg.compat_mode,
+    }))
+    .into_response()
 }
 
 /// POST /api/debug/config：运行时调整幻觉防护阈值 / 对话限速 / 审批模式（E2E 熔断用例 / 调试桥），仅接受列出的键，同步落盘

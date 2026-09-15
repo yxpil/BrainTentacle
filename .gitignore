@@ -3,6 +3,11 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+target/
+release/
+
+# electron-builder 物料暂存（stage-pack.cjs / CI artifact 落位处）
+packaging/native/
 
 # 编辑器/系统杂项
 .DS_Store

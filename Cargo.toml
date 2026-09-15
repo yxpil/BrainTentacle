@@ -8,7 +8,7 @@ members = ["crates/bit-core", "crates/bit-napi", "src-tauri"]
 
 # 版本号单源：升级时只改这里 + tauri.conf.json + package.json
 [workspace.package]
-version = "0.6.23"
+version = "0.6.24"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

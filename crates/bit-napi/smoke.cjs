@@ -20,10 +20,10 @@ const assert = (cond, msg) => {
 };
 
 (async () => {
-  // 0. 导出面检查：只允许三个入口，密钥/解密原语绝不暴露
+  // 0. 导出面检查：只允许四个入口，密钥/解密原语绝不暴露
   const fns = Object.keys(bit).sort();
   assert(
-    JSON.stringify(fns) === JSON.stringify(['hostStart', 'invoke', 'onUiEvent']),
+    JSON.stringify(fns) === JSON.stringify(['hostStart', 'invoke', 'onHostExit', 'onUiEvent']),
     `导出面 = ${fns.join(', ')}`
   );
 
@@ -38,8 +38,12 @@ const assert = (cond, msg) => {
   });
   assert(true, 'onUiEvent 注册成功');
 
-  // 3. 宿主点火（Ctx 装载 + bit.db 初始化）
-  await bit.hostStart(dataDir, '0.6.23-smoke');
+  // 2.5 退出回调注册（quit_app 链路用；此处验证可注册不崩）
+  bit.onHostExit(() => {});
+  assert(true, 'onHostExit 注册成功');
+
+  // 3. 宿主点火（Ctx 装载 + bit.db 初始化；worker_exe/app_exe 走 None 路径）
+  await bit.hostStart(dataDir, '0.6.23-smoke', null, null);
   assert(true, 'hostStart 完成');
 
   // 4. invoke 白名单命令
@@ -75,7 +79,7 @@ const assert = (cond, msg) => {
   assert(true, 'TSFN 通路无崩溃');
 
   // 7. hostStart 幂等：重复点火不崩
-  await bit.hostStart(dataDir, '0.6.23-smoke');
+  await bit.hostStart(dataDir, '0.6.23-smoke', null, null);
   assert(true, 'hostStart 幂等');
 
   console.log('\n全部冒烟通过 ✔');

@@ -1,16 +1,10 @@
 name: flatpak-build
 
 # 构建 Flatpak 包并产出 .flatpak bundle（后续可 PR 到 Flathub 上架）
+# M4 起 GUI 切换 Electron，Tauri 版 manifest 不再随 tag 发版；仅保留手动触发
+# （Electron 的 flatpak 化需重写 manifest 为 org.electron.Runtime 基座，待办）
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    tags: ["v*"]
-    paths:
-      - "packaging/flatpak/**"
-      - "src/**"
-      - "src-tauri/**"
-      - "package.json"
 
 jobs:
   build:

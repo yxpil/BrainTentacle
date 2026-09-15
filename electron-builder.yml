@@ -1,0 +1,54 @@
+# yxpil · electron-builder 打包配置（M4 发布链）
+#
+# 产物命名对齐 latest.json assets 键位（sync-channels / mirror-pages 零改动）：
+#   windows-x64   BIT_<v>_x64-setup.exe        windows-arm64 BIT_<v>_aarch64-setup.exe
+#   macos-arm64   BIT_<v>_aarch64.dmg/-app.zip macos-x64     BIT_<v>_x64.dmg/-app.zip
+#   linux-x64     BIT_<v>_amd64.AppImage       linux-arm64   BIT_<v>_aarch64.AppImage
+# arch 命名（x64/aarch64/amd64）不依赖 ${arch} 宏（各平台宏值不一致），
+# 由 CI/本地脚本按矩阵入口以 -c.artifactName=... 显式覆盖。
+#
+# resources 根注入（extraResources）：bit.node（napi 核心）+ bit-cli（worker/guardian sidecar）
+# + icon.ico（托盘/通知用），由 scripts/stage-pack.cjs（本地）或 napi 矩阵 artifact（CI）
+# 复制到 packaging/native/。
+appId: com.bit.hub
+productName: BIT
+directories:
+  output: release
+files:
+  - dist/**
+  - electron/**
+  - package.json
+  - "!**/*.map"
+  - "!node_modules/**"
+extraResources:
+  - from: packaging/native
+    to: .
+asar: true
+compression: maximum
+
+win:
+  icon: src-tauri/icons/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+
+mac:
+  # CI 用 --dir 出 .app 后手工 ad-hoc 深签名 + hdiutil/ditto（对齐旧 Tauri 流程，防 Gatekeeper"已损坏"）
+  identity: null
+  icon: src-tauri/icons/icon.icns
+  category: public.app-category.productivity
+  target:
+    - target: dir
+
+linux:
+  icon: src-tauri/icons/256x256.png
+  category: Development
+  maintainer: yxpil <yxpil@users.noreply.github.com>
+  target:
+    - target: AppImage
+    - target: deb
+    - target: rpm

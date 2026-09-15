@@ -26,6 +26,82 @@ pub fn is_headless() -> bool {
         .unwrap_or(false)
 }
 
+/// 宿主服务 bootstrap：Tauri 在 setup 回调里做的启动链，Electron 经
+/// invoke('bootstrap_services') 在 hostStart 之后触发。幂等安全（重复调用只
+/// 多起一轮后台循环，正常只在启动时调用一次）。托盘/自启同步是宿主专属，
+/// 不在此处（Electron 由 main.cjs / set_autostart 拦截负责）。
+pub fn bootstrap_services(ctx: &Arc<Ctx>) -> serde_json::Value {
+    // 守护进程布防：接力日志转存审计 → 写握手文件 → 拉起守护进程 + 看门狗
+    crate::guardian::drain_log(ctx);
+    crate::guardian::arm(ctx);
+    crate::task::spawn(crate::guardian::watchdog_task(ctx.clone()));
+
+    // BIT toolhomes：插件同步（先于 venv，venv 要跑几十秒）+ 建目录/补 venv
+    {
+        let te_ctx = ctx.clone();
+        crate::task::spawn_blocking(move || {
+            crate::plugins::sync(&te_ctx);
+            crate::toolenv::ensure_init(&te_ctx);
+        });
+    }
+
+    // 插件定时任务调度循环（每 30 秒检查一次到期任务）
+    {
+        let pl_ctx = ctx.clone();
+        crate::task::spawn(async move {
+            crate::plugins::scheduler(pl_ctx).await;
+        });
+    }
+
+    // 解释器探测移到后台：不阻塞窗口显示
+    let rt_ctx = ctx.clone();
+    crate::task::spawn_blocking(move || {
+        if rt_ctx.refresh_runtimes() {
+            rt_ctx.emit("runtimes-updated", serde_json::json!({}));
+        }
+    });
+
+    // 远程访问 HTTP 服务
+    {
+        let http_ctx = ctx.clone();
+        crate::task::spawn(async move {
+            if let Err(e) = crate::http_api::restart_server(&http_ctx).await {
+                eprintln!("[BIT] http server error: {e}");
+            }
+        });
+    }
+
+    // 后台拉取激活提供方的模型列表（写入 model_context 缓存，失败静默）
+    {
+        let mf_ctx = ctx.clone();
+        crate::task::spawn(async move {
+            let p = mf_ctx.ai_config.lock().unwrap().active().cloned();
+            if let Some(p) = p {
+                crate::ai::refresh_model_context(&mf_ctx, &p.protocol, &p.base_url, &p.api_key)
+                    .await;
+            }
+        });
+    }
+
+    // Autopilot：记忆/技能自动总结循环
+    {
+        let auto_ctx = ctx.clone();
+        crate::task::spawn(async move {
+            crate::autopilot::run(auto_ctx).await;
+        });
+    }
+
+    // 自动更新：启动后静默检测 + 下载（下载完成发 update-state 事件）
+    {
+        let upd_ctx = ctx.clone();
+        crate::task::spawn(async move {
+            crate::update::auto_update_task(upd_ctx).await;
+        });
+    }
+
+    json!({ "ok": true })
+}
+
 /// 前端挂载信号：App 首帧成功渲染后由前端调用，落审计供 CI 冒烟断言
 /// 「渲染树完整挂载」（页面渲染崩溃时本事件缺席 → Windows 冒烟判失败，拦住黑屏包）
 pub fn ui_mounted(ctx: &Arc<Ctx>) {
