@@ -729,7 +729,11 @@ fn reload_state(ctx: &Arc<Ctx>) {
     use crate::state::read_json;
     let dir = ctx.data_dir.clone();
     *ctx.config.lock().unwrap() = crate::config::Config::load(&dir);
-    *ctx.ai_config.lock().unwrap() = read_json(&dir.join("ai_config.json")).unwrap_or_default();
+    let dk = ctx.config.lock().unwrap().device_key.clone();
+    *ctx.ai_config.lock().unwrap() =
+        crate::securefile::read_secret_json(&dir, "ai_config.json", dk.as_deref())
+            .value
+            .unwrap_or_default();
     // 工具清单（内置重建 + 自建从 tools.json 合并）与 host 远程调用走同一入口，避免规则漂移
     crate::registry::reload_custom_tools(ctx);
     *ctx.skills.lock().unwrap() = read_json(&dir.join("skills.json")).unwrap_or_default();

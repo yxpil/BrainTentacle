@@ -47,6 +47,7 @@ mod runtime;
 mod script;
 mod script_runtime;
 mod security;
+mod securefile;
 mod session;
 mod state;
 mod syntax;

@@ -160,7 +160,11 @@ impl Ctx {
         fs::create_dir_all(&data_dir).ok();
 
         let config = crate::config::Config::load(&data_dir);
-        let ai_config: AiConfig = read_json(&data_dir.join("ai_config.json")).unwrap_or_default();
+        let device_key = config.device_key.clone();
+        let ai_config: AiConfig =
+            crate::securefile::read_secret_json(&data_dir, "ai_config.json", device_key.as_deref())
+                .value
+                .unwrap_or_default();
         let tools: Vec<ToolDef> =
             read_json(&data_dir.join("tools.json")).unwrap_or_default();
         let audit: Vec<AuditEntry> = read_json(&data_dir.join("audit.json"))
@@ -206,8 +210,13 @@ impl Ctx {
             }
         }
         let sessions = SessionStore::load(&data_dir);
-        let mcp: Vec<crate::mcp::McpServer> =
-            read_json(&data_dir.join("mcp_servers.json")).unwrap_or_default();
+        let mcp: Vec<crate::mcp::McpServer> = crate::securefile::read_secret_json(
+            &data_dir,
+            "mcp_servers.json",
+            device_key.as_deref(),
+        )
+        .value
+        .unwrap_or_default();
 
         // 内置工具随版本演进：始终以当前出厂的内置工具为准，
         // 移除历史遗留的内置项，保留用户 / AI 自建的工具，再把最新内置放到最前。
@@ -318,11 +327,10 @@ impl Ctx {
     }
 
     pub fn save_ai_config(&self) {
+        // 先取 device_key(drop config lock)再 lock ai_config，避免 config→ai_config 反序死锁
+        let key = self.config.lock().unwrap().device_key.clone();
         let cfg = self.ai_config.lock().unwrap();
-        let _ = fs::write(
-            self.data_dir.join("ai_config.json"),
-            serde_json::to_string_pretty(&*cfg).unwrap(),
-        );
+        crate::securefile::write_secret_json(&self.data_dir, "ai_config.json", key, &*cfg);
         drop(cfg);
         // 必须通知 worker 重读：worker 的 ai_config 是启动时一次性加载的，
         // 漏通知会导致"设置里换了 provider，worker 还打旧端点"→ 旧端点限流/欠费时
@@ -366,10 +374,9 @@ impl Ctx {
 
     pub fn save_mcp(&self) {
         let mcp = self.mcp.lock().unwrap();
-        let _ = fs::write(
-            self.data_dir.join("mcp_servers.json"),
-            serde_json::to_string_pretty(&*mcp).unwrap(),
-        );
+        // 先取 device_key(drop config lock)再 lock mcp，避免 config→mcp 反序死锁
+        let key = self.config.lock().unwrap().device_key.clone();
+        crate::securefile::write_secret_json(&self.data_dir, "mcp_servers.json", key, &*mcp);
     }
 }
 
