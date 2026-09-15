@@ -127,7 +127,7 @@ pub fn auto_step(ctx: &Arc<Ctx>) -> Option<String> {
 
     let ctx2 = ctx.clone();
     let bg_id = todo_id.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::task::spawn(async move {
         let res = spawn(&ctx2, None, &task, Some(&title)).await;
         match res {
             Ok(v) => {

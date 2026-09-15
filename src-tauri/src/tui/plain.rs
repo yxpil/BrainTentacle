@@ -38,7 +38,7 @@ pub fn run(ctx: Arc<Ctx>, app: tauri::AppHandle) -> ! {
 
     let inner_ctx = ctx.clone();
     let ver = app.package_info().version.clone();
-    tauri::async_runtime::block_on(async move {
+    crate::task::block_on(async move {
         let ctx = inner_ctx;
         use std::io::IsTerminal;
         let is_term = std::io::stdout().is_terminal();

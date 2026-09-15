@@ -5,7 +5,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
-use tauri::Manager;
 
 use crate::ai::AiConfig;
 use crate::audit::AuditEntry;
@@ -70,8 +69,28 @@ pub fn record_usage(ctx: &Arc<Ctx>, session: &str, usage: &crate::ai::TokenUsage
     e.clone()
 }
 
+/// 宿主注入的启动参数：数据目录 / 事件出口 / 宿主钩子 / 版本号 / 子进程与主程序路径。
+/// Tauri GUI、bit-cli（TUI/worker/guardian）、Electron napi 三种宿主各自构造
+pub struct LoadOpts {
+    pub data_dir: PathBuf,
+    pub emitter: Arc<dyn crate::emitter::UiEmitter>,
+    pub host: Arc<dyn crate::emitter::HostHooks>,
+    pub app_version: String,
+    pub worker_exe: Option<PathBuf>,
+    pub app_exe: Option<PathBuf>,
+}
+
 pub struct Ctx {
-    pub app: tauri::AppHandle,
+    /// UI 事件出口（Tauri webview / worker 转发 / TUI 无输出），经 emit() 统一走 emitter.rs
+    pub emitter: Arc<dyn crate::emitter::UiEmitter>,
+    /// 宿主能力钩子：托盘 / 热键 / 退出（只有桌面壳实现，核心逻辑不感知框架）
+    pub host: Arc<dyn crate::emitter::HostHooks>,
+    /// 应用版本号（宿主注入；替代 package_info()，napi/CLI 侧同样可给）
+    pub app_version: String,
+    /// worker 子进程可执行文件：None = current_exe()（单二进制形态）；Electron 形态指向 bit-cli sidecar
+    pub worker_exe: Option<PathBuf>,
+    /// 宿主主程序路径（guardian 布防校验对象）；None = current_exe()
+    pub app_exe: Option<PathBuf>,
     pub data_dir: PathBuf,
     pub config: Mutex<crate::config::Config>,
     pub ai_config: Mutex<AiConfig>,
@@ -110,9 +129,9 @@ pub struct Ctx {
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
     /// 审批请求自增 id
     pub approval_seq: AtomicU64,
-    pub server_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    pub server_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// 云中继客户端循环句柄（随远程服务启停）
-    pub relay_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    pub relay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// 远程端口被占用自动切换时的原端口（内存态；正常绑定即清空，前端启动时查询展示提示）
     pub port_switch: Mutex<Option<u16>>,
     /// 目标自动推进计数（goal_id → 已自动续跑轮数，防空转；目标完成后残留条目无害）
@@ -152,14 +171,31 @@ impl Ctx {
         d
     }
 
-    pub fn load(app: tauri::AppHandle) -> Arc<Ctx> {
-        // BIT_DATA_DIR：测试/E2E 用的数据目录覆盖（隔离环境验证默认配置），未设置走 Tauri 标准 app_data_dir
+    /// UI 事件统一出口：所有 ctx.app.emit / emit_ui 调用点的唯一替代。
+    /// 持有 Ctx 其他锁时不要调用（emitter 可能跨线程唤醒）；先 drop 锁再 emit
+    pub fn emit(&self, name: &str, payload: serde_json::Value) {
+        self.emitter.emit(name, payload);
+    }
+
+    /// worker 子进程可执行文件解析：显式注入优先，否则当前进程自身（单二进制形态）
+    pub fn worker_program(&self) -> PathBuf {
+        self.worker_exe
+            .clone()
+            .unwrap_or_else(|| std::env::current_exe().expect("current_exe"))
+    }
+
+    /// 宿主主程序路径解析（guardian 布防校验对象）
+    pub fn host_program(&self) -> PathBuf {
+        self.app_exe
+            .clone()
+            .unwrap_or_else(|| std::env::current_exe().expect("current_exe"))
+    }
+
+    pub fn load(opts: LoadOpts) -> Arc<Ctx> {
+        // BIT_DATA_DIR：测试/E2E 用的数据目录覆盖（隔离环境验证默认配置），未设置走宿主注入目录
         let data_dir = match std::env::var("BIT_DATA_DIR") {
             Ok(dir) if !dir.trim().is_empty() => std::path::PathBuf::from(dir),
-            _ => app
-                .path()
-                .app_data_dir()
-                .expect("failed to resolve app data dir"),
+            _ => opts.data_dir,
         };
         fs::create_dir_all(&data_dir).ok();
 
@@ -251,7 +287,11 @@ impl Ctx {
         let sessions_rev = crate::store::sessions_rev(&db);
 
         Arc::new(Ctx {
-            app,
+            emitter: opts.emitter,
+            host: opts.host,
+            app_version: opts.app_version,
+            worker_exe: opts.worker_exe,
+            app_exe: opts.app_exe,
             data_dir,
             config: Mutex::new(config),
             ai_config: Mutex::new(ai_config),
@@ -363,8 +403,7 @@ impl Ctx {
         self.db_put_json("tools", &*tools);
         drop(tools);
         // 热加载：通知前端工具清单已变化（AI 注册/更新/删除/启停工具后页面即时刷新）
-        use tauri::Emitter;
-        let _ = crate::worker::emit_ui(&self.app, "tools-updated", serde_json::json!({}));
+        self.emit("tools-updated", serde_json::json!({}));
         // worker 模式下宿主保存工具后同步通知 worker 重读磁盘
         crate::worker::notify_reload();
     }

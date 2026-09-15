@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::state::Ctx;
-use tauri::Emitter;
 
 /// 自动更新：检测（镜像 → GitHub API，BIT_FAKE_UPDATE_URL 测试注入在首位）
 /// → 启动后台静默下载 → 退出（托盘）或点击更新按钮时换装，
@@ -326,7 +325,7 @@ async fn stream_to_file(
             };
             last_bytes = downloaded;
             last_at = Instant::now();
-            let _ = ctx.app.emit(
+            ctx.emit(
                 "update-progress",
                 serde_json::json!({
                     "state": "downloading",
@@ -422,7 +421,7 @@ pub fn apply_update(ctx: &Arc<Ctx>, respawn: bool) -> Result<String, String> {
     // 防降级：暂存包版本不高于当前版本时拒装并清除暂存。
     // （曾发生过：退出时把数小时前的旧暂存包装回去，新功能整体蒸发）
     let staged = st["version"].as_str().unwrap_or("").to_string();
-    let cur = ctx.app.package_info().version.to_string();
+    let cur = ctx.app_version.clone();
     if ver_tuple(&staged) <= ver_tuple(&cur) {
         let _ = std::fs::remove_dir_all(upgrade_dir(ctx));
         return Err(format!(
@@ -530,7 +529,7 @@ fn find_app_dir(dir: &Path) -> Option<PathBuf> {
 
 /// 启动后台自动更新：延时后检测 → 有新版本即静默下载（一次），发 update-state 事件。
 /// 下载失败静默跳过（不打扰用户，pill 仍可手动点击打开下载页）。
-pub async fn auto_update_task(app: tauri::AppHandle, ctx: Arc<Ctx>) {
+pub async fn auto_update_task(ctx: Arc<Ctx>) {
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
     let latest = match fetch_latest().await {
         Ok(l) => l,
@@ -542,12 +541,12 @@ pub async fn auto_update_task(app: tauri::AppHandle, ctx: Arc<Ctx>) {
     // 同版本已下载过就不再下载
     if let Some(st) = read_state(&ctx) {
         if st["version"] == latest.version.as_str() && st["state"] == "downloaded" {
-            let _ = app.emit("update-state", st);
+            ctx.emit("update-state", st);
             return;
         }
     }
     if let Ok(status) = download_update(&ctx).await {
-        let _ = app.emit("update-state", status);
+        ctx.emit("update-state", status);
     }
 }
 

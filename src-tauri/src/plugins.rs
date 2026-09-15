@@ -393,7 +393,7 @@ async fn run_job(ctx: Arc<crate::state::Ctx>, pid: String, job: PluginJob) {
     let ctx2 = ctx.clone();
     let rt = runtime.clone();
     let code2 = code.clone();
-    let handle = tauri::async_runtime::spawn_blocking(move || {
+    let handle = crate::task::spawn_blocking(move || {
         crate::script_runtime::run(&ctx2, &rt, &code2, &serde_json::json!({}), timeout)
     });
     let out = tokio::time::timeout(std::time::Duration::from_secs(600), handle).await;
@@ -452,7 +452,7 @@ pub async fn scheduler(ctx: Arc<crate::state::Ctx>) {
                 let jc = ctx.clone();
                 let j = job.clone();
                 let pid = p.id.clone();
-                tauri::async_runtime::spawn(async move { run_job(jc, pid, j).await });
+                crate::task::spawn(async move { run_job(jc, pid, j).await });
             }
         }
         if dirty {

@@ -197,7 +197,6 @@ pub(crate) async fn request_approval(
         crate::audit::record(ctx, actor, "tool.approved", tool, json!({ "mode": "tui-auto" }), true);
         return Ok(());
     }
-    use tauri::Emitter;
     let id = format!("ap-{}", ctx.approval_seq.fetch_add(1, Ordering::Relaxed));
     let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
     ctx.approvals.lock().unwrap().insert(
@@ -209,7 +208,7 @@ pub(crate) async fn request_approval(
             created: std::time::Instant::now(),
         },
     );
-    let _ = ctx.app.emit(
+    ctx.emit(
         "tool-approval",
         json!({ "id": id, "tool": tool, "params": params }),
     );
@@ -370,7 +369,7 @@ pub async fn execute_tool_call(
             // 超时取 config.tool_timeout_secs（默认 120，上限 600），与自定义工具一致
             let timeout_secs = ctx.config.lock().unwrap().tool_timeout_secs.clamp(1, 600) as u64;
             let ctx_cloned = ctx.clone();
-            let handle = tauri::async_runtime::spawn_blocking(move || {
+            let handle = crate::task::spawn_blocking(move || {
                 crate::script_runtime::run(
                     &ctx_cloned,
                     &runtime,
@@ -483,8 +482,7 @@ fn extract_tool_image(ctx: &Arc<Ctx>, target: &str, result: &mut serde_json::Val
         }
     };
     // path：本地文件才有（data:URL 内嵌图没有），供前端"打开位置/另存为"直取源文件
-    crate::worker::emit_ui(
-        &ctx.app,
+    ctx.emit(
         "chat-image",
         json!({ "session": target, "data_url": data_url, "path": if img.starts_with("data:") { "" } else { img.as_str() } }),
     );
@@ -507,8 +505,7 @@ fn emit_preview_card(ctx: &Arc<Ctx>, target: &str, path: &str) {
         "svg" => "svg",
         _ => return,
     };
-    crate::worker::emit_ui(
-        &ctx.app,
+    ctx.emit(
         "file-preview",
         json!({ "session": target, "path": path, "kind": kind }),
     );
@@ -546,14 +543,12 @@ fn deliver_generated_media(ctx: &Arc<Ctx>, target: &str, media: &[(ai::TokenKind
             let path_str = path.to_string_lossy().to_string();
             if *kind == ai::TokenKind::Video {
                 // 视频 data URL 太大（几十 MB 会撑爆事件通道），只发路径，前端走 asset 协议
-                crate::worker::emit_ui(
-                    &ctx.app,
+                ctx.emit(
                     "chat-video",
                     json!({ "session": target, "path": path_str, "mime": mime }),
                 );
             } else {
-                crate::worker::emit_ui(
-                    &ctx.app,
+                ctx.emit(
                     "chat-image",
                     json!({ "session": target, "data_url": du, "path": path_str }),
                 );
@@ -588,8 +583,7 @@ fn deliver_svg_blocks(ctx: &Arc<Ctx>, target: &str, reply: &str) -> String {
                 "data:image/svg+xml;base64,{}",
                 base64::engine::general_purpose::STANDARD.encode(svg)
             );
-            crate::worker::emit_ui(
-                &ctx.app,
+            ctx.emit(
                 "chat-image",
                 json!({ "session": target, "data_url": data_url, "path": path.to_string_lossy() }),
             );
@@ -782,7 +776,6 @@ pub async fn chat_turn(
     user_input: &str,
     images: Vec<String>,
 ) -> Result<Vec<ChatMessage>, String> {
-    use tauri::Emitter;
     // 0) 同会话回合互斥：先抢锁后写历史，被拒绝的并发请求不落任何消息
     let target = if session_id.is_empty() {
         ctx.sessions.lock().unwrap().active.clone()
@@ -888,7 +881,7 @@ pub async fn chat_turn(
                     *round_thinking.lock().unwrap() = r.thinking;
                     // 记录本轮用量并推送缓存命中率统计
                     let payload = record_and_payload(ctx, &target, &r.usage);
-                    crate::worker::emit_ui(&ctx.app, "chat-usage", json!({ "session": target, "usage": payload }));
+                    ctx.emit("chat-usage", json!({ "session": target, "usage": payload }));
                     // 原生模式只认协议字段里的调用；正文 JSON 解析是兼容模式（文本约定）的专属职责
                     // 原生分支同样要提取回复里的 SVG 绘图：此前只有文本分支有，导致走原生
                     // function calling（如 DeepSeek）时模型输出的 SVG 不渲染、只显示代码
@@ -947,7 +940,7 @@ pub async fn chat_turn(
             };
             // 记录本轮用量并推送缓存命中率统计
             let payload = record_and_payload(ctx, &target, &usage);
-            let _ = crate::worker::emit_ui(&ctx.app, "chat-usage", json!({ "session": target, "usage": payload }));
+            ctx.emit("chat-usage", json!({ "session": target, "usage": payload }));
             // 模型生成媒体：落盘 + 推送对话 UI，回复追加落盘路径（模型后续可引用）
             let gen_note = deliver_generated_media(ctx, &target, &gen_media.lock().unwrap().drain(..).collect::<Vec<_>>());
             if !gen_note.is_empty() {
@@ -1192,11 +1185,11 @@ pub async fn chat_turn_stream(
     event_name: &str,
     images: Vec<String>,
 ) -> Result<Vec<ChatMessage>, String> {
-    use tauri::Emitter;
-    let app = ctx.app.clone();
     let ev = event_name.to_string();
+    // 闭包专用克隆：emit 闭包长活（跨越整个回合），不能把主 ctx 移进去
+    let emit_ctx = ctx.clone();
     let emit = move |payload: serde_json::Value| {
-        crate::worker::emit_ui(&app, &ev, payload);
+        emit_ctx.emit(&ev, payload);
     };
 
     // 0) 同会话回合互斥：先抢锁后写历史，被拒绝的并发请求不落任何消息；

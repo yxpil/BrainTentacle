@@ -172,7 +172,7 @@ pub fn run(ctx: Arc<Ctx>, app: tauri::AppHandle) -> ! {
     let (key_tx, mut key_rx) = tokio::sync::mpsc::unbounded_channel::<crossterm::event::KeyEvent>();
     spawn_key_thread(key_tx);
 
-    let result = tauri::async_runtime::block_on(async_main(ctx.clone(), app.clone(), &mut term, &mut key_rx));
+    let result = crate::task::block_on(async_main(ctx.clone(), app.clone(), &mut term, &mut key_rx));
 
     // drop guard 还原终端后再打印收尾/退出
     drop(term);
@@ -416,7 +416,7 @@ fn spawn_turn(
     out_tx: tokio::sync::mpsc::UnboundedSender<(MsgKind, String)>,
     done_tx: DoneTx,
 ) {
-    tauri::async_runtime::spawn(async move {
+    crate::task::spawn(async move {
         let out = Out::Chan(out_tx);
         let res = handle(&ctx, &line, &out).await;
         let _ = done_tx.send(res);

@@ -29,6 +29,7 @@ mod desktop_ctl {
     }
 }
 mod extract;
+mod emitter;
 mod goal;
 mod guardian;
 mod hidden_code;
@@ -56,6 +57,7 @@ mod securefile;
 mod session;
 mod state;
 mod syntax;
+mod task;
 mod toolenv;
 mod trace;
 mod tray;
@@ -77,6 +79,21 @@ fn graceful_quit(ctx: &tauri::AppHandle, via: &str) {
         let _ = crate::update::apply_update(&c, false);
     }
     ctx.exit(0);
+}
+
+/// Tauri 过渡期宿主钩子：把 Ctx::host 的抽象调用接到托盘/热键/退出实现上。
+/// M1 后归入 src-tauri 薄壳，Electron 侧由 TS 层另行实现 HostHooks
+struct TauriHostHooks(tauri::AppHandle);
+impl crate::emitter::HostHooks for TauriHostHooks {
+    fn refresh_tray(&self) {
+        crate::tray::refresh(&self.0);
+    }
+    fn register_hotkey(&self) -> Result<(), String> {
+        crate::tray::register_hotkey(&self.0)
+    }
+    fn exit_app(&self) {
+        graceful_quit(&self.0, "hook");
+    }
 }
 
 fn main() {
@@ -220,6 +237,10 @@ fn main() {
     }
     builder
         .setup(move |app| {
+            // 异步任务运行时：Tauri 的 async_runtime::handle() 返回自包装的 RuntimeHandle
+            // （拿不出原生 tokio Handle），故核心任务用独立 runtime（与 Tauri 的并存互不干扰）
+            crate::task::init_standalone();
+
             // ===== agent worker 子进程模式：无 UI，只跑对话引擎 / 工具执行 / 审批 / 后台 shell =====
             if worker_mode {
                 worker::IN_WORKER.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -229,7 +250,15 @@ fn main() {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.destroy(); // destroy 绕过 CloseRequested（否则只会 hide 驻留）
                 }
-                let ctx = state::Ctx::load(app.handle().clone());
+                // worker 的 UI 事件经 HostRelayEmitter（EV_TX → /host-event）转发回宿主
+                let ctx = state::Ctx::load(state::LoadOpts {
+                    data_dir: app.path().app_data_dir().expect("app data dir"),
+                    emitter: Arc::new(worker::HostRelayEmitter),
+                    host: Arc::new(emitter::NoopHost),
+                    app_version: app.package_info().version.to_string(),
+                    worker_exe: None,
+                    app_exe: None,
+                });
                 crash::install(&ctx.data_dir);
                 trace::init(&ctx.data_dir);
                 // 后台 shell 续跑 worker：shell 工具在 worker 进程内执行，作业登记在本进程，
@@ -239,7 +268,7 @@ fn main() {
                 crate::shellbg::init(&ctx);
                 audit::record(&ctx, "host", "worker.start", "agent-worker", serde_json::json!({}), true);
                 let wctx = ctx.clone();
-                tauri::async_runtime::spawn(async move {
+                crate::task::spawn(async move {
                     if let Err(e) = worker::serve(wctx.clone()).await {
                         // 服务致命错误（绑定失败等）：退出码 3，宿主监督循环检测到后重拉
                         audit::record(&wctx, "host", "worker.serve_error", "agent-worker", serde_json::json!({ "error": e }), false);
@@ -251,7 +280,27 @@ fn main() {
 
             // ─── 板块 [3b]：桌面端正常启动链（GUI 宿主）── 以下到 setup 结束按顺序执行 ───
             // 顺序敏感：窗口先建（用户尽快看到 UI），重活全部丢后台（白屏修复的核心原则）。
-            let ctx = state::Ctx::load(app.handle().clone());
+            // TUI 无窗口无托盘：Noop emitter/host（事件静默，托盘/热键钩子空实现）
+            let (ui_emitter, host_hooks): (
+                Arc<dyn emitter::UiEmitter>,
+                Arc<dyn emitter::HostHooks>,
+            ) = if tui_mode {
+                (Arc::new(emitter::NoopEmitter), Arc::new(emitter::NoopHost))
+            } else {
+                let h = app.handle().clone();
+                (
+                    Arc::new(emitter::TauriEmitter(h.clone())),
+                    Arc::new(TauriHostHooks(h)),
+                )
+            };
+            let ctx = state::Ctx::load(state::LoadOpts {
+                data_dir: app.path().app_data_dir().expect("app data dir"),
+                emitter: ui_emitter,
+                host: host_hooks,
+                app_version: app.package_info().version.to_string(),
+                worker_exe: None,
+                app_exe: None,
+            });
             // 全局 panic 钩子：崩溃信息（含回溯）追加到数据目录 crash.log，诊断报告展示
             crash::install(&ctx.data_dir);
             let (actor, target) = if tui_mode { ("local-cli", "tui") } else { ("local-app", "BIT") };
@@ -360,12 +409,12 @@ fn main() {
             let _g = trace::Span::new("guardian", "drain_log+arm+watchdog");
             guardian::drain_log(&ctx);
             guardian::arm(&ctx);
-            tauri::async_runtime::spawn(guardian::watchdog_task(ctx.clone()));
+            crate::task::spawn(guardian::watchdog_task(ctx.clone()));
 
             // BIT toolhomes：建目录 + 缺 python venv 时后台补建（静默失败，不阻塞启动）
             {
                 let te_ctx = ctx.clone();
-                tauri::async_runtime::spawn_blocking(move || {
+                crate::task::spawn_blocking(move || {
                     // 插件同步必须先于 venv 创建：venv 要跑几十秒的 python -m venv，
                     // 串在前面会把插件注册推迟一分钟（期间模型看不到插件工具/记忆）
                     crate::plugins::sync(&te_ctx);
@@ -376,18 +425,16 @@ fn main() {
             // 插件定时任务调度循环（每 30 秒检查一次到期任务）
             {
                 let pl_ctx = ctx.clone();
-                tauri::async_runtime::spawn(async move {
+                crate::task::spawn(async move {
                     crate::plugins::scheduler(pl_ctx).await;
                 });
             }
 
             // 解释器探测移到后台：不阻塞窗口显示（修复启动慢/白屏）
             let rt_ctx = ctx.clone();
-            let rt_app = app.handle().clone();
-            tauri::async_runtime::spawn_blocking(move || {
+            crate::task::spawn_blocking(move || {
                 if rt_ctx.refresh_runtimes() {
-                    use tauri::Emitter;
-                    let _ = rt_app.emit("runtimes-updated", ());
+                    rt_ctx.emit("runtimes-updated", serde_json::json!({}));
                 }
             });
 
@@ -410,7 +457,7 @@ fn main() {
 
             // 远程访问 HTTP 服务
             let http_ctx = ctx.clone();
-            tauri::async_runtime::spawn(async move {
+            crate::task::spawn(async move {
                 if let Err(e) = http_api::restart_server(&http_ctx).await {
                     eprintln!("[BIT] http server error: {e}");
                 }
@@ -418,7 +465,7 @@ fn main() {
 
             // 后台拉取激活提供方的模型列表：尽量获取各模型最大上下文（写入 model_context 缓存，失败静默）
             let mf_ctx = ctx.clone();
-            tauri::async_runtime::spawn(async move {
+            crate::task::spawn(async move {
                 let p = mf_ctx.ai_config.lock().unwrap().active().cloned();
                 if let Some(p) = p {
                     commands::refresh_model_context(&mf_ctx, &p.protocol, &p.base_url, &p.api_key).await;
@@ -427,15 +474,14 @@ fn main() {
 
             // Autopilot：记忆/技能自动总结循环（小圆片播放/暂停）
             let auto_ctx = ctx.clone();
-            tauri::async_runtime::spawn(async move {
+            crate::task::spawn(async move {
                 autopilot::run(auto_ctx).await;
             });
 
             // 自动更新：启动后静默检测 + 下载（下载完成发 update-state 事件）
             let upd_ctx = ctx.clone();
-            let upd_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                update::auto_update_task(upd_app, upd_ctx).await;
+            crate::task::spawn(async move {
+                update::auto_update_task(upd_ctx).await;
             });
 
             Ok(())

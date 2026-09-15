@@ -251,7 +251,7 @@ pub async fn discover(host: &str, start: u16, end: u16) -> Result<Vec<Discovered
         .into_iter()
         .map(|p| {
             let host = host.to_string();
-            tauri::async_runtime::spawn(async move { probe_port(&host, p).await })
+            crate::task::spawn(async move { probe_port(&host, p).await })
         })
         .collect();
     let mut found = Vec::new();
@@ -497,7 +497,7 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
 
         // 写任务（stdin）：从 mpsc 通道收 Vec<u8>，写 JSON-RPC 行
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             use tokio::io::AsyncWriteExt;
             let mut stdin = stdin;
             while let Some(line) = writer_rx.recv().await {
@@ -513,7 +513,7 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
             Arc::new(StdMutex::new(HashMap::new()));
         let pending_reader = pending.clone();
         let server_id_for_reader = id.clone();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             use tokio::io::{AsyncBufReadExt, BufReader};
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
@@ -790,11 +790,11 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let hits: Arc<StdMutex<HashMap<String, usize>>> = Arc::new(StdMutex::new(HashMap::new()));
         let hits_cloned = hits.clone();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { break };
                 let hits = hits_cloned.clone();
-                tauri::async_runtime::spawn(async move {
+                crate::task::spawn(async move {
                     // 读请求头
                     let mut buf = Vec::new();
                     let mut chunk = [0u8; 4096];
@@ -948,10 +948,10 @@ mod tests {
         // 普通 HTTP 服务（无 JSON-RPC）不应被识别为 MCP 服务器
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { break };
-                tauri::async_runtime::spawn(async move {
+                crate::task::spawn(async move {
                     let mut buf = [0u8; 2048];
                     let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
                     let body = "<html>hello</html>";

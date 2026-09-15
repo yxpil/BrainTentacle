@@ -3217,12 +3217,12 @@ mod native_tests {
         let queue = Arc::new(StdMutex::new(responses));
         let bodies: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
         let bodies_cloned = bodies.clone();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { break };
                 let queue = queue.clone();
                 let bodies = bodies_cloned.clone();
-                tauri::async_runtime::spawn(async move {
+                crate::task::spawn(async move {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     let mut buf = Vec::new();
                     let mut chunk = [0u8; 4096];
@@ -3283,7 +3283,7 @@ mod native_tests {
         let addr = listener.local_addr().unwrap();
         let got_body = Arc::new(StdMutex::new(String::new()));
         let gb = got_body.clone();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let Ok((mut sock, _)) = listener.accept().await else { return };
             let mut buf = vec![0u8; 65536];
@@ -3470,7 +3470,7 @@ mod native_tests {
     async fn spawn_sse_server(chunks: Vec<&'static str>, delay_ms: u64) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let Ok((mut sock, _)) = listener.accept().await else { return };
             let mut buf = vec![0u8; 16384];
@@ -3521,7 +3521,7 @@ mod native_tests {
         // 思考过程提取：reasoning_content 增量 → TokenKind::Think（不混入正文），content 增量 → TokenKind::Text
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let Ok((mut sock, _)) = listener.accept().await else { return };
             let mut buf = vec![0u8; 16384];
@@ -3569,7 +3569,7 @@ mod native_tests {
     async fn spawn_raw_sse(frames: Vec<String>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let Ok((mut sock, _)) = listener.accept().await else { return };
             let mut buf = vec![0u8; 16384];

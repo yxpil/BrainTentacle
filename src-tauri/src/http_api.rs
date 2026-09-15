@@ -10,7 +10,6 @@ use axum::Router;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tauri::Emitter;
 
 /// 启动/重启远程访问 HTTP 服务
 pub async fn restart_server(ctx: &Arc<Ctx>) -> Result<String, String> {
@@ -75,8 +74,8 @@ pub async fn restart_server(ctx: &Arc<Ctx>) -> Result<String, String> {
             ctx.save_config();
             *ctx.port_switch.lock().unwrap() = Some(wanted_port);
             crate::audit::record(ctx, "local-user", "remote.port_switch", "config", json!({ "from": wanted_port, "to": new_port }), true);
-            let _ = ctx.app.emit("remote-port-switched", json!({ "from": wanted_port, "to": new_port, "addr": new_addr }));
-            let _ = crate::tray::refresh(&ctx.app);
+            ctx.emit("remote-port-switched", json!({ "from": wanted_port, "to": new_port, "addr": new_addr }));
+            ctx.host.refresh_tray();
             eprintln!("[BIT] port {wanted_port} in use, switched to {new_port}");
             listener
         }
@@ -89,7 +88,7 @@ pub async fn restart_server(ctx: &Arc<Ctx>) -> Result<String, String> {
         .map_err(|e| format!("获取监听端口失败: {e}"))?
         .port();
     let router = build_router(ctx.clone());
-    let task = tauri::async_runtime::spawn(async move {
+    let task = crate::task::spawn(async move {
         // with_connect_info：让 handler 能取到客户端 IP（对话限速按 IP 分桶）
         if let Err(e) = axum::serve(
             listener,
@@ -109,7 +108,7 @@ pub async fn restart_server(ctx: &Arc<Ctx>) -> Result<String, String> {
     // 云中继客户端：与 HTTP 服务同生命周期；内部动态读配置，未配置中继时不产生外联
     {
         let relay_ctx = ctx.clone();
-        let relay_loop = tauri::async_runtime::spawn(async move { crate::relay::run_loop(relay_ctx).await });
+        let relay_loop = crate::task::spawn(async move { crate::relay::run_loop(relay_ctx).await });
         *ctx.relay_task.lock().unwrap() = Some(relay_loop);
     }
     Ok(crate::config::join_host_port(&cfg.host, bound_port))
@@ -1207,7 +1206,7 @@ async fn debug_quit(State(ctx): State<Arc<Ctx>>) -> Response {
         std::thread::sleep(std::time::Duration::from_millis(1500));
         std::process::exit(0);
     });
-    ctx.app.exit(0);
+    ctx.host.exit_app();
     Json(json!({ "quitting": true })).into_response()
 }
 
@@ -1738,7 +1737,7 @@ async fn openai_chat_completions(
         let ctx2 = ctx.clone();
         let actor2 = actor.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Event, std::convert::Infallible>>();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             let send_chunk = |delta: serde_json::Value, finish: Option<&str>| {
                 let _ = tx.send(Ok(Event::default().data(
                     json!({

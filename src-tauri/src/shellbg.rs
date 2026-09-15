@@ -279,7 +279,6 @@ pub(crate) fn ps_semantic_warning(command: &str) -> Option<String> {
 }
 
 fn emit(ctx: &Arc<crate::state::Ctx>, phase: &str, job: &ShellJob, extra: Option<serde_json::Value>) {
-    use tauri::Emitter;
     let mut payload = json!({
         "phase": phase,
         "job_id": job.id,
@@ -295,7 +294,7 @@ fn emit(ctx: &Arc<crate::state::Ctx>, phase: &str, job: &ShellJob, extra: Option
             obj.insert(k.clone(), v.clone());
         }
     }
-    let _ = crate::worker::emit_ui(&ctx.app, "shell-job", payload);
+    ctx.emit("shell-job", payload);
 }
 
 /// shell 工具入口：短命令照旧秒回；超过前台窗口的命令转后台（含登记 + 事件 + 自动唤回）。
@@ -451,7 +450,7 @@ pub async fn run(
     );
     let c2 = ctx.clone();
     let j2 = job.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::task::spawn(async move {
         finish(c2, j2).await;
     });
     let mut bg_result = json!({
@@ -594,10 +593,10 @@ async fn finish(ctx: Arc<crate::state::Ctx>, job: Arc<ShellJob>) {
 
     // 独立 spawn 两个读任务（不用闭包——Rust 闭包单态化不能同时接受 ChildStdout / ChildStderr）
     // 命令刚 spawn 完 pipe 一定是 Some，直接 unwrap
-    let so_task = tauri::async_runtime::spawn(read_pipe(
+    let so_task = crate::task::spawn(read_pipe(
         so_pipe.unwrap(), "out", ctx.clone(), jid.clone(), jstart, job.logs.clone(),
     ));
-    let se_task = tauri::async_runtime::spawn(read_pipe(
+    let se_task = crate::task::spawn(read_pipe(
         se_pipe.unwrap(), "err", ctx.clone(), jid.clone(), jstart, job.logs.clone(),
     ));
 
@@ -703,7 +702,6 @@ pub fn notify_session_result(
 /// 后台命令结束 → 唤回所属会话的 AI：
 /// 会话空闲则自动开一个新回合处理结果；会话忙则先把结果注入历史，等下一次上下文自然读到。
 async fn resume(ctx: &Arc<crate::state::Ctx>, msg: &JobDone) {
-    use tauri::Emitter;
     let sid = &msg.session;
     if crate::agent::interrupted(ctx, sid) {
         return; // 会话已被中断，不自动续跑
@@ -763,7 +761,7 @@ async fn resume(ctx: &Arc<crate::state::Ctx>, msg: &JobDone) {
         return;
     }
     let _ = crate::engine::chat_auto(ctx, sid, &body, Vec::new()).await;
-    let _ = crate::worker::emit_ui(&ctx.app, "sessions-updated", json!(sid));
+    ctx.emit("sessions-updated", json!(sid));
 }
 
 /// 启动后台 shell 的顶层续跑 worker（进程 setup 时调用一次）：
@@ -772,7 +770,7 @@ pub fn init(ctx: &Arc<crate::state::Ctx>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<JobDone>();
     let _ = DONE_TX.set(tx);
     let c = ctx.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
             resume(&c, &msg).await;
         }
@@ -781,7 +779,6 @@ pub fn init(ctx: &Arc<crate::state::Ctx>) {
 
 /// 把后台任务结果作为一条 role=user 的系统说明消息注入会话历史（前端会特殊渲染 [后台任务] 前缀）
 fn push_system_user(ctx: &Arc<crate::state::Ctx>, sid: &str, body: &str) {
-    use tauri::Emitter;
     {
         let mut store = ctx.sessions.lock().unwrap();
         if let Some(sess) = store.get_mut(sid) {
@@ -794,7 +791,7 @@ fn push_system_user(ctx: &Arc<crate::state::Ctx>, sid: &str, body: &str) {
         }
     }
     crate::session::persist(ctx);
-    let _ = crate::worker::emit_ui(&ctx.app, "sessions-updated", json!(sid));
+    ctx.emit("sessions-updated", json!(sid));
 }
 
 /// read_pipe: 单个 pipe（stdout/stderr）的读取循环——BufReader + read_until 按行切字节，
@@ -871,7 +868,7 @@ fn flush_log_batch(ctx: &Arc<crate::state::Ctx>, job_id: &str, pending: &mut Vec
         "added": batch.len(),
         "lines": batch,
     });
-    let _ = crate::worker::emit_ui(&ctx.app, "shell-job-log", payload);
+    ctx.emit("shell-job-log", payload);
 }
 
 /// 用户 / UI 停止一个后台命令：通知其等待任务 kill 进程，事件 killed 会在片刻后广播

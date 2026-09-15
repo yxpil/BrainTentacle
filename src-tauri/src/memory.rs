@@ -86,7 +86,7 @@ fn persist(ctx: &Arc<crate::state::Ctx>) {
 fn persist_deferred(ctx: &Arc<crate::state::Ctx>) {
     PERSIST_QUEUED.store(true, Ordering::SeqCst);
     let c = ctx.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::task::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         if PERSIST_QUEUED.swap(false, Ordering::SeqCst) {
             persist(&c);

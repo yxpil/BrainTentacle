@@ -305,7 +305,7 @@ pub async fn run_script(
     let ctx2 = ctx.clone();
     // 超时取 config.tool_timeout_secs（默认 120，上限 600），与自定义工具一致
     let timeout_secs = ctx.config.lock().unwrap().tool_timeout_secs.clamp(1, 600) as u64;
-    let handle = tauri::async_runtime::spawn_blocking(move || {
+    let handle = crate::task::spawn_blocking(move || {
         crate::script_runtime::run(&ctx2, &runtime2, &code2, &params, std::time::Duration::from_secs(timeout_secs))
     });
     let result = match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs + 5), handle).await {
@@ -391,7 +391,7 @@ pub async fn save_remote_config(
     crate::audit::record(&ctx, "local-user", "remote.save", "config", json!({ "revision": ctx.config.lock().unwrap().revision }), true);
     let addr = crate::http_api::restart_server(&ctx).await?;
     // 远程地址变化，同步托盘菜单显示
-    crate::tray::refresh(&ctx.app);
+    ctx.host.refresh_tray();
     Ok(json!({ "addr": addr }))
 }
 
@@ -761,13 +761,13 @@ pub fn set_hotkey(state: State<'_, Arc<Ctx>>, hotkey: String) -> Result<serde_js
         let mut cfg = ctx.config.lock().unwrap();
         cfg.hotkey_show = new_key.clone();
     }
-    if let Err(e) = crate::tray::register_hotkey(&ctx.app) {
+    if let Err(e) = ctx.host.register_hotkey() {
         // 注册失败：回滚旧热键并恢复注册，向前端返回冲突原因
         {
             let mut cfg = ctx.config.lock().unwrap();
             cfg.hotkey_show = old_key;
         }
-        let _ = crate::tray::register_hotkey(&ctx.app);
+        let _ = ctx.host.register_hotkey();
         return Err(format!("快捷键注册失败（可能已被其他应用占用或格式非法）：{e}"));
     }
     ctx.save_config();
@@ -1286,7 +1286,7 @@ pub fn set_provider_active(
     if active {
         let rf = ctx.clone();
         let rid = id.clone();
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             let p = rf.ai_config.lock().unwrap().providers.iter().find(|p| p.id == rid).cloned();
             if let Some(p) = p {
                 refresh_model_context(&rf, &p.protocol, &p.base_url, &p.api_key).await;
@@ -1808,7 +1808,7 @@ pub async fn context_metrics(state: State<'_, Arc<Ctx>>, session_id: String) -> 
 #[tauri::command]
 pub async fn extract_file(filename: String, data: String) -> Result<serde_json::Value, String> {
     // 解析可能较重，放到阻塞线程
-    let handle = tauri::async_runtime::spawn_blocking(move || crate::extract::extract(&filename, &data));
+    let handle = crate::task::spawn_blocking(move || crate::extract::extract(&filename, &data));
     let text = handle.await.map_err(|e| format!("解析任务失败: {e}"))??;
     Ok(json!({ "text": text }))
 }
@@ -2320,7 +2320,7 @@ pub fn toggle_autopilot(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
         true,
     );
     // 通知各窗口刷新小圆钮状态（App 侧另有 overview 轮询兜底）
-    let _ = ctx.app.emit("autopilot-changed", next);
+    ctx.emit("autopilot-changed", json!(next));
     json!({ "running": next })
 }
 
@@ -2421,7 +2421,7 @@ pub fn quit_app(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String>
         std::thread::sleep(std::time::Duration::from_millis(1500));
         std::process::exit(0);
     });
-    ctx.app.exit(0);
+    ctx.host.exit_app();
     Ok(json!({ "quit": true }))
 }
 
@@ -2861,7 +2861,7 @@ pub async fn set_elevation(app: tauri::AppHandle, state: State<'_, Arc<Ctx>>, en
             // 正常重启交接：通知守护进程不要按意外死亡接力，新实例会重新布防
             crate::guardian::expect_exit(&c);
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            app.exit(0);
+            c.host.exit_app();
             #[allow(unreachable_code)]
             Ok(json!({ "active": enabled, "enabled": enabled }))
         }
@@ -3181,14 +3181,12 @@ pub fn version_gt(a: &str, b: &str) -> bool {
 /// 自动更新检测：镜像 latest.json（GitHub Pages → osbt.space，国内直连可达），回退 GitHub API。
 /// BIT_FAKE_UPDATE_URL 环境变量可将检测源替换为测试注入的地址（e2e 用）。
 #[tauri::command]
-pub async fn check_updates(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
-    let current = app.package_info().version.to_string();
+pub async fn check_updates(state: State<'_, Arc<Ctx>>) -> Result<UpdateInfo, String> {
+    let app = ctx(state);
+    let current = app.app_version.clone();
     let latest = crate::update::fetch_latest().await?;
     let has_update = version_gt(&latest.version, &current);
-    let downloaded = app
-        .try_state::<Arc<Ctx>>()
-        .map(|s| crate::update::read_state(&s))
-        .unwrap_or(None)
+    let downloaded = crate::update::read_state(&app)
         .is_some_and(|st| {
             st["version"] == latest.version.as_str() && st["state"] == "downloaded"
         });
@@ -3204,10 +3202,10 @@ pub async fn check_updates(app: tauri::AppHandle) -> Result<UpdateInfo, String> 
 
 /// 手动触发下载当前平台更新包（启动后台任务会自动下；此处供 pill/远程 API 主动调用）
 #[tauri::command]
-pub async fn update_download(app: tauri::AppHandle, state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+pub async fn update_download(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
     let status = crate::update::download_update(&ctx).await?;
-    let _ = app.emit("update-state", status.clone());
+    ctx.emit("update-state", status.clone());
     Ok(status)
 }
 
@@ -3216,7 +3214,7 @@ pub async fn update_download(app: tauri::AppHandle, state: State<'_, Arc<Ctx>>) 
 pub async fn update_apply(app: tauri::AppHandle, state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
     let msg = crate::update::apply_update(&ctx, true)?;
-    let _ = app.emit("update-applied", serde_json::json!({ "msg": msg }));
+    ctx.emit("update-applied", serde_json::json!({ "msg": msg }));
     // 更新换装属正常重启：先通知守护进程不要按旧哈希接力，避免误报篡改
     crate::guardian::expect_exit(&ctx);
     // 给事件一点送达时间后重启进程（macOS/Linux 已换装；Windows 安装器静默跑）

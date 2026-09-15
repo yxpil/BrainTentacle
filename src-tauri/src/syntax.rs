@@ -132,8 +132,7 @@ pub fn annotate(
             )),
         );
     }
-    crate::worker::emit_ui(
-        &ctx.app,
+    ctx.emit(
         "syntax-warning",
         json!({ "session": session, "path": path, "error": err }),
     );

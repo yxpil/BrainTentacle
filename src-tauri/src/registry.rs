@@ -572,7 +572,6 @@ fn emit_subagent(
     depth: usize,
     extra: Option<serde_json::Value>,
 ) {
-    use tauri::Emitter;
     let mut payload = serde_json::json!({
         "phase": phase,
         "session_id": sid,
@@ -588,7 +587,7 @@ fn emit_subagent(
             obj.insert(k.clone(), v.clone());
         }
     }
-    crate::worker::emit_ui(&ctx.app, "subagent-lifecycle", payload);
+    ctx.emit("subagent-lifecycle", payload);
 }
 
 /// 停止一个在跑的子代理：对子会话的中断标志置位，其 agent 回合在下一个检查点停止。
@@ -749,7 +748,7 @@ pub async fn invoke(
             // 在阻塞线程池中执行 Rhai 沙盒脚本，整体限时 30 秒
             let code = code.clone();
             let params_owned = params.clone();
-            let handle = tauri::async_runtime::spawn_blocking(move || {
+            let handle = crate::task::spawn_blocking(move || {
                 crate::script::run(&code, params_owned)
             });
             match tokio::time::timeout(std::time::Duration::from_secs(30), handle).await {
@@ -766,7 +765,7 @@ pub async fn invoke(
             let runtime = runtime.clone();
             let code = code.clone();
             let params_owned = params.clone();
-            let handle = tauri::async_runtime::spawn_blocking(move || {
+            let handle = crate::task::spawn_blocking(move || {
                 crate::script_runtime::run(
                     &ctx_cloned,
                     &runtime,
@@ -1076,8 +1075,7 @@ async fn builtin_invoke(
             let path = dir.join(format!("diag_{ts}.mmd"));
             let _ = std::fs::write(&path, code);
             let path_str = path.to_string_lossy().to_string();
-            crate::worker::emit_ui(
-                &ctx.app,
+            ctx.emit(
                 "chat-mermaid",
                 serde_json::json!({ "session": session, "code": code, "title": title, "path": path_str }),
             );
@@ -1379,11 +1377,8 @@ async fn builtin_invoke(
             let task_preview = safe_trunc(&task, 240);
             let spawn_extra = Some(serde_json::json!({ "task": task_preview }));
             emit_subagent(ctx, "spawn", &sid, parent.as_deref(), &title, depth, spawn_extra.clone());
-            {
-                use tauri::Emitter;
-                let _ = crate::worker::emit_ui(&ctx.app, "sessions-updated", serde_json::json!(sid));
-            }
-            emit_subagent(ctx, "start", &sid, parent.as_deref(), &title, depth, spawn_extra);
+            ctx.emit("sessions-updated", serde_json::json!(sid));
+        emit_subagent(ctx, "start", &sid, parent.as_deref(), &title, depth, spawn_extra);
             // 阻塞执行子任务：完整复用 agent 循环（工具、审批、自动续发全部生效）。
             // Box::pin：builtin_invoke → chat_turn → execute_tool_call → builtin_invoke 递归，需手动打断无限大小
             let mut run = Box::pin(crate::engine::chat(ctx, &sid, &task, Vec::new()));
@@ -1474,10 +1469,7 @@ async fn builtin_invoke(
                 depth,
                 Some(extra),
             );
-            {
-                use tauri::Emitter;
-                let _ = crate::worker::emit_ui(&ctx.app, "sessions-updated", serde_json::json!(sid));
-            }
+            ctx.emit("sessions-updated", serde_json::json!(sid));
             unregister_sub_session(&sid);
             outcome
         }
@@ -1548,8 +1540,7 @@ async fn builtin_invoke(
             };
             if dropped > 0 {
                 crate::session::persist(ctx);
-                use tauri::Emitter;
-                let _ = crate::worker::emit_ui(&ctx.app, "sessions-updated", serde_json::json!(sid));
+                ctx.emit("sessions-updated", serde_json::json!(sid));
             }
             Ok(serde_json::json!({ "truncated": true, "dropped": dropped, "kept": kept }))
         }
@@ -1582,8 +1573,7 @@ async fn builtin_invoke(
                 (dropped, keep_tail + 1)
             };
             crate::session::persist(ctx);
-            use tauri::Emitter;
-            let _ = crate::worker::emit_ui(&ctx.app, "sessions-updated", serde_json::json!(sid));
+            ctx.emit("sessions-updated", serde_json::json!(sid));
             Ok(serde_json::json!({ "compacted": true, "dropped": dropped, "kept": kept }))
         }
         // ── 6. SKILL：写入 / 搜索技能 ──

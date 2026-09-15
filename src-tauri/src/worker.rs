@@ -86,27 +86,25 @@ pub fn active() -> bool {
 }
 
 // ============================================================================================
-// UI 事件发射（双进程统一入口）：宿主进程直发 webview；worker 进程转发给宿主代发。
-// agent / registry / shellbg / state 里的 ctx.app.emit 一律改走这里。
+// UI 事件发射（双进程统一出口）：挂在 Ctx.emitter 上（见 emitter.rs）。
+// 宿主进程 = TauriEmitter（直发 webview）；worker 进程 = HostRelayEmitter（EV_TX → /host-event）。
 // ============================================================================================
-pub fn emit_ui(app: &tauri::AppHandle, name: &str, payload: serde_json::Value) {
-    if IN_WORKER.load(Ordering::Relaxed) {
+
+/// worker 进程的 UI 事件出口：推入 EV_TX 转发通道（单消费者保序），
+/// 并更新 LAST_EMIT（宿主卡死检测数据源）。宿主进程不装载此实现
+pub struct HostRelayEmitter;
+impl crate::emitter::UiEmitter for HostRelayEmitter {
+    fn emit(&self, name: &str, payload: serde_json::Value) {
         *LAST_EMIT.lock().unwrap() = Some(std::time::Instant::now());
         if let Some(tx) = EV_TX.get() {
             let _ = tx.send((name.to_string(), payload));
         }
-    } else {
-        use tauri::Emitter;
-        let _ = app.emit(name, payload);
     }
 }
 
 /// 宿主侧：worker 起来/回退/重启后通知前端
 fn emit_worker_state(ctx: &Arc<Ctx>, state: &str, detail: serde_json::Value) {
-    use tauri::Emitter;
-    let _ = ctx
-        .app
-        .emit("agent-worker", json!({ "state": state, "detail": detail }));
+    ctx.emit("agent-worker", json!({ "state": state, "detail": detail }));
 }
 
 // ============================================================================================
@@ -116,7 +114,7 @@ fn emit_worker_state(ctx: &Arc<Ctx>, state: &str, detail: serde_json::Value) {
 /// 宿主启动时调用（仅桌面主进程）：起事件接收器 + 监督循环
 pub fn boot_host(ctx: &Arc<Ctx>) {
     let c = ctx.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::task::spawn(async move {
         match start_event_sink(&c).await {
             Ok(url) => {
                 EVENT_SINK_URL.set(url).ok();
@@ -142,10 +140,8 @@ async fn start_event_sink(ctx: &Arc<Ctx>) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?.to_string();
     let token_str = crate::worker::token().to_string();
-    let app = ctx.app.clone();
 
     struct EventSinkState {
-        app: tauri::AppHandle,
         token: String,
         ctx: Arc<Ctx>,
     }
@@ -182,12 +178,11 @@ async fn start_event_sink(ctx: &Arc<Ctx>) -> Result<String, String> {
             }
             return StatusCode::OK;
         }
-        use tauri::Emitter;
-        let _ = s.app.emit(name, payload);
+        s.ctx.emit(name, payload);
         StatusCode::OK
     }
 
-    let sink_state = Arc::new(EventSinkState { app, token: token_str, ctx: ctx.clone() });
+    let sink_state = Arc::new(EventSinkState { token: token_str, ctx: ctx.clone() });
     let router = Router::new()
         .route("/host-event", post(receive))
         .with_state(sink_state);
@@ -400,7 +395,7 @@ pub fn notify_reload() {
     if IN_WORKER.load(Ordering::Relaxed) || !active() {
         return;
     }
-    tauri::async_runtime::spawn(async move {
+    crate::task::spawn(async move {
         let _ = post_worker("/w/reload", json!({})).await;
     });
 }
@@ -466,7 +461,7 @@ pub async fn serve(ctx: Arc<Ctx>) -> Result<(), String> {
     }
     // 宿主退出检测：宿主 PID 消失后自杀，防孤儿泄漏
     if let Ok(pid) = std::env::var("BIT_HOST_PID") {
-        tauri::async_runtime::spawn(async move {
+        crate::task::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 if !host_alive(&pid) {
