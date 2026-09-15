@@ -156,12 +156,18 @@ jobs:
       # 打包后冒烟：隔离数据目录无头启动，audit.json 出现 ui.mounted 才放行（防黑屏包）
       - name: 冒烟测试
         shell: pwsh
-        run: node e2e/smoke-ui.cjs release/win-unpacked/BIT.exe 120
+        run: |
+          # x64 → win-unpacked；arm64 → win-arm64-unpacked（electron-builder 命名差异）
+          $exe = (Get-ChildItem "release/win*-unpacked/BIT.exe" | Select-Object -First 1).FullName
+          if (-not $exe) { Write-Error "BIT.exe not found under release/win*-unpacked"; exit 1 }
+          Write-Host "smoke target: $exe"
+          node e2e/smoke-ui.cjs $exe 120
       - name: 便携版 zip
         shell: pwsh
         run: |
           $VERSION = "$env:TAG".TrimStart('v')
-          Compress-Archive -Path release/win-unpacked/* -DestinationPath "release/BIT_${VERSION}_$env:ARCH-portable.zip" -Force
+          $dir = (Get-ChildItem "release/win*-unpacked" -Directory | Select-Object -First 1).FullName
+          Compress-Archive -Path "$dir/*" -DestinationPath "release/BIT_${VERSION}_$env:ARCH-portable.zip" -Force
           if (-not (Test-Path "release/BIT_${VERSION}_$env:ARCH-portable.zip")) { exit 1 }
         env:
           ARCH: ${{ matrix.arch }}
@@ -218,8 +224,10 @@ jobs:
       # 打包后冒烟：隔离数据目录无头启动，audit.json 出现 ui.mounted 才放行（防黑屏包）
       - name: 冒烟测试
         run: |
-          # linux-unpacked 主程序名随 productName 消毒规则变化（BIT/bit），按可执行文件探测
-          BIN=$(find release/linux-unpacked -maxdepth 1 -type f -executable ! -name '*.so*' | head -1)
+          # 主程序名随 productName 消毒规则变化（bit/BIT）；必须排除 chrome-sandbox（setuid 可执行）与 .so
+          BIN=""
+          for c in bit BIT; do [ -x "release/linux-unpacked/$c" ] && BIN="release/linux-unpacked/$c" && break; done
+          [ -z "$BIN" ] && BIN=$(find release/linux-unpacked -maxdepth 1 -type f -executable ! -name 'chrome-sandbox' ! -name '*.so*' | head -1)
           echo "smoke target: $BIN"
           xvfb-run -a node e2e/smoke-ui.cjs "$BIN" 120
       - name: 上传到 Release
