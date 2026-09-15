@@ -8,6 +8,8 @@ src-tauri/gen/
 .DS_Store
 Thumbs.db
 *.log
+# 本地产物：AI 规划文档目录，不入库
+.trae/
 
 # 临时文件（提交信息/发布说明/构建检查）
 commit-msg.txt
