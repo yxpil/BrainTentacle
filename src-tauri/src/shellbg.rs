@@ -163,6 +163,121 @@ fn ps_bare_ampersand(cmd: &str) -> bool {
     false
 }
 
+/// PowerShell 中不存在、模型最常误用的 Unix 命令 → PowerShell 替代写法。
+/// 注意 cat/ls/rm/cp/mv/echo/pwd 在 PS 有内置别名（行为略异但不报错），故不列入。
+const PS_MISSING_UNIX_CMDS: &[(&str, &str)] = &[
+    ("head", "Select-Object -First N"),
+    ("tail", "Select-Object -Last N"),
+    ("grep", "Select-String"),
+    ("sed", "文本替换用 -replace 运算符"),
+    ("awk", "常用 ForEach-Object / Select-Object / Measure-Object"),
+    ("wc", "Measure-Object -Line/-Character/-Word"),
+    ("cut", "ForEach-Object 取子串或 -split"),
+    ("xargs", "ForEach-Object { ... }"),
+    ("which", "Get-Command"),
+    ("touch", "New-Item"),
+    ("du", "Get-ChildItem | Measure-Object"),
+    ("df", "Get-PSDrive"),
+    ("uname", "系统信息用 $PSVersionTable"),
+    ("env", "Get-ChildItem Env:"),
+    ("export", "$env:NAME = value"),
+];
+
+/// 命中判定：词处于「命令位」（尚无任何词元，或引号外前一有意义字符是 | ; & ( ）才算，
+/// 避免 `Select-String head`、`C:\head\x` 之类误报。
+fn check_unix_word(
+    word: &str,
+    prev_is_word: bool,
+    last: Option<char>,
+    hits: &mut Vec<&'static str>,
+) {
+    if word.is_empty() || prev_is_word {
+        return;
+    }
+    let at_cmd_pos = match last {
+        None => true,
+        Some(ch) => matches!(ch, '|' | ';' | '&' | '('),
+    };
+    if !at_cmd_pos {
+        return;
+    }
+    if let Some((name, _)) = PS_MISSING_UNIX_CMDS.iter().find(|(k, _)| *k == word) {
+        if !hits.contains(name) {
+            hits.push(name);
+        }
+    }
+}
+
+/// 引号感知的 Unix 命令扫描：路径段（含 / \ . 连接）合并成一个词不拆分，
+/// 引号内内容跳过，管道 / 分号 / && / ( 之后的词才参与匹配。
+fn ps_unix_cmd_hits(cmd: &str) -> Vec<&'static str> {
+    let mut hits: Vec<&'static str> = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut last_meaningful: Option<char> = None;
+    let mut prev_is_word = false; // 上一个词元是单词或引号串 → 当前词是参数位
+    let mut word = String::new();
+    for ch in cmd.chars() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+                prev_is_word = true; // 引号串整体视作一个词（参数位）
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                check_unix_word(&word, prev_is_word, last_meaningful, &mut hits);
+                if !word.is_empty() {
+                    prev_is_word = true; // 刚 flush 的词成为「上一个词元」
+                    word.clear();
+                }
+                quote = Some(ch);
+            }
+            c if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '\\') => word.push(c),
+            other => {
+                check_unix_word(&word, prev_is_word, last_meaningful, &mut hits);
+                if !word.is_empty() {
+                    prev_is_word = true; // 刚 flush 的词成为「上一个词元」
+                    word.clear();
+                }
+                if !other.is_whitespace() {
+                    prev_is_word = false; // 操作符取代词元成为「上一个」
+                    last_meaningful = Some(other);
+                }
+            }
+        }
+    }
+    check_unix_word(&word, prev_is_word, last_meaningful, &mut hits);
+    hits
+}
+
+/// PowerShell 语义前置警告合集：裸 `&`（假成功）+ 不存在的 Unix 命令（CommandNotFound）。
+/// 随执行结果一并返回给模型，当轮自纠，不再等到报错后盲试。
+pub(crate) fn ps_semantic_warning(command: &str) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if ps_bare_ampersand(command) {
+        parts.push("PowerShell 语义警告：命令含裸 `&`（后台 Job 操作符），前序命令的输出会丢失且退出码恒为 0。多条命令请用 `;` 串联；需要 cmd 的 `&` 语义请用 cmd /c \"...\" 包裹。".to_string());
+    }
+    let hits = ps_unix_cmd_hits(command);
+    if !hits.is_empty() {
+        let list = hits.iter().map(|h| format!("`{h}`")).collect::<Vec<_>>().join("、");
+        let repls = hits
+            .iter()
+            .filter_map(|h| {
+                PS_MISSING_UNIX_CMDS
+                    .iter()
+                    .find(|(k, _)| k == h)
+                    .map(|(_, r)| format!("`{h}` → {r}"))
+            })
+            .collect::<Vec<_>>()
+            .join("；");
+        parts.push(format!(
+            "PowerShell 语义警告：以下 Unix 命令在 PowerShell 中不存在（会报 CommandNotFound）：{list}。替代写法：{repls}。"
+        ));
+    }
+    if parts.is_empty() { None } else { Some(parts.join("\n")) }
+}
+
 fn emit(ctx: &Arc<crate::state::Ctx>, phase: &str, job: &ShellJob, extra: Option<serde_json::Value>) {
     use tauri::Emitter;
     let mut payload = json!({
@@ -204,12 +319,8 @@ pub async fn run(
     }
     // 快照默认 shell 后立即释放配置锁（锁序纪律：不跨 spawn 持锁）
     let pref = { ctx.config.lock().unwrap().default_shell.clone() };
-    // PS 裸 `&` 前置检测：Job 操作符会静默丢输出 + 假成功（code=0），提前告知 AI 正确写法
-    let amp_warning = if shell_is_ps(&pref) && ps_bare_ampersand(command) {
-        Some("PowerShell 语义警告：命令含裸 `&`（后台 Job 操作符），前序命令的输出会丢失且退出码恒为 0。多条命令请用 `;` 串联；需要 cmd 的 `&` 语义请用 cmd /c \"...\" 包裹。".to_string())
-    } else {
-        None
-    };
+    // PS 语义前置检测：裸 `&`（静默丢输出 + 假成功）与不存在的 Unix 命令（head/grep 等）
+    let amp_warning = if shell_is_ps(&pref) { ps_semantic_warning(command) } else { None };
     let mut cmd = shell_command(&pref, command, cwd);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -366,7 +477,7 @@ pub async fn run(
 
 #[cfg(test)]
 mod amp_tests {
-    use super::ps_bare_ampersand;
+    use super::{ps_bare_ampersand, ps_semantic_warning, ps_unix_cmd_hits};
 
     #[test]
     fn bare_ampersand_detected() {
@@ -394,6 +505,53 @@ mod amp_tests {
         assert!(!ps_bare_ampersand("echo 'a & b'"));
         // 无 & 的普通命令
         assert!(!ps_bare_ampersand("echo hello"));
+    }
+
+    #[test]
+    fn unix_cmd_hits_at_command_position() {
+        // 典型踩坑：管道后接 Unix 命令（PowerShell 无 head，报 CommandNotFound）
+        assert_eq!(ps_unix_cmd_hits("git log | head -5"), vec!["head"]);
+        assert_eq!(ps_unix_cmd_hits("cat a.txt | tail -n 3"), vec!["tail"]);
+        assert_eq!(ps_unix_cmd_hits("ps aux | grep node"), vec!["grep"]);
+        // 命令串首
+        assert_eq!(ps_unix_cmd_hits("head -5 README.md"), vec!["head"]);
+        // && / ; / ( 之后也是命令位
+        assert_eq!(ps_unix_cmd_hits("cd x && which node"), vec!["which"]);
+        assert_eq!(ps_unix_cmd_hits("echo a; wc -l b"), vec!["wc"]);
+        assert_eq!(ps_unix_cmd_hits("(head x)"), vec!["head"]);
+        // 多个命中去重、保持出现顺序
+        assert_eq!(ps_unix_cmd_hits("grep a b | head -3"), vec!["grep", "head"]);
+    }
+
+    #[test]
+    fn unix_cmd_no_false_positives() {
+        // 非命令位的出现不算：参数、路径、引号内
+        assert!(ps_unix_cmd_hits("Select-String head file.txt").is_empty());
+        assert!(ps_unix_cmd_hits("Get-Content -Tail 5 a.log").is_empty());
+        assert!(ps_unix_cmd_hits("type C:\\head\\x.txt").is_empty());
+        assert!(ps_unix_cmd_hits("echo \"head | grep | tail\"").is_empty());
+        assert!(ps_unix_cmd_hits("echo 'grep'").is_empty());
+        assert!(ps_unix_cmd_hits("foo-head --grep x").is_empty());
+        // PS 自带别名的 cat/ls/rm 不在名单内
+        assert!(ps_unix_cmd_hits("cat a.txt | ls").is_empty());
+        // 完全无关的命令
+        assert!(ps_unix_cmd_hits("git status").is_empty());
+    }
+
+    #[test]
+    fn ps_semantic_warning_combines_both() {
+        // 只有 Unix 命令
+        let w = ps_semantic_warning("git log | head -5").unwrap();
+        assert!(w.contains("`head`") && w.contains("Select-Object -First N"));
+        // 只有裸 &
+        let w2 = ps_semantic_warning("echo one & echo two").unwrap();
+        assert!(w2.contains("后台 Job 操作符"));
+        assert!(!w2.contains("Unix 命令"));
+        // 两者都有：两条警告合并
+        let w3 = ps_semantic_warning("echo a & echo b | grep c").unwrap();
+        assert!(w3.contains("后台 Job 操作符") && w3.contains("`grep`"));
+        // 正常命令无警告
+        assert!(ps_semantic_warning("git status; Get-Content a.log").is_none());
     }
 }
 

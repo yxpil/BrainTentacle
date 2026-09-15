@@ -1934,7 +1934,7 @@ let mut tools: Vec<crate::registry::ToolDef> = ctx
         };
         let mut line = if t.name == "shell" {
             let shell_syntax = if cfg!(windows) {
-                "run command lines (PowerShell syntax on Windows; use C:\\\\ style paths)"
+                "run command lines (PowerShell syntax on Windows; use C:\\\\ style paths; no head/tail/grep/sed/awk — use Select-Object -First/-Last, Select-String, -replace)"
             } else {
                 "run command lines (POSIX shell syntax; use / style paths, e.g. /Users/xxx and /home/xxx)"
             };
