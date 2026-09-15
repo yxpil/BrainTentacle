@@ -22,6 +22,26 @@ const WAIT_TIMEOUT_SECS: u64 = 600;
 /// 后台命令硬上限（小时）：防止程序失控后作业永久挂起泄漏。正常作业由用户/结果终止。
 const BG_TIMEOUT_SECS: u64 = 6 * 3600;
 
+/// 控制台输出解码：UTF-8 合法 → 原样（PowerShell 7 / chcp 65001 / git-bash）；
+/// 否则 0x00 占比高 → UTF-16LE（个别 PowerShell 重定向配置）；
+/// 否则按 GBK(936) 解码（中文 Windows cmd/PowerShell 5.x 管道输出的默认编码）。
+/// 不可解码字节统一替换为 U+FFFD，绝不 panic。
+pub fn decode_console(bytes: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    let zeros = bytes.iter().filter(|b| **b == 0).count();
+    if bytes.len() >= 2 && zeros * 4 > bytes.len() {
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    let (cow, _, _) = encoding_rs::GBK.decode(bytes);
+    cow.into_owned()
+}
+
 /// 一条自然结束的后台命令：交给顶层续跑 worker，把结果唤回所属会话的 AI。
 /// 之所以走 channel 而不是在 run/finish 链里直接 await agent 回合：
 /// agent 回合最终又会经过 builtin_invoke 的 shell 分支（spawn(run)），若在 run 链内 await 会形成
@@ -255,8 +275,8 @@ pub async fn run(
         };
         let mut result = json!({
             "code": out.status.code(),
-            "stdout": crate::registry::safe_trunc(&String::from_utf8_lossy(&out.stdout), 60000),
-            "stderr": crate::registry::safe_trunc(&String::from_utf8_lossy(&out.stderr), 60000),
+            "stdout": crate::registry::safe_trunc(&decode_console(&out.stdout), 60000),
+            "stderr": crate::registry::safe_trunc(&decode_console(&out.stderr), 60000),
         });
         if timed_out {
             // wait 超时降级为后台：job 刚被 kill，AI 收到的是 killed 状态而不是 done；
@@ -306,8 +326,8 @@ pub async fn run(
             .map_err(|e| format!("Failed to collect command output: {e}"))?;
         let mut result = json!({
             "code": out.status.code(),
-            "stdout": crate::registry::safe_trunc(&String::from_utf8_lossy(&out.stdout), 60000),
-            "stderr": crate::registry::safe_trunc(&String::from_utf8_lossy(&out.stderr), 60000),
+            "stdout": crate::registry::safe_trunc(&decode_console(&out.stdout), 60000),
+            "stderr": crate::registry::safe_trunc(&decode_console(&out.stderr), 60000),
         });
         if let (Some(obj), Some(w)) = (result.as_object_mut(), amp_warning) {
             obj.insert("warning".into(), json!(w));
@@ -637,9 +657,9 @@ fn push_system_user(ctx: &Arc<crate::state::Ctx>, sid: &str, body: &str) {
     let _ = crate::worker::emit_ui(&ctx.app, "sessions-updated", json!(sid));
 }
 
-/// read_pipe: 单个 pipe（stdout/stderr）的读取循环——BufReader + read_line，
-/// 每读到一行就 push 进全局 logs buffer（MAX_LOG_LINES 截断），同时节流
-/// 广播 shell-job-log 事件（500ms 或 20 行）。
+/// read_pipe: 单个 pipe（stdout/stderr）的读取循环——BufReader + read_until 按行切字节，
+/// 每行经 decode_console 解码（GBK/UTF-16 兜底）后 push 进全局 logs buffer
+/// （MAX_LOG_LINES 截断），同时节流广播 shell-job-log 事件（500ms 或 20 行）。
 /// 接受 ChildStdout / ChildStderr 通用类型（它们都 AsyncRead + Unpin）。
 async fn read_pipe<P>(
     pipe: P,
@@ -659,12 +679,17 @@ where
     let mut last_flush = std::time::Instant::now();
 
     loop {
-        let mut line = String::new();
-        let n = match reader.read_line(&mut line).await {
+        // 按 \n 切字节再解码，而不是 read_line(String)：GBK 输出不是合法 UTF-8，
+        // read_line 会报 InvalidData 直接断流。GBK 双字节序列不含 0x0A
+        // （首字节 0x81-0xFE，次字节 0x40-0xFE 除 0x7F），按行切分不会切碎多字节字符。
+        let mut buf: Vec<u8> = Vec::new();
+        let n = match reader.read_until(b'\n', &mut buf).await {
             Ok(0) => break,  // EOF —— 进程结束
             Ok(n) => n,
             Err(_) => break,
         };
+        let line = decode_console(&buf);
+        let _ = n;
         full.push_str(&line);
         let ts_ms = started_at.elapsed().as_millis() as u64;
         let ll = LogLine {
@@ -763,4 +788,40 @@ pub fn find_running(session: Option<&str>, command: &str) -> Option<String> {
     m.values()
         .find(|j| j.session.as_deref() == session && j.command == command)
         .map(|j| j.id.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_console;
+
+    #[test]
+    fn utf8_passthrough() {
+        // 合法 UTF-8（含中文）原样返回，不绕道 GBK
+        assert_eq!(decode_console("中文 hello".as_bytes()), "中文 hello");
+        assert_eq!(decode_console(b"plain ascii\n"), "plain ascii\n");
+    }
+
+    #[test]
+    fn gbk_fallback() {
+        // 中文 Windows cmd 输出的 GBK 编码（"中文" = CA D6 CE C4）
+        let gbk = encoding_rs::GBK.encode("中文输出").0.into_owned();
+        assert_eq!(decode_console(&gbk), "中文输出");
+        // UTF-8 与 GBK 混合的非法序列也按 GBK 解出可读文本
+        let mut mixed = b"error: ".to_vec();
+        mixed.extend_from_slice(&encoding_rs::GBK.encode("操作成功").0.into_owned());
+        assert_eq!(decode_console(&mixed), "error: 操作成功");
+    }
+
+    #[test]
+    fn utf16le_heuristic() {
+        // UTF-16LE 编码的 "ok" = 6F 00 6B 00：0x00 占比高触发启发式
+        let utf16 = "中文ok\n".encode_utf16().flat_map(|u| u.to_le_bytes()).collect::<Vec<u8>>();
+        assert_eq!(decode_console(&utf16), "中文ok\n");
+    }
+
+    #[test]
+    fn garbage_never_panics() {
+        let _ = decode_console(&[0xFF, 0xFE, 0x81, 0x7F, 0x00, 0xC3, 0x28]);
+        assert_eq!(decode_console(b""), "");
+    }
 }

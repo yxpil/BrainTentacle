@@ -399,6 +399,7 @@ dependencies = [
  "crossbeam-channel",
  "crossterm",
  "ctrlc",
+ "encoding_rs",
  "enigo",
  "futures-util",
  "if-addrs",
