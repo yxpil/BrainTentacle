@@ -89,6 +89,8 @@ pub struct Ctx {
     pub mcp: Mutex<Vec<crate::mcp::McpServer>>,
     /// stdio MCP 子进程注册表：server_id → StdioSession。进程存活期间持有；重启需重连
     pub mcp_stdio: crate::mcp::McpProcessRegistry,
+    /// HiddenCode 敏感信息条目（hidden_codes.json，设备密钥加密存储）
+    pub hidden_codes: Mutex<Vec<crate::hidden_code::HiddenCodeEntry>>,
     /// 本地插件列表（toolhomes/plugins/*/plugin.json）
     pub plugins: Mutex<Vec<crate::plugins::Plugin>>,
     /// BIT 作为 MCP 服务器时分配的会话（session_id → 最后活跃时刻）。
@@ -217,6 +219,14 @@ impl Ctx {
         )
         .value
         .unwrap_or_default();
+        let hidden_codes: Vec<crate::hidden_code::HiddenCodeEntry> =
+            crate::securefile::read_secret_json(
+                &data_dir,
+                "hidden_codes.json",
+                device_key.as_deref(),
+            )
+            .value
+            .unwrap_or_default();
 
         // 内置工具随版本演进：始终以当前出厂的内置工具为准，
         // 移除历史遗留的内置项，保留用户 / AI 自建的工具，再把最新内置放到最前。
@@ -266,6 +276,7 @@ impl Ctx {
             sessions: Mutex::new(sessions),
             sessions_disk_ts: Mutex::new(None),
             mcp: Mutex::new(mcp),
+            hidden_codes: Mutex::new(hidden_codes),
             mcp_stdio: std::sync::Mutex::new(std::collections::HashMap::new()),
             // 本地插件列表（toolhomes/plugins/*/plugin.json，启动/重扫时刷新）
             plugins: Mutex::new(Vec::new()),
@@ -377,6 +388,16 @@ impl Ctx {
         // 先取 device_key(drop config lock)再 lock mcp，避免 config→mcp 反序死锁
         let key = self.config.lock().unwrap().device_key.clone();
         crate::securefile::write_secret_json(&self.data_dir, "mcp_servers.json", key, &*mcp);
+    }
+
+    /// HiddenCode 条目落盘（设备密钥加密）。锁顺序同 save_mcp。
+    pub fn save_hidden_codes(&self) {
+        let codes = self.hidden_codes.lock().unwrap();
+        let key = self.config.lock().unwrap().device_key.clone();
+        crate::securefile::write_secret_json(&self.data_dir, "hidden_codes.json", key, &*codes);
+        drop(codes);
+        // worker 进程同样一次性加载 hidden_codes，改条目后必须通知重读
+        crate::worker::notify_reload();
     }
 }
 

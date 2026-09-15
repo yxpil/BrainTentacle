@@ -21,6 +21,8 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 # 守护进程：接力拉起前校验主程序二进制 sha256（防病毒换装借壳复活）
 sha2 = "0.10"
+# HiddenCode 敏感信息脱敏：手机号/邮箱/API key 内置正则探测与掩码
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

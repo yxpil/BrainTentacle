@@ -2965,6 +2965,168 @@ pub fn install_cli(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, Stri
     install_cli_impl(&ctx(state))
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 安全中心：HiddenCode 敏感信息脱敏 + L2 PASS 二级模型审核
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// HiddenCode 条目列表（本机 UI 信任边界内返回明文）
+#[tauri::command]
+pub fn get_hidden_codes(state: State<'_, Arc<Ctx>>) -> Vec<crate::hidden_code::HiddenCodeEntry> {
+    ctx(state).hidden_codes.lock().unwrap().clone()
+}
+
+/// 新增 HiddenCode 条目。as_pattern=true 且 kind 有内置正则（value 留空或填 builtin:xxx）
+/// → pattern 条目；否则 value 条目（value 必填）
+#[tauri::command]
+pub fn add_hidden_code(
+    state: State<'_, Arc<Ctx>>,
+    kind: String,
+    value: String,
+    as_pattern: bool,
+) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    let value = value.trim().to_string();
+    let entry = if as_pattern {
+        if value.is_empty() {
+            // 值留空 → 用内置正则名
+            let pattern = match kind.as_str() {
+                "phone" => "builtin:phone",
+                "email" => "builtin:email",
+                "apikey" => "builtin:apikey",
+                other => return Err(format!("类型 {other} 无内置正则，自定义正则请填写在值里")),
+            };
+            crate::hidden_code::HiddenCodeEntry {
+                id: String::new(),
+                kind: "pattern".into(),
+                label: kind,
+                value: pattern.into(),
+                enabled: true,
+                created: crate::ai::now_ts(),
+            }
+        } else {
+            // 值非空且 as_pattern → 视为自定义正则（校验合法性）
+            regex::Regex::new(&value).map_err(|e| format!("非法正则: {e}"))?;
+            crate::hidden_code::HiddenCodeEntry {
+                id: String::new(),
+                kind: "pattern".into(),
+                label: "custom".into(),
+                value,
+                enabled: true,
+                created: crate::ai::now_ts(),
+            }
+        }
+    } else {
+        if value.is_empty() {
+            return Err("值不能为空（若要按类型掩码请勾选模式）".into());
+        }
+        crate::hidden_code::HiddenCodeEntry {
+            id: String::new(),
+            kind: "value".into(),
+            label: kind,
+            value,
+            enabled: true,
+            created: crate::ai::now_ts(),
+        }
+    };
+    let mut codes = ctx.hidden_codes.lock().unwrap();
+    // id 自增（数字串，对齐 memories/skills 惯例）
+    let max_id: u64 = codes.iter().filter_map(|e| e.id.parse::<u64>().ok()).max().unwrap_or(0);
+    let mut entry = entry;
+    entry.id = (max_id + 1).to_string();
+    codes.push(entry);
+    drop(codes);
+    ctx.save_hidden_codes();
+    Ok(json!({ "ok": true }))
+}
+
+/// 删除 HiddenCode 条目
+#[tauri::command]
+pub fn remove_hidden_code(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    {
+        let mut codes = ctx.hidden_codes.lock().unwrap();
+        let before = codes.len();
+        codes.retain(|e| e.id != id);
+        if codes.len() == before {
+            return Err(format!("条目 {id} 不存在"));
+        }
+    }
+    ctx.save_hidden_codes();
+    Ok(json!({ "ok": true }))
+}
+
+/// 启停单个 HiddenCode 条目
+#[tauri::command]
+pub fn set_hidden_code_enabled(
+    state: State<'_, Arc<Ctx>>,
+    id: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    {
+        let mut codes = ctx.hidden_codes.lock().unwrap();
+        match codes.iter_mut().find(|e| e.id == id) {
+            Some(e) => e.enabled = enabled,
+            None => return Err(format!("条目 {id} 不存在")),
+        }
+    }
+    ctx.save_hidden_codes();
+    Ok(json!({ "ok": true }))
+}
+
+/// 正则自动探测（录入辅助，不落盘）：返回 [{label, value}] 候选
+#[tauri::command]
+pub fn scan_hidden_candidates(text: String) -> Vec<serde_json::Value> {
+    crate::hidden_code::detect_candidates(&text)
+        .into_iter()
+        .map(|(label, value)| json!({ "label": label, "value": value }))
+        .collect()
+}
+
+/// 安全设置读取（HiddenCode / L2 PASS）
+#[tauri::command]
+pub fn get_security_settings(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
+    let c = ctx(state);
+    let cfg = c.config.lock().unwrap();
+    json!({
+        "hidden_code_enabled": cfg.hidden_code_enabled,
+        "l2pass_enabled": cfg.l2pass_enabled,
+        "l2pass_provider_id": cfg.l2pass_provider_id,
+    })
+}
+
+/// 安全设置保存。L2 开启时必须已选审核 provider
+#[tauri::command]
+pub fn set_security_settings(
+    state: State<'_, Arc<Ctx>>,
+    hidden_code_enabled: bool,
+    l2pass_enabled: bool,
+    l2pass_provider_id: String,
+) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    if l2pass_enabled {
+        let known = ctx
+            .ai_config
+            .lock()
+            .unwrap()
+            .providers
+            .iter()
+            .any(|p| p.id == l2pass_provider_id);
+        if l2pass_provider_id.is_empty() || !known {
+            return Err("请先选择一个已配置的审核 provider".into());
+        }
+    }
+    {
+        let mut cfg = ctx.config.lock().unwrap();
+        cfg.hidden_code_enabled = hidden_code_enabled;
+        cfg.l2pass_enabled = l2pass_enabled;
+        cfg.l2pass_provider_id = l2pass_provider_id;
+        cfg.revision += 1;
+    }
+    ctx.save_config();
+    Ok(json!({ "ok": true }))
+}
+
 /// 自动更新检测结果
 #[derive(serde::Serialize)]
 pub struct UpdateInfo {

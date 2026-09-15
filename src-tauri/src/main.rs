@@ -30,7 +30,9 @@ mod desktop_ctl {
 mod extract;
 mod goal;
 mod guardian;
+mod hidden_code;
 mod http_api;
+mod l2pass;
 mod mcp;
 mod memory;
 mod netinfo;
@@ -450,6 +452,13 @@ fn main() {
             commands::update_apply,
             commands::open_external,
             commands::install_cli,
+            commands::get_hidden_codes,
+            commands::add_hidden_code,
+            commands::remove_hidden_code,
+            commands::set_hidden_code_enabled,
+            commands::scan_hidden_candidates,
+            commands::get_security_settings,
+            commands::set_security_settings,
             commands::mem_usage,
             commands::get_overview,
             commands::list_tools,

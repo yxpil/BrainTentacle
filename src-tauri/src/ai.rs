@@ -186,6 +186,10 @@ pub async fn chat_with_images(
     messages: &[ChatMessage],
     images: &[String],
 ) -> Result<(String, TokenUsage), String> {
+    // HiddenCode 脱敏（唯一发模型汇聚点，协议无关）：敏感值 → [HC:hash] 占位符。
+    // 只作用于发送副本，会话历史存原文；占位符按内容 hash，历史重发逐字一致
+    let messages: Vec<ChatMessage> = crate::hidden_code::maybe_mask_messages(ctx, messages);
+    let messages = &messages;
     let provider = {
         let cfg = ctx.ai_config.lock().unwrap();
         cfg.active().cloned()
@@ -206,6 +210,35 @@ pub async fn chat_with_images(
         "claude" => chat_claude(&client, &p, messages, images, &params).await,
         _ => chat_openai(&client, &p, messages, images, &params).await,
     }
+}
+
+/// 指定 provider 发起一次简单文本问答（L2 PASS 审核用）：无工具、无图、不带采样参数。
+/// 与激活 provider 无关——审核模型可以是任意已配置的提供方
+pub async fn simple_chat(
+    ctx: &Arc<crate::state::Ctx>,
+    provider_id: &str,
+    system: &str,
+    user: &str,
+    timeout_secs: u64,
+) -> Result<String, String> {
+    let p = {
+        let cfg = ctx.ai_config.lock().unwrap();
+        cfg.providers.iter().find(|p| p.id == provider_id).cloned()
+    };
+    let p = p.ok_or_else(|| "审核 provider 不存在".to_string())?;
+    if p.api_key.is_empty() {
+        return Err(format!("审核 provider「{}」未配置 API Key", p.name));
+    }
+    let client = http_client_for(&p.base_url, timeout_secs).map_err(|e| e.to_string())?;
+    let msgs = [ChatMessage::system(system), ChatMessage::user(user)];
+    // 默认参数：不带 reasoning_effort/temperature，轻量请求
+    let params = AiConfig::default();
+    let (text, _) = match p.protocol.as_str() {
+        "gemini" => chat_gemini(&client, &p, &msgs, &[], &params).await?,
+        "claude" => chat_claude(&client, &p, &msgs, &[], &params).await?,
+        _ => chat_openai(&client, &p, &msgs, &[], &params).await?,
+    };
+    Ok(text)
 }
 
 /// base_url 是否指向本机

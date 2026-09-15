@@ -139,6 +139,15 @@ pub struct Config {
     /// 注册时指纹哈希前 16 hex（sha256）：用于检测硬件指纹整体漂移（不存原始指纹）
     #[serde(default)]
     pub device_fp_hash: Option<String>,
+    /// HiddenCode 敏感信息脱敏总开关（实验）：发给 AI 前将敏感值替换为占位符，本机执行时还原
+    #[serde(default)]
+    pub hidden_code_enabled: bool,
+    /// L2 PASS 二级模型审核（实验）：非安全工具执行前用另一 provider 审核，不可达回退人工
+    #[serde(default)]
+    pub l2pass_enabled: bool,
+    /// 审核用 provider id（AiConfig.providers 里的 id），空 = 未选择
+    #[serde(default)]
+    pub l2pass_provider_id: String,
     /// 远程对话限速：每 60 秒滑动窗口内允许的对话请求上限（/api/chat 与 /v1/chat/completions
     /// 按客户端 IP 分别计数；0=不限）
     #[serde(default = "default_chat_rpm_max")]
@@ -270,6 +279,9 @@ impl Default for Config {
             ip_blocklist: None,
             channel_guard: true,
             device_key: None,
+            hidden_code_enabled: false,
+            l2pass_enabled: false,
+            l2pass_provider_id: String::new(),
             device_registered_at: None,
             device_fp_hash: None,
             chat_rpm_max: default_chat_rpm_max(),

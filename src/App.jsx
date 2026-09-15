@@ -12,6 +12,7 @@ import ToolsPage from "./pages/ToolsPage.jsx";
 import MemoryPage from "./pages/MemoryPage.jsx";
 import SkillsPage from "./pages/SkillsPage.jsx";
 import AuditPage from "./pages/AuditPage.jsx";
+import SecurityPage from "./pages/SecurityPage.jsx";
 import RemotePage from "./pages/RemotePage.jsx";
 import AiSettingsPage from "./pages/AiSettingsPage.jsx";
 import ThemePage from "./pages/ThemePage.jsx";
@@ -28,6 +29,7 @@ import {
   IconInfo,
   IconPlus,
   IconShirt,
+  IconShield,
   IconCheck,
   IconChevronLeft,
 } from "./components/Icons.jsx";
@@ -40,6 +42,7 @@ const PAGES = {
   memory: { label: "nav.memory", icon: IconMemory, page: MemoryPage },
   skills: { label: "nav.skills", icon: IconSkill, page: SkillsPage },
   audit: { label: "nav.audit", icon: IconAudit, page: AuditPage },
+  security: { label: "nav.security", icon: IconShield, page: SecurityPage },
   remote: { label: "nav.remote", icon: IconGlobe, page: RemotePage },
   ai: { label: "nav.ai", icon: IconSettings, page: AiSettingsPage },
   theme: { label: "nav.theme", icon: IconShirt, page: ThemePage },
@@ -48,7 +51,7 @@ const PAGES = {
 // 主功能：对话（AI 助手本体）单独置顶
 const PRIMARY = "chat";
 // 次级功能：分组列在下方
-const SECONDARY = ["tools", "memory", "skills", "audit", "remote", "ai", "theme"];
+const SECONDARY = ["tools", "memory", "skills", "audit", "security", "remote", "ai", "theme"];
 
 // 体积/速度友好格式化：B / KB / MB / GB
 const fmtBytes = (b) => {

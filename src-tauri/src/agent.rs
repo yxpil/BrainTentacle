@@ -321,15 +321,31 @@ pub async fn execute_tool_call(
 ) -> Result<serde_json::Value, String> {
     // 模型偶尔输出带空白的工具名（" shell "）：去空白再匹配
     let name = name.trim();
+    // HiddenCode 占位符还原（无启用条目时零开销原样返回）：
+    // 后续 L2 审核用原始 params（占位符态，真实值不外发），审批展示与所有执行分支用 real
+    let params_real = crate::hidden_code::unmask_params(ctx, params);
     if !auto_pass(&ctx.config.lock().unwrap().tool_approval.clone(), name) {
-        request_approval(ctx, name, params, session_id, "ai-self").await?;
+        // L2 PASS 二级模型审核（实验）：Deny → 拒绝；Unavailable（未启用/超时/报错）→ 落回人工审批
+        match crate::l2pass::audit(ctx, name, params).await {
+            crate::l2pass::Verdict::Allow => {
+                crate::l2pass::record_audit(ctx, "tool.l2pass_allow", name, None, true);
+            }
+            crate::l2pass::Verdict::Deny(reason) => {
+                crate::l2pass::record_audit(ctx, "tool.l2pass_deny", name, Some(&reason), false);
+                return Err(format!("L2 审核拒绝执行 `{name}`：{reason}"));
+            }
+            crate::l2pass::Verdict::Unavailable => {
+                crate::l2pass::record_audit(ctx, "tool.l2pass_unavailable", name, None, true);
+            }
+        }
+        request_approval(ctx, name, &params_real, session_id, "ai-self").await?;
     }
     match name {
         // ---- AI 基础能力：用本机解释器直接执行一段 JS/PY 代码（临时，不落地） ----
         "run_script" => {
-            let runtime = params.get("runtime").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-            let code = params.get("code").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-            let script_params = params.get("params").cloned().unwrap_or(json!({}));
+            let runtime = params_real.get("runtime").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let code = params_real.get("code").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let script_params = params_real.get("params").cloned().unwrap_or(json!({}));
             if runtime.is_empty() || code.is_empty() {
                 return Err("run_script requires runtime and code parameters".into());
             }
@@ -353,8 +369,8 @@ pub async fn execute_tool_call(
             out
         }
         "add_memory" => {
-            let content = params.get("content").and_then(|v| v.as_str()).unwrap_or_default();
-            let kind = params.get("kind").and_then(|v| v.as_str()).unwrap_or("raw");
+            let content = params_real.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+            let kind = params_real.get("kind").and_then(|v| v.as_str()).unwrap_or("raw");
             if content.is_empty() {
                 return Err("add_memory requires the content parameter".into());
             }
@@ -364,7 +380,7 @@ pub async fn execute_tool_call(
         // memory(id)：按 id 取回记忆全文。manifest 与提示词都声明了该工具，
         // 此前执行器漏了分支 → 模型调用必得 "Unknown tool 'memory'"（能写不能读）
         "memory" => {
-            let id = params.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            let id = params_real.get("id").and_then(|v| v.as_str()).unwrap_or_default();
             if id.is_empty() {
                 return Err("memory requires the id parameter".into());
             }
@@ -401,7 +417,7 @@ pub async fn execute_tool_call(
                     }
                 }
             };
-            crate::registry::invoke(ctx, &tool.id, params.clone(), "ai-self", session_id).await
+            crate::registry::invoke(ctx, &tool.id, params_real.clone(), "ai-self", session_id).await
         }
     }
 }

@@ -47,6 +47,21 @@ export const api = {
   getSystemPrompt: () => invoke("get_system_prompt"),
   setSystemPrompt: (system_prompt) => invoke("set_system_prompt", { systemPrompt: system_prompt }),
   getBehaviorSettings: () => invoke("get_behavior_settings"),
+  // 安全中心：HiddenCode 敏感信息脱敏
+  getHiddenCodes: () => invoke("get_hidden_codes"),
+  addHiddenCode: (kind, value, as_pattern) =>
+    invoke("add_hidden_code", { kind, value, asPattern: as_pattern }),
+  removeHiddenCode: (id) => invoke("remove_hidden_code", { id }),
+  setHiddenCodeEnabled: (id, enabled) => invoke("set_hidden_code_enabled", { id, enabled }),
+  scanHiddenCandidates: (text) => invoke("scan_hidden_candidates", { text }),
+  // 安全中心：HiddenCode / L2 PASS 总开关与审核 provider
+  getSecuritySettings: () => invoke("get_security_settings"),
+  setSecuritySettings: (hidden_code_enabled, l2pass_enabled, l2pass_provider_id) =>
+    invoke("set_security_settings", {
+      hiddenCodeEnabled: hidden_code_enabled,
+      l2passEnabled: l2pass_enabled,
+      l2passProviderId: l2pass_provider_id,
+    }),
   // blocked_words 敏感词表：传数组=整体替换；传 [] = 恢复内置默认；不传 = 保持原值
   setBehaviorSettings: (auto_drive, tool_approval, moderation_enabled, auto_delegate, compat_mode, subagent_max, blocked_words) =>
     invoke("set_behavior_settings", {
