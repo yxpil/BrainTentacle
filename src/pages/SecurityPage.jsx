@@ -158,7 +158,12 @@ export default function SecurityPage() {
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={kind}
-              onChange={(e) => setKind(e.target.value)}
+              onChange={(e) => {
+                const k = e.target.value;
+                setKind(k);
+                // 自定义类型即正则模式：匹配到的每段文本都生成占位符
+                setAsPattern(k === "custom");
+              }}
               className="rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600"
             >
               <option value="phone">{t("sec.hc.kind.phone", "手机号")}</option>
@@ -173,7 +178,7 @@ export default function SecurityPage() {
               placeholder={
                 asPattern
                   ? kind === "custom"
-                    ? "regex…"
+                    ? t("sec.hc.regexPlaceholder", "正则表达式，如 sk-[A-Za-z0-9]{20,}")
                     : t("sec.hc.patternHint", "值留空并勾选「按类型掩码」可掩掉所有匹配项")
                   : t("sec.hc.value", "值")
               }
@@ -187,13 +192,23 @@ export default function SecurityPage() {
               {t("sec.hc.add", "添加条目")}
             </button>
           </div>
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
-            <input type="checkbox" checked={asPattern} onChange={(e) => setAsPattern(e.target.checked)} />
-            {t("sec.hc.asPattern", "按类型掩码全部匹配")}
-            <span className="text-neutral-400 dark:text-neutral-500">
-              （{t("sec.hc.patternHint", "值留空并勾选「按类型掩码」可掩掉所有匹配项（如全部手机号）；自定义正则请把表达式填在值里并勾选。")}）
-            </span>
-          </label>
+          {kind !== "custom" && (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+              <input type="checkbox" checked={asPattern} onChange={(e) => setAsPattern(e.target.checked)} />
+              {t("sec.hc.asPattern", "按类型掩码全部匹配")}
+              <span className="text-neutral-400 dark:text-neutral-500">
+                （{t("sec.hc.patternHint", "值留空并勾选「按类型掩码」可掩掉所有匹配项（如全部手机号）；自定义正则请把表达式填在值里并勾选。")}）
+              </span>
+            </label>
+          )}
+          {kind === "custom" && (
+            <div className="text-xs text-neutral-400 dark:text-neutral-500">
+              {t(
+                "sec.hc.regexHint",
+                "填入正则表达式，所有匹配到的文本都会被替换为占位符（Rust regex 语法，不支持 lookbehind / 反向引用）",
+              )}
+            </div>
+          )}
         </div>
 
         {/* 条目列表 */}
@@ -210,9 +225,11 @@ export default function SecurityPage() {
                 {kindLabel(e)}
               </span>
               <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                {maskValue(e.value, revealed[e.id])}
+                {e.kind === "pattern"
+                  ? e.value /* 正则/内置名本身不敏感，直接展示 */
+                  : maskValue(e.value, revealed[e.id])}
               </span>
-              {e.value && !e.value.startsWith("builtin:") && (
+              {e.kind !== "pattern" && e.value && (
                 <button
                   onClick={() => setRevealed((r) => ({ ...r, [e.id]: !r[e.id] }))}
                   className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"

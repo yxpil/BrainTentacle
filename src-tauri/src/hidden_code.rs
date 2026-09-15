@@ -324,6 +324,24 @@ mod tests {
     }
 
     #[test]
+    fn custom_regex_masks_matches() {
+        // 用户自定义正则条目（kind=pattern, label=custom）：每个匹配独立占位
+        let entries = vec![entry("pattern", "custom", r"sk-[A-Za-z0-9]{10,}")];
+        let hl = 6;
+        let text = "key1=sk-abc123def456 key2=sk-xyz789abc000";
+        let masked = mask_text(text, &entries, hl);
+        assert!(!masked.contains("sk-abc123def456"));
+        assert!(!masked.contains("sk-xyz789abc000"));
+        assert!(masked.contains(PLACEHOLDER_PREFIX));
+        // 同值同占位符；非匹配文本原样保留
+        assert_ne!(mask_text("sk-abc123def456", &entries, hl), mask_text("sk-xyz789abc000", &entries, hl));
+        assert_eq!(mask_text("plain text", &entries, hl), "plain text");
+        // 非法正则条目被跳过，不 panic
+        let bad = vec![entry("pattern", "custom", "(?<!x)broken(")];
+        assert_eq!(mask_text("sk-abc123def456", &bad, hl), "sk-abc123def456");
+    }
+
+    #[test]
     fn normal_text_untouched() {
         let entries = vec![entry("pattern", "email", "builtin:email")];
         let text = "2026-09-15 发布 v1.2.3，访问 https://example.com/path 查看";
