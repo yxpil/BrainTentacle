@@ -1,0 +1,22 @@
+[package]
+name = "bit-napi"
+description = "BIT native module: loads bit-core into the Electron main process (napi-rs)"
+version.workspace = true
+edition = "2021"
+
+[lib]
+name = "bit_napi"
+crate-type = ["cdylib"]
+
+[build-dependencies]
+napi-build = "2"
+
+[dependencies]
+bit-core = { path = "../bit-core" }
+# napi4：ThreadsafeFunction（UI 事件 TSFN）；tokio_rt：async fn 托管到 napi 的 tokio 运行时；
+# serde-json：JS Value ↔ serde_json::Value 零拷贝桥
+napi = { version = "2", features = ["napi4", "tokio_rt", "serde-json"] }
+napi-derive = "2"
+serde_json.workspace = true
+# invoke 派发：spawn 到 napi 托管 runtime（tokio_rt 特性内部即 tokio，Handle 同源）
+tokio.workspace = true

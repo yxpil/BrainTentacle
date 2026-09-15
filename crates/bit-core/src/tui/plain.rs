@@ -8,7 +8,7 @@ use crate::state::Ctx;
 use crate::tui::{Flow, Out, handle};
 
 /// Never returns (process exits here)
-pub fn run(ctx: Arc<Ctx>, app: tauri::AppHandle) -> ! {
+pub fn run(ctx: Arc<Ctx>) -> ! {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let stdin_ctx = ctx.clone();
     std::thread::spawn(move || {
@@ -37,7 +37,7 @@ pub fn run(ctx: Arc<Ctx>, app: tauri::AppHandle) -> ! {
     });
 
     let inner_ctx = ctx.clone();
-    let ver = app.package_info().version.clone();
+    let ver = ctx.app_version.clone();
     crate::task::block_on(async move {
         let ctx = inner_ctx;
         use std::io::IsTerminal;

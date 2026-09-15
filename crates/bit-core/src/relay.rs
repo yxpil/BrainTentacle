@@ -426,3 +426,104 @@ async fn answer_post(
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 远程连接二维码 payload（http_api /api/qr 与桌面端弹窗共用）
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 远程连接二维码：payload 携带全部连接信息（地址候选 / 端口 / 密钥 / 密码 / 会话绑定 /
+/// 128 位识别码 / 三种连接方式），手机 App 扫码后按 局域网 → IPv6 直连（NAT1）→ 云中继依次尝试。
+/// rid 懒生成：首次查看二维码时生成 128 位随机数并持久化，作为中继路由 + 访问凭据。
+pub async fn qr_payload(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    // 128 位识别码：只生成一次（避免每次探测漂移导致中继路由失效）
+    let rid = {
+        let mut c = ctx.config.lock().unwrap();
+        if c.relay_id.is_empty() {
+            let id = gen_relay_id();
+            c.relay_id = id.clone();
+            c.revision += 1;
+            c.save(&ctx.data_dir, &ctx.db.lock().unwrap());
+            crate::audit::record(ctx, "local-app", "remote.relay_id", "generate", json!({}), true);
+            id
+        } else {
+            c.relay_id.clone()
+        }
+    };
+    let cfg = ctx.config.lock().unwrap().clone();
+    let stun = cfg.stun_servers.clone();
+    let probe = crate::netinfo::lan_probe(stun.as_deref()).await;
+    let nat = probe.get("nat").cloned().unwrap_or(json!("unknown"));
+    let port = cfg.port;
+    let lan: Vec<String> = probe
+        .get("lan")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let lan6: Vec<String> = probe
+        .get("lan6")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let pub6 = probe.get("pub6").and_then(|v| v.as_str()).map(String::from);
+    // IPv6 直连候选：本机全球 v6（网卡或 STUN 映射）。对称 NAT 下对方依旧无法主动连入，
+    // 但 v6 出站映射通常独立于目标（EIM），保留候选由手机端实测决定
+    let mut direct6: Vec<String> = lan6.iter().map(|a| format!("http://[{a}]:{port}")).collect();
+    if let Some(p6) = &pub6 {
+        let ip = p6.rsplit_once(':').map(|(a, _)| a.trim_matches(|c| c == '[' || c == ']')).unwrap_or(p6);
+        let url = format!("http://[{ip}]:{port}");
+        if !direct6.contains(&url) {
+            direct6.push(url);
+        }
+    }
+    let lan_urls: Vec<String> = lan.iter().map(|a| format!("http://{a}:{port}")).collect();
+    // 云中继：用户显式配置优先，缺省用 osbt.space 官方中继（只转发不留存）
+    let relay_base = cfg
+        .cloud_relay_url
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim_end_matches('/').to_string())
+        .unwrap_or_else(|| DEFAULT_RELAY_BASE.to_string());
+    let mut payload = json!({
+        "v": 2,
+        "app": "bit",
+        "port": port,
+        "key": cfg.client_key,
+        "nat": nat.clone(),
+        // 128 位识别码：客户端生成，云中继按它路由（手机端把请求发到 {relay}/relay/{rid}/…）
+        "rid": rid,
+        // 会话策略：device —— 每台设备扫码后自建独立会话（remote-<随机>）调 /api/chat，
+        // 多台设备/多人互不串线；/api/chat 对空 session_id 直接拒绝，绝不落入桌面激活会话
+        "sidPolicy": "device",
+        // 内容留存声明：对话只存设备本地，中继 / 云服务器不留存（手机端据此展示隐私说明）
+        "retention": "device-only",
+        // 三种连接方式（按优先级排列尝试）
+        "methods": {
+            "lan": lan_urls,
+            "direct6": direct6,
+            "relay": format!("{relay_base}/relay/{rid}"),
+        },
+        // 原始候选（v1 兼容：旧手机端按 lan → lan6 → pub6 → pub4 依次尝试）
+        "addrs": {
+            "lan": probe.get("lan").cloned().unwrap_or(json!([])),
+            "lan6": probe.get("lan6").cloned().unwrap_or(json!([])),
+            "pub4": probe.get("pub4").cloned().unwrap_or(json!(null)),
+            "pub4_alt": probe.get("pub4_alt").cloned().unwrap_or(json!(null)),
+            "pub6": probe.get("pub6").cloned().unwrap_or(json!(null)),
+        },
+    });
+    if cfg.password_enabled {
+        if let Some(p) = &cfg.access_password {
+            payload["pwd"] = json!(p);
+        }
+    }
+    if let Some(u) = cfg.cloud_relay_url.clone().filter(|s| !s.is_empty()) {
+        payload["cloud"] = json!(u);
+    }
+    // 信道签名算法标识：手机端据此实现配套的请求签名（bitsign-v2，材料含设备凭证）
+    payload["alg"] = json!(crate::security::BITSIGN_ALG);
+    // 加密块（BIT-Crypt v1）：把整个 payload JSON 加密成 BIT1: 密文——二维码图只编密文，
+    // 普通扫码器/截图外泄读不出 client_key / rid 等连接凭据，只有本 App（内置主密钥）能解
+    let plain = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    payload["enc"] = json!(crate::security::bitcrypt_encrypt(&plain));
+    Ok(payload)
+}

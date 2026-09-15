@@ -33,3 +33,8 @@ rescued.txt
 packaging/npm/*.tgz
 *.dmg
 *.zip
+
+# napi 本地产物（CI/本地构建可再生的原生模块二进制）
+crates/bit-napi/*.node
+crates/bit-napi/index.js
+crates/bit-napi/index.d.ts

@@ -99,14 +99,14 @@ pub(crate) fn ansi_prompt(ctx: &Arc<Ctx>) -> String {
     )
 }
 
-pub fn run_blocking(ctx: Arc<Ctx>, app: tauri::AppHandle) -> ! {
+pub fn run_blocking(ctx: Arc<Ctx>) -> ! {
     use std::io::IsTerminal;
     let force_plain = std::env::args().any(|a| a == "--plain");
     if force_plain || !std::io::stdout().is_terminal() {
-        plain::run(ctx, app)
+        plain::run(ctx)
     } else {
-        #[cfg(feature = "tui-ui")] { full::run(ctx, app) }
-        #[cfg(not(feature = "tui-ui"))] { plain::run(ctx, app) }
+        #[cfg(feature = "tui-ui")] { full::run(ctx) }
+        #[cfg(not(feature = "tui-ui"))] { plain::run(ctx) }
     }
 }
 
@@ -185,7 +185,7 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                 Ok(Flow::Continue)
             }
             "install-cli" => {
-                let r = crate::commands::install_cli_impl(ctx)?;
+                let r = crate::install::install_cli_impl(ctx)?;
                 out.line(format!("bit CLI installed: {}", r["path"].as_str().unwrap_or("")));
                 if let Some(hint) = r["hint"].as_str() {
                     if !hint.is_empty() { out.line(format!("Hint: {hint}")); }

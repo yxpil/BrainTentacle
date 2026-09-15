@@ -231,6 +231,99 @@ pub fn encode_for_write(path: &str, content: &str, source: Option<&[u8]>) -> Vec
     }
 }
 
+// ── Windows 控制台附加与代码页管理 ──
+// GUI 子系统进程（Tauri 壳 / 双击启动）没有控制台：TUI 模式先 attach 父进程控制台，
+// 切 UTF-8 代码页；进程退出前 restore_console_cp() 还原，不污染用户终端。
+// （自 src-tauri/main.rs 下沉：bit-cli / Electron sidecar 同样需要）
+
+#[cfg(windows)]
+static PREV_OUTPUT_CP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+static PREV_INPUT_CP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 附加父进程控制台并切 UTF-8（仅 Windows GUI 进程需要；stdout 已被重定向时不覆盖）
+#[cfg(windows)]
+pub fn attach_console() {
+    extern "system" {
+        fn AttachConsole(dw_process_id: u32) -> i32;
+        fn SetStdHandle(n_std_handle: u32, handle: isize) -> i32;
+        fn GetStdHandle(n_std_handle: u32) -> isize;
+        fn GetConsoleOutputCP() -> u32;
+        fn SetConsoleOutputCP(w_code_page_id: u32) -> i32;
+        fn GetConsoleCP() -> u32;
+        fn SetConsoleCP(w_code_page_id: u32) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    const STD_INPUT_HANDLE: u32 = (-10i32) as u32;
+    const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
+    const STD_ERROR_HANDLE: u32 = (-12i32) as u32;
+    const CP_UTF8: u32 = 65001;
+    unsafe {
+        // stdout 已有有效句柄（父进程管道重定向，如 E2E / CI）→ 绝不能覆盖，
+        // 否则输出会改道 CONOUT$ 导致管道收不到任何内容
+        let out = GetStdHandle(STD_OUTPUT_HANDLE);
+        if out != 0 && out != -1 {
+            return;
+        }
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        // File 对象 Drop 会 CloseHandle：SetStdHandle 登记后若放任作用域结束，
+        // 标准流句柄立即失效（句柄值还可能被后续 CreateFile 复用），TUI 秒退且输出全丢。
+        // 故意 mem::forget 泄漏，让句柄存活到进程结束。
+        use std::os::windows::io::AsRawHandle;
+        if let Ok(f) = std::fs::OpenOptions::new().read(true).open("CONIN$") {
+            SetStdHandle(STD_INPUT_HANDLE, f.as_raw_handle() as _);
+            std::mem::forget(f);
+        }
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+            SetStdHandle(STD_OUTPUT_HANDLE, f.as_raw_handle() as _);
+            SetStdHandle(STD_ERROR_HANDLE, f.as_raw_handle() as _);
+            std::mem::forget(f);
+        }
+        // Rust 按 UTF-8 直写标准流：中文 Windows 控制台默认 GBK(936) 会把 TUI 中文打成乱码，
+        // 读入同理。切到 UTF-8 并记录原值，进程退出前 restore_console_cp() 还原。
+        let po = GetConsoleOutputCP();
+        if po != CP_UTF8 {
+            SetConsoleOutputCP(CP_UTF8);
+            PREV_OUTPUT_CP.store(po, std::sync::atomic::Ordering::Relaxed);
+        }
+        let pi = GetConsoleCP();
+        if pi != CP_UTF8 {
+            SetConsoleCP(CP_UTF8);
+            PREV_INPUT_CP.store(pi, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn attach_console() {}
+
+/// TUI 退出前还原控制台代码页（attach 时改过才还原）
+#[cfg(windows)]
+pub fn restore_console_cp() {
+    #[cfg(windows)]
+    extern "system" {
+        fn SetConsoleOutputCP(w_code_page_id: u32) -> i32;
+        fn SetConsoleCP(w_code_page_id: u32) -> i32;
+    }
+    let po = PREV_OUTPUT_CP.swap(0, std::sync::atomic::Ordering::Relaxed);
+    if po != 0 {
+        unsafe {
+            SetConsoleOutputCP(po);
+        }
+    }
+    let pi = PREV_INPUT_CP.swap(0, std::sync::atomic::Ordering::Relaxed);
+    if pi != 0 {
+        unsafe {
+            SetConsoleCP(pi);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn restore_console_cp() {}
+
 #[cfg(test)]
 mod tests {
     use super::{

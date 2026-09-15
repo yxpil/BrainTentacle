@@ -984,7 +984,7 @@ async fn builtin_invoke(
         "send_file" => {
             let raw = params.get("path").and_then(|v| v.as_str()).ok_or("Missing parameter: path")?;
             // 规范化 + 绝对化：卡片存自包含的绝对路径，点击打开/定位时不再受当时上下文影响
-            let path = crate::commands::normalize_user_path(raw);
+            let path = crate::paths::normalize_user_path(raw);
             let p = std::path::Path::new(&path);
             let meta = std::fs::metadata(p).map_err(|_| format!("File not found: {raw}"))?;
             if meta.is_dir() {
@@ -992,7 +992,7 @@ async fn builtin_invoke(
             }
             // 卡片存自包含的干净绝对路径：canonicalize 绝对化后剥掉 Windows `\\?\` verbatim
             // 前缀（否则 explorer /select 解析失败退回打开"文档"文件夹）
-            let card_path = crate::commands::clean_display_path(
+            let card_path = crate::paths::clean_display_path(
                 &std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(&path)),
             );
             let name = p

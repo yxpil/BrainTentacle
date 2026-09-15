@@ -2,67 +2,20 @@
 // release 构建隐藏 Windows 控制台窗口；debug 保留便于查看日志
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod agent;
-mod ai;
-mod audit;
-mod autopilot;
+// M1-c 壳层重接：核心逻辑已下沉 bit-core（crates/bit-core），壳层 re-export 保持
+// crate::X 路径不变；本地只留 commands（#[tauri::command] 薄包装）/ tray / emitter（TauriEmitter）。
+pub use bit_core::{
+    agent, ai, audit, autopilot, config, console_codec, crash, delegation, desktop_ctl, engine,
+    extract, goal, guardian, hidden_code, http_api, l2pass, mcp, memory, netinfo, osprotect, paths,
+    perms, plugins, registry, relay, repetition, runtime, sandbox, script, script_runtime,
+    securefile, security, session, shellbg, state, store, syntax, task, toolenv, trace, tui,
+    update, worker,
+};
 mod commands;
-mod config;
-mod console_codec;
-mod crash;
-mod delegation;
-// 本机操控三件套：依赖 enigo（Linux 需要 libxdo）。musl / exotic 架构 / 无 GUI 目标
-// 用 --no-default-features 编译时替换为 stub，保证链接通过、工具返回明确错误
-#[cfg(feature = "desktop-ctl")]
-mod desktop_ctl;
-#[cfg(not(feature = "desktop-ctl"))]
-mod desktop_ctl {
-    type Ctx = std::sync::Arc<crate::state::Ctx>;
-    pub fn screenshot(_ctx: &Ctx, _d: usize, _r: Option<(u32, u32, u32, u32)>) -> Result<String, String> {
-        Err("此构建未编译本机操控能力（no-GUI/musl 目标）".into())
-    }
-    pub fn mouse(_a: &str, _p: &serde_json::Value) -> Result<serde_json::Value, String> {
-        Err("此构建未编译本机操控能力（no-GUI/musl 目标）".into())
-    }
-    pub fn keyboard(_a: &str, _p: &serde_json::Value) -> Result<serde_json::Value, String> {
-        Err("此构建未编译本机操控能力（no-GUI/musl 目标）".into())
-    }
-}
-mod extract;
+// TUI 用的控制台附加/代码页还原（bit-core 实现，本壳 GUI 子系统启动时需要）
+use bit_core::{attach_console, restore_console_cp};
 mod emitter;
-mod goal;
-mod guardian;
-mod hidden_code;
-mod http_api;
-mod l2pass;
-mod mcp;
-mod memory;
-mod netinfo;
-mod engine;
-mod osprotect;
-mod store;
-mod perms;
-mod plugins;
-mod registry;
-mod worker;
-mod relay;
-mod repetition;
-mod sandbox;
-mod shellbg;
-mod runtime;
-mod script;
-mod script_runtime;
-mod security;
-mod securefile;
-mod session;
-mod state;
-mod syntax;
-mod task;
-mod toolenv;
-mod trace;
 mod tray;
-mod tui;
-mod update;
 
 use std::io::Write;
 use std::sync::Arc;
@@ -333,10 +286,9 @@ fn main() {
                 // 解释器探测同步执行：CLI 场景不赶时间，脚本类工具需要完整列表。
                 let _ = ctx.refresh_runtimes();
                 let tui_ctx = ctx.clone();
-                let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     // 内部 std::process::exit，不会返回
-                    tui::run_blocking(tui_ctx, handle);
+                    tui::run_blocking(tui_ctx);
                 });
                 return Ok(());
             }
@@ -649,88 +601,3 @@ fn main() {
         });
 }
 
-/// Windows release 版是 GUI 子系统（无控制台），`bit tui` 从终端启动时
-/// 需先挂接父进程控制台并重新打开标准流，否则输出会静默丢失。
-#[cfg(windows)]
-fn attach_console() {
-    extern "system" {
-        fn AttachConsole(dw_process_id: u32) -> i32;
-        fn SetStdHandle(n_std_handle: u32, handle: isize) -> i32;
-        fn GetStdHandle(n_std_handle: u32) -> isize;
-        fn GetConsoleOutputCP() -> u32;
-        fn SetConsoleOutputCP(w_code_page_id: u32) -> i32;
-        fn GetConsoleCP() -> u32;
-        fn SetConsoleCP(w_code_page_id: u32) -> i32;
-    }
-    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
-    const STD_INPUT_HANDLE: u32 = (-10i32) as u32;
-    const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
-    const STD_ERROR_HANDLE: u32 = (-12i32) as u32;
-    const CP_UTF8: u32 = 65001;
-    unsafe {
-        // stdout 已有有效句柄（父进程管道重定向，如 E2E / CI）→ 绝不能覆盖，
-        // 否则输出会改道 CONOUT$ 导致管道收不到任何内容
-        let out = GetStdHandle(STD_OUTPUT_HANDLE);
-        if out != 0 && out != -1 {
-            return;
-        }
-        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
-            return;
-        }
-        // File 对象 Drop 会 CloseHandle：SetStdHandle 登记后若放任作用域结束，
-        // 标准流句柄立即失效（句柄值还可能被后续 CreateFile 复用），TUI 秒退且输出全丢。
-        // 故意 mem::forget 泄漏，让句柄存活到进程结束。
-        use std::os::windows::io::AsRawHandle;
-        if let Ok(f) = std::fs::OpenOptions::new().read(true).open("CONIN$") {
-            SetStdHandle(STD_INPUT_HANDLE, f.as_raw_handle() as _);
-            std::mem::forget(f);
-        }
-        if let Ok(f) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
-            SetStdHandle(STD_OUTPUT_HANDLE, f.as_raw_handle() as _);
-            SetStdHandle(STD_ERROR_HANDLE, f.as_raw_handle() as _);
-            std::mem::forget(f);
-        }
-        // Rust 按 UTF-8 直写标准流：中文 Windows 控制台默认 GBK(936) 会把 TUI 中文打成乱码，
-        // 读入同理。切到 UTF-8 并记录原值，进程退出前 restore_console_cp() 还原，不污染用户终端。
-        let po = GetConsoleOutputCP();
-        if po != CP_UTF8 {
-            SetConsoleOutputCP(CP_UTF8);
-            PREV_OUTPUT_CP.store(po, std::sync::atomic::Ordering::Relaxed);
-        }
-        let pi = GetConsoleCP();
-        if pi != CP_UTF8 {
-            SetConsoleCP(CP_UTF8);
-            PREV_INPUT_CP.store(pi, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-}
-
-/// attach_console 切代码页前的原值（0 = 未改动，无需还原）
-#[cfg(windows)]
-static PREV_OUTPUT_CP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-#[cfg(windows)]
-static PREV_INPUT_CP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-/// TUI 退出前还原控制台代码页（attach 时改过才还原）
-#[cfg(windows)]
-pub fn restore_console_cp() {
-    extern "system" {
-        fn SetConsoleOutputCP(w_code_page_id: u32) -> i32;
-        fn SetConsoleCP(w_code_page_id: u32) -> i32;
-    }
-    let po = PREV_OUTPUT_CP.swap(0, std::sync::atomic::Ordering::Relaxed);
-    if po != 0 {
-        unsafe {
-            SetConsoleOutputCP(po);
-        }
-    }
-    let pi = PREV_INPUT_CP.swap(0, std::sync::atomic::Ordering::Relaxed);
-    if pi != 0 {
-        unsafe {
-            SetConsoleCP(pi);
-        }
-    }
-}
-
-#[cfg(not(windows))]
-pub fn restore_console_cp() {}

@@ -1,36 +1,27 @@
 [package]
-name = "bit"
-version = "0.6.23"
-description = "BIT - Agent Tool Hub with audit and remote access"
+name = "bit-core"
+description = "BIT core: agent engine, tools, storage, worker, TUI (framework-agnostic)"
+version.workspace = true
 edition = "2021"
 
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+[lib]
+name = "bit_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bit-cli"
+path = "src/bin/bit-cli.rs"
 
 [dependencies]
-# 核心逻辑库（agent/tools/store/worker/TUI）：壳层只做 #[tauri::command] 薄包装与系统能力
-# default-features=false：desktop-ctl / tui-ui 由本 crate 的同名 feature 转发（musl/exotic 用 --no-default-features 裁剪）
-bit-core = { path = "../crates/bit-core", default-features = false }
-# macos-private-api 与 tauri.conf.json 的 app.macOSPrivateApi=true 配套（官方要求）：
-# 该 feature 仅在 macOS 上产生实际效果，Windows/Linux 启用无副作用，
-# tauri-build 会合并解析 Cargo.toml 所有 target 的 features 与 conf 比对，因此统一声明。
-tauri = { version = "2", features = ["macos-private-api", "tray-icon", "protocol-asset"] }
-tauri-plugin-notification = "2"
-# 单实例保护：二次启动时唤起已有实例的主窗口而不是再开一个进程
-tauri-plugin-single-instance = "2"
-# 开机自动启动：写系统登录项（macOS LaunchAgent / Windows 注册表 Run / Linux autostart 目录）
-tauri-plugin-autostart = "2"
-# 全局快捷键：即使窗口隐藏/最小化也能用系统级热键唤出主界面
-tauri-plugin-global-shortcut = "2"
 # 守护进程：接力拉起前校验主程序二进制 sha256（防病毒换装借壳复活）
 sha2 = "0.10"
 # HiddenCode 敏感信息脱敏：手机号/邮箱/API key 内置正则探测与掩码
 regex = "1"
 # 控制台输出解码：中文 Windows cmd/PowerShell 管道输出默认 GBK(936)，UTF-8 直通 + GBK 兜底
 encoding_rs = "0.8"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 axum = "0.8"
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 uuid = { version = "1", features = ["v4"] }
@@ -43,7 +34,6 @@ futures-util = "0.3"
 calamine = "0.36"
 scraper = "0.20"
 base64 = "0.22"
-rfd = "0.15" # 原生保存对话框（图片/图表另存为）
 zip = "2"
 quick-xml = "0.42"
 # 页眉仪表盘：本进程内存占用查询
@@ -55,7 +45,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # 远程二维码：网卡地址枚举（LAN IPv4 / 全球 IPv6）+ 离线二维码 SVG 生成
 if-addrs = "0.13"
 qrcode = { version = "0.14", features = ["svg"] }
-ctrlc = "3"
 # 调试追踪：无锁 channel + 后台 flush，死锁诊断专用
 crossbeam-channel = "0.5"
 # 本机操控三件套（实验性，设置页开关）：截屏 + 鼠标/键盘合成输入
@@ -71,8 +60,8 @@ crossterm = { version = "0.29", optional = true }
 
 [features]
 default = ["desktop-ctl", "tui-ui"]
-desktop-ctl = ["dep:screenshots", "dep:enigo", "dep:image", "bit-core/desktop-ctl"]
-tui-ui = ["dep:ratatui", "dep:crossterm", "bit-core/tui-ui"]
+desktop-ctl = ["dep:screenshots", "dep:enigo", "dep:image"]
+tui-ui = ["dep:ratatui", "dep:crossterm"]
 
 # Windows 原生加密第二层：DPAPI（CryptProtectData，CurrentUser 绑定本机本用户）
 [target.'cfg(windows)'.dependencies]

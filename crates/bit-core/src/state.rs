@@ -154,6 +154,38 @@ pub struct Ctx {
 pub const AUDIT_MAX: usize = 2000;
 pub const CHAT_MAX: usize = 200;
 
+/// 默认数据目录（与 Tauri app_data_dir 同一路径规则，identifier 固定 com.bit.hub）：
+/// - Windows：{%APPDATA%}/com.bit.hub
+/// - macOS：~/Library/Application Support/com.bit.hub
+/// - Linux：{$XDG_DATA_HOME|~/.local/share}/com.bit.hub
+/// bit-cli / Electron(napi setPath userData) 与 Tauri 版共用同一份数据，无感迁移
+pub fn default_data_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("APPDATA")
+            .map(|d| PathBuf::from(d).join("com.bit.hub"))
+            .unwrap_or_else(|| PathBuf::from(".").join("bit-data"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Library").join("Application Support").join("com.bit.hub"))
+            .unwrap_or_else(|| PathBuf::from(".").join("bit-data"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
+            .unwrap_or_else(|| PathBuf::from("."));
+        base.join("com.bit.hub")
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        PathBuf::from(".").join("bit-data")
+    }
+}
+
 /// 一条待审批的工具调用：应答通道 + 展示用元信息（工具名 / 参数 / 发起时刻）
 pub struct PendingApproval {
     pub tx: tokio::sync::oneshot::Sender<bool>,

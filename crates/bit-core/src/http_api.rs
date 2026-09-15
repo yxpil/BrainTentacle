@@ -176,7 +176,7 @@ pub fn build_router(ctx: Arc<Ctx>) -> Router {
 /// GET /api/qr：连接二维码 payload（与 Tauri get_remote_qr 同一数据源，含 128 位识别码
 /// 与三种连接方式），手机端脚本化获取 / E2E 断言用
 async fn qr_route(State(ctx): State<Arc<Ctx>>) -> Response {
-    match crate::commands::qr_payload(&ctx).await {
+    match crate::relay::qr_payload(&ctx).await {
         Ok(p) => Json(p).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
@@ -190,7 +190,7 @@ async fn health() -> Json<serde_json::Value> {
 async fn update_check() -> Response {
     match crate::update::fetch_latest().await {
         Ok(l) => {
-            let has_update = crate::commands::version_gt(&l.version, env!("CARGO_PKG_VERSION"));
+            let has_update = crate::update::version_gt(&l.version, env!("CARGO_PKG_VERSION"));
             Json(json!({
                 "current": env!("CARGO_PKG_VERSION"),
                 "latest": l.version,
@@ -1462,11 +1462,11 @@ async fn context_metrics_route(State(ctx): State<Arc<Ctx>>) -> Response {
         Ok((c, _)) => c,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
-    let est = super::commands::estimate_context_tokens(&ctx, &session_id, &convo);
+    let est = crate::ai::estimate_context_tokens(&ctx, &session_id, &convo);
     Json(json!({
         "session_id": session_id,
         "est_tokens": est,
-        "max_context": super::commands::active_max_context(&ctx),
+        "max_context": crate::ai::active_max_context(&ctx),
     }))
     .into_response()
 }
@@ -2043,7 +2043,7 @@ mod tests {
     async fn test_list_models_http_error_propagates() {
         // 上游 401：错误信息应透传而不是静默返回空列表
         let base = spawn_401_server().await;
-        let err = super::super::commands::fetch_provider_models("openai", &base, "bad-key")
+        let err = crate::ai::fetch_provider_models("openai", &base, "bad-key")
             .await
             .unwrap_err();
         assert!(err.contains("401"), "应透传 HTTP 状态码: {err}");
@@ -2052,7 +2052,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_models_connection_refused() {
         // 连接不存在的端口：应返回 Err 而非 panic/空列表
-        let err = super::super::commands::fetch_provider_models("openai", "http://127.0.0.1:9/v1", "")
+        let err = crate::ai::fetch_provider_models("openai", "http://127.0.0.1:9/v1", "")
             .await
             .unwrap_err();
         assert!(!err.is_empty());
@@ -2060,7 +2060,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_models_empty_base_url() {
-        let err = super::super::commands::fetch_provider_models("openai", "  ", "")
+        let err = crate::ai::fetch_provider_models("openai", "  ", "")
             .await
             .unwrap_err();
         assert!(err.contains("Base URL"));
@@ -2070,7 +2070,7 @@ mod tests {
     async fn test_list_models_trailing_slash_normalized() {
         // 边缘：base_url 带尾斜杠不应产生 //models 双斜杠（对 401 服务请求即可验证 URL 拼接正常）
         let base = spawn_401_server().await;
-        let err = super::super::commands::fetch_provider_models("openai", &format!("{base}/"), "bad-key")
+        let err = crate::ai::fetch_provider_models("openai", &format!("{base}/"), "bad-key")
             .await
             .unwrap_err();
         assert!(err.contains("401"), "尾斜杠应被归一化: {err}");

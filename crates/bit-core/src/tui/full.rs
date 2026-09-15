@@ -162,17 +162,17 @@ fn longest_common_prefix(strs: &[&str]) -> String {
 }
 
 /// 不返回（进程内退出）
-pub fn run(ctx: Arc<Ctx>, app: tauri::AppHandle) -> ! {
+pub fn run(ctx: Arc<Ctx>) -> ! {
     let mut term = match TerminalGuard::enter() {
         Ok(t) => t,
         // raw mode 进不去（某些奇葩终端）：回退行协议，保证可用
-        Err(_) => return super::plain::run(ctx, app),
+        Err(_) => return super::plain::run(ctx),
     };
 
     let (key_tx, mut key_rx) = tokio::sync::mpsc::unbounded_channel::<crossterm::event::KeyEvent>();
     spawn_key_thread(key_tx);
 
-    let result = crate::task::block_on(async_main(ctx.clone(), app.clone(), &mut term, &mut key_rx));
+    let result = crate::task::block_on(async_main(ctx.clone(), &mut term, &mut key_rx));
 
     // drop guard 还原终端后再打印收尾/退出
     drop(term);
@@ -186,12 +186,11 @@ pub fn run(ctx: Arc<Ctx>, app: tauri::AppHandle) -> ! {
 
 async fn async_main(
     ctx: Arc<Ctx>,
-    app: tauri::AppHandle,
     term: &mut TerminalGuard,
     key_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crossterm::event::KeyEvent>,
 ) -> Result<(), String> {
     let mut ui = App::new();
-    let ver = app.package_info().version.clone();
+    let ver = ctx.app_version.clone();
     ui.push(MsgKind::System, format!("BIT TUI v{}（全屏界面 · 输入 /help 查看命令）", ver));
     if !ctx.ai_config.lock().unwrap().is_configured() {
         ui.push(

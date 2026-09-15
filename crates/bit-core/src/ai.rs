@@ -2,6 +2,8 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::state::Ctx;
+
 /// 单个模型提供方（可同时配置多家，但每次仅激活一个）
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Provider {
@@ -4078,4 +4080,266 @@ mod tool_visible_tests {
         }
         assert!(!tool_visible(&cfg, &def("keyboard", true)), "keyboard 闸门未开");
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 模型上下文长度：列表拉取 + 持久缓存 + 激活提供方兜底
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Claude 协议的模型列表不携带上下文信息，用已知家族默认值兜底（token 数）
+pub fn claude_context_for(id: &str) -> Option<u64> {
+    if id.starts_with("claude") {
+        Some(200_000)
+    } else {
+        None
+    }
+}
+
+/// 从单个模型对象尽力提取上下文长度（各家字段不统一，逐个常见字段尝试）
+fn context_len_from(model: &serde_json::Value) -> Option<u64> {
+    const FIELDS: [&str; 5] =
+        ["context_length", "max_model_len", "context_window", "max_context_length", "max_input_tokens"];
+    for f in FIELDS {
+        if let Some(v) = model.get(f).and_then(|v| v.as_u64()) {
+            return Some(v);
+        }
+    }
+    // OpenRouter 嵌套形态：top_provider.context_length
+    model
+        .get("top_provider")
+        .and_then(|p| p.get("context_length"))
+        .and_then(|v| v.as_u64())
+}
+
+/// 模型上下文缓存键：base 归一化（去首尾空白与尾斜杠）+ 模型 id
+fn ctx_key(base: &str, id: &str) -> String {
+    format!("{}|{id}", base.trim().trim_end_matches('/'))
+}
+
+/// 从提供方 API 拉取可用模型列表（含尽力获取的上下文长度），返回 (生效 base, models)：
+/// - openai 兼容：GET {base}/models（Bearer Key）
+/// - gemini：GET {base}/v1beta/models?key=（inputTokenLimit；name 去 "models/" 前缀）
+/// - claude：GET {base}/v1/models（x-api-key + anthropic-version；无上下文字段用家族默认）
+/// 自动检测：openai 兼容端点要求 base 以 /v1 结尾，用户漏写时自动补试 {base}/v1；
+/// claude/gemini 由本函数拼路径前缀，用户多写 /v1、/v1beta 时自动去掉再试。
+/// scheme 缺失时自动补全探测：https 优先，连不上自动降级 http（本机/局域网端点常见）。
+/// 返回第一个拿到合法模型列表的 base，前端据此把输入框纠正为可直接对话的端点。
+pub async fn fetch_provider_models(
+    protocol: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<(String, Vec<(String, Option<u64>)>), String> {
+    let raw = base_url.trim().trim_end_matches('/').to_string();
+    if raw.is_empty() {
+        return Err("Base URL 不能为空".into());
+    }
+    // scheme 候选：用户写了就用原样；没写则 https 优先、http 兜底降级
+    let scheme_bases: Vec<String> = if raw.starts_with("http://") || raw.starts_with("https://") {
+        vec![raw.clone()]
+    } else {
+        vec![format!("https://{raw}"), format!("http://{raw}")]
+    };
+    // 候选 base：scheme × 路径变体，按可能性排序
+    let mut candidates: Vec<String> = Vec::new();
+    for b in &scheme_bases {
+        match protocol {
+            "gemini" => match b.strip_suffix("/v1beta") {
+                Some(stripped) => candidates.push(stripped.to_string()),
+                None => candidates.push(b.clone()),
+            },
+            "claude" => match b.strip_suffix("/v1") {
+                Some(stripped) => candidates.push(stripped.to_string()),
+                None => candidates.push(b.clone()),
+            },
+            _ => {
+                candidates.push(b.clone());
+                if !b.ends_with("/v1") {
+                    candidates.push(format!("{b}/v1"));
+                }
+            }
+        }
+    }
+    let client = http_client_for(&candidates[0], 15).map_err(|e| e.to_string())?;
+
+    let mut last_err = String::new();
+    for cand in &candidates {
+        let url = match protocol {
+            "gemini" => format!("{cand}/v1beta/models?pageSize=200&key={api_key}"),
+            "claude" => format!("{cand}/v1/models?limit=1000"),
+            _ => format!("{cand}/models"),
+        };
+        let mut req = client.get(&url);
+        match protocol {
+            "gemini" => {} // Key 已在查询参数中
+            "claude" => {
+                req = req
+                    .header("x-api-key", api_key)
+                    .header("anthropic-version", "2023-06-01");
+            }
+            _ => {
+                if !api_key.is_empty() {
+                    req = req.header("Authorization", format!("Bearer {api_key}"));
+                }
+            }
+        }
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("请求失败: {e}");
+                continue;
+            }
+        };
+        let status = resp.status();
+        let ct = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body_text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            // 错误体常含服务端原始 message，优先透传
+            let msg = serde_json::from_str::<serde_json::Value>(&body_text)
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/error/message")
+                        .and_then(|m| m.as_str())
+                        .map(String::from)
+                })
+                .unwrap_or_else(|| crate::registry::safe_trunc(&body_text, 200));
+            last_err = format!("HTTP {status}: {msg}");
+            continue;
+        }
+        let looks_html = ct.starts_with("text/html") || body_text.trim_start().starts_with('<');
+        let body: serde_json::Value = match serde_json::from_str(&body_text) {
+            Ok(v) => v,
+            Err(_) => {
+                last_err = if looks_html {
+                    "该地址返回的是网页而非 API 响应：OpenAI 兼容端点的 Base URL 通常要以 /v1 结尾（例如 https://example.com/v1）".to_string()
+                } else {
+                    format!("响应不是有效的模型列表 JSON（content-type: {ct}）")
+                };
+                continue;
+            }
+        };
+        let has_list = body.get("data").and_then(|v| v.as_array()).is_some()
+            || body.get("models").and_then(|v| v.as_array()).is_some();
+        if !has_list {
+            last_err = "响应里没有模型列表（缺少 data / models 字段），请确认这是 API 端点而非网页地址".to_string();
+            continue;
+        }
+        let mut models: Vec<(String, Option<u64>)> = match protocol {
+            "gemini" => body
+                .get("models")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| {
+                            let id = m.get("name")?.as_str()?.trim_start_matches("models/").to_string();
+                            let len = m.get("inputTokenLimit").and_then(|v| v.as_u64());
+                            Some((id, len))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            "claude" => body
+                .get("data")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| {
+                            let id = m.get("id")?.as_str()?.to_string();
+                            let len = claude_context_for(&id);
+                            Some((id, len))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => body
+                .get("data")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| {
+                            let id = m.get("id")?.as_str()?.to_string();
+                            Some((id, context_len_from(m)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        models.sort_by(|a, b| a.0.cmp(&b.0));
+        models.dedup_by(|a, b| a.0 == b.0);
+        return Ok((cand.clone(), models));
+    }
+    Err(last_err)
+}
+
+/// 把拉取到的上下文长度并入 ai_config.model_context 持久缓存并落盘
+pub fn persist_model_context(ctx: &Arc<Ctx>, base_url: &str, models: &[(String, Option<u64>)]) {
+    {
+        let mut cfg = ctx.ai_config.lock().unwrap();
+        for (id, len) in models {
+            if let Some(n) = len {
+                cfg.model_context.insert(ctx_key(base_url, id), *n);
+            }
+        }
+    }
+    ctx.save_ai_config();
+}
+
+/// 启动/配置变更时后台刷新激活提供方的模型上下文缓存（失败静默）
+pub async fn refresh_model_context(ctx: &Arc<Ctx>, protocol: &str, base_url: &str, api_key: &str) {
+    // 用自动检测后的生效 base 落缓存：与前端纠正后保存的 provider base 对齐
+    if let Ok((effective, models)) = fetch_provider_models(protocol, base_url, api_key).await {
+        persist_model_context(ctx, &effective, &models);
+    }
+}
+
+/// 激活模型的最大上下文（token）：优先模型列表获取的缓存，claude 协议用家族默认兜底
+pub fn active_max_context(ctx: &Arc<Ctx>) -> Option<u64> {
+    let ai = ctx.ai_config.lock().unwrap();
+    let p = ai.active()?.clone();
+    let base = p.base_url.trim().trim_end_matches('/');
+    // 精确匹配：provider.model 与模型列表中的 id 完全一致
+    if let Some(n) = ai.model_context.get(&ctx_key(base, &p.model)).copied() {
+        return Some(n);
+    }
+    // 兜底：同 base 下已缓存了模型上下文，但 provider 的 model 字段是别名 / 快照未列出的 id
+    // （很多提供方 /v1/models 返回的 id 与配置里填的模型名不一致）。取同 base 下最小的可用
+    // 上下文长度（保守，避免高估导致截断），保证 max_context 能取到。
+    if !p.model.is_empty() {
+        let prefix = format!("{}|", base);
+        if let Some(min) = ai
+            .model_context
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix))
+            .map(|(_, v)| *v)
+            .min()
+        {
+            return Some(min);
+        }
+    }
+    claude_context_for(&p.model)
+}
+
+/// 估算一次对话请求的 token 量（粗估：chars/2），远程访问配额提示用：
+/// 兼容模式（文本约定）下工具清单以压缩形式内联在系统提示词里，已计入 convo_chars；
+/// 标准原生模式才需要额外估算 tools 参数的 token 占用
+pub fn estimate_context_tokens(_ctx: &Arc<Ctx>, session_id: &str, convo: &[ChatMessage]) -> usize {
+    let _ = session_id;
+    let compat = _ctx.config.lock().unwrap().compat_mode;
+    let convo_chars: usize = convo
+        .iter()
+        .map(|m| m.role.chars().count() + m.content.chars().count() + 8)
+        .sum();
+    let tool_chars = if compat {
+        0
+    } else {
+        serde_json::to_string(&native_tool_defs(_ctx))
+            .unwrap_or_default()
+            .chars()
+            .count()
+    };
+    (convo_chars + tool_chars).div_ceil(2)
 }

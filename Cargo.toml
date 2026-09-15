@@ -1,0 +1,16 @@
+# yxpil · BIT workspace 根
+# bit-core  = 纯逻辑库（无 tauri 依赖）+ bit-cli 三模式 bin（TUI/worker/guardian）
+# bit-napi  = napi-rs cdylib（Electron 主进程加载）
+# src-tauri = Tauri 过渡期壳（M5 删除）
+[workspace]
+resolver = "2"
+members = ["crates/bit-core", "crates/bit-napi", "src-tauri"]
+
+# 版本号单源：升级时只改这里 + tauri.conf.json + package.json
+[workspace.package]
+version = "0.6.23"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

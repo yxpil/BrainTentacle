@@ -252,7 +252,7 @@ static DL_BUSY: AtomicBool = AtomicBool::new(false);
 pub async fn download_update(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
     let latest = fetch_latest().await?;
     let current = env!("CARGO_PKG_VERSION");
-    if !crate::commands::version_gt(&latest.version, current) {
+    if !version_gt(&latest.version, current) {
         return Ok(json_status("none", &latest, None));
     }
     let Some((name, url)) = pick_asset(&serde_json::json!({
@@ -535,7 +535,7 @@ pub async fn auto_update_task(ctx: Arc<Ctx>) {
         Ok(l) => l,
         Err(_) => return,
     };
-    if !crate::commands::version_gt(&latest.version, env!("CARGO_PKG_VERSION")) {
+    if !version_gt(&latest.version, &ctx.app_version) {
         return;
     }
     // 同版本已下载过就不再下载
@@ -550,28 +550,55 @@ pub async fn auto_update_task(ctx: Arc<Ctx>) {
     }
 }
 
+/// 版本号比较 a > b。支持：
+/// - "0.5.36" → [0, 5, 36]
+/// - "0.6R1"  → [0, 6, 1]   （R 后紧跟的数字作为下一段，保证 0.6 < 0.6R1 < 0.6R2）
+/// - "v1.0.0" → [1, 0, 0]
+pub fn version_gt(a: &str, b: &str) -> bool {
+    fn parse(v: &str) -> Vec<u64> {
+        // "0.6R1" / "0.6r2" → "0.6.1" / "0.6.2"，统一为 dot 切分
+        let normalized = v.trim_start_matches('v').replace('R', ".").replace('r', ".");
+        normalized
+            .split('.')
+            .filter_map(|x| x.trim().parse::<u64>().ok())
+            .collect()
+    }
+    let pa = parse(a);
+    let pb = parse(b);
+    let n = pa.len().max(pb.len()).min(4);
+    for i in 0..n {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// 版本号比较：支持 "v" 前缀、R 代数后缀（0.6 < 0.6R1 < 0.6R2）、长度不齐补 0
     #[test]
     fn version_comparison() {
         // 借用 commands 的比较函数验证更新判定
-        assert!(crate::commands::version_gt("0.5.0", "0.4.9"));
-        assert!(crate::commands::version_gt("1.0.0", "0.9.9"));
-        assert!(!crate::commands::version_gt("0.4.9", "0.4.9"));
-        assert!(!crate::commands::version_gt("0.4.8", "0.4.9"));
-        assert!(crate::commands::version_gt("v0.5.0", "0.4.9"));
+        assert!(version_gt("0.5.0", "0.4.9"));
+        assert!(version_gt("1.0.0", "0.9.9"));
+        assert!(!version_gt("0.4.9", "0.4.9"));
+        assert!(!version_gt("0.4.8", "0.4.9"));
+        assert!(version_gt("v0.5.0", "0.4.9"));
         // R 后缀（0.6R1/0.6R2…）：R 后数字作为下一段，保证 0.6 < 0.6R1 < 0.6R2
-        assert!(crate::commands::version_gt("0.6R1", "0.5.36"));
-        assert!(crate::commands::version_gt("0.6R2", "0.6R1"));
-        assert!(crate::commands::version_gt("0.6R1", "0.6"));
-        assert!(!crate::commands::version_gt("0.6R1", "0.6R1"));
-        assert!(!crate::commands::version_gt("0.6R1", "0.6R2"));
-        assert!(!crate::commands::version_gt("0.5.36", "0.6R1"));
-        assert!(crate::commands::version_gt("v0.6R1", "0.6"));
+        assert!(version_gt("0.6R1", "0.5.36"));
+        assert!(version_gt("0.6R2", "0.6R1"));
+        assert!(version_gt("0.6R1", "0.6"));
+        assert!(!version_gt("0.6R1", "0.6R1"));
+        assert!(!version_gt("0.6R1", "0.6R2"));
+        assert!(!version_gt("0.5.36", "0.6R1"));
+        assert!(version_gt("v0.6R1", "0.6"));
         // 不带 R 时 R<...> 段被忽略，仍按基础三段比较
-        assert!(crate::commands::version_gt("0.6.1", "0.6"));
+        assert!(version_gt("0.6.1", "0.6"));
     }
 
     #[test]
