@@ -63,14 +63,16 @@ Download the installer for your platform from [Releases](https://github.com/yxpi
 
 | Platform | Installer | Notes |
 |---|---|---|
-| Windows x64 | `*-setup.exe` (NSIS) or `*.msi` | Double-click to install; ARM64 laptops (Snapdragon X) should pick the `aarch64` build |
+| Windows x64 | `*-setup.exe` (NSIS) | Double-click to install; ARM64 laptops (Snapdragon X) should pick the `aarch64` build |
 | macOS Apple Silicon | `*_aarch64.dmg` | M-series chips |
 | macOS Intel | `*_x64.dmg` | Drag into Applications to install |
 | Linux x64 / ARM64 | `*.deb` / `*.AppImage` / `*.rpm` | Pick whichever fits your distro's convention |
-| Loongson LoongArch64 (3A5000/3A6000) | `*_loongarch64.deb` / `*_loongarch64.tar.gz` | Double-click the deb to install; on other distros extract the binary |
-| RISC-V 64 (VisionFive 2, etc.) | `*_riscv64.deb` / `*_riscv64.tar.gz` | Same as above |
+| Loongson LoongArch64 (3A5000/3A6000) | See musl/exotic note below | Tauri-based BIT installer recommended |
+| RISC-V 64 (VisionFive 2, etc.) | See musl/exotic note below | Tauri-based BIT installer recommended |
 | Phytium / Kunpeng / Kylin ARM | `*_arm64.deb` / `*_arm64.AppImage` / `*_arm64.rpm` | Same as Linux ARM64 |
 | Zhaoxin / Hygon | `*_amd64.deb` / `*_amd64.AppImage` / `*_x86_64.rpm` | Same as Linux x64 |
+
+> **musl (Alpine) / exotic (LoongArch / RISC-V / ppc64le)**: Tentacle (the Electron build) ships no GUI for these architectures. Please download the **Tauri-based BIT** installer instead ([bit releases](https://github.com/yxpil/bit/releases), still actively updated); this repo only provides `bit-cli_*` (TUI / worker / guardian CLI).
 
 > For the full breakdown of supported CPU architectures and operating systems (including the Phytium / Kunpeng / Kylin / UOS / ChromeOS matrix), see the [Wiki: Chips and OS Support](https://github.com/yxpil/bit/wiki/Chips-and-OS-Support).
 
