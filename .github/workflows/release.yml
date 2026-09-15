@@ -93,6 +93,9 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
+      - name: 安装交叉编译目标（mac x64 在 arm runner 上交叉构建）
+        if: matrix.name == 'macos-x64'
+        run: rustup target add x86_64-apple-darwin
       - name: 安装 Linux 系统依赖（enigo/libxdo + openssl）
         if: runner.os == 'Linux'
         run: |

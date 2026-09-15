@@ -7,7 +7,7 @@ set -euo pipefail
 ARCH="$1"
 VERSION="$2"
 
-apk add --no-cache build-base pkgconf file rust cargo
+apk add --no-cache build-base pkgconf file rust cargo openssl-dev
 
 rustc --version
 # 只编 bit-cli：--no-default-features 跳过 desktop-ctl（enigo 依赖 libxdo，Alpine 无包）
