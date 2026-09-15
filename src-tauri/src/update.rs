@@ -52,7 +52,7 @@ pub async fn fetch_latest() -> Result<LatestInfo, String> {
     if let Ok(fake) = std::env::var("BIT_FAKE_UPDATE_URL") {
         sources.push(fake);
     }
-    sources.push("https://yxpil.github.io/BreanInTentacle/latest.json".into());
+    sources.push("https://yxpil.github.io/BrainTentacle/latest.json".into());
     sources.push("https://osbt.space/latest.json".into());
 
     // 2) 并发探测（之前是串行，首源挂时最坏要等 6s×3）
@@ -96,7 +96,7 @@ pub async fn fetch_latest() -> Result<LatestInfo, String> {
 
     // 3) 回退：GitHub API（拿 tag_name / body / html_url）
     if let Ok(v) = client
-        .get("https://api.github.com/repos/yxpil/BreanInTentacle/releases/latest")
+        .get("https://api.github.com/repos/yxpil/BrainTentacle/releases/latest")
         .header("User-Agent", "BIT-Agent")
         .send()
         .await
@@ -219,7 +219,7 @@ pub fn pick_asset(latest: &serde_json::Value) -> Option<(String, String)> {
     };
     Some((
         name.clone(),
-        format!("https://github.com/yxpil/BreanInTentacle/releases/download/v{v}/{name}"),
+        format!("https://github.com/yxpil/BrainTentacle/releases/download/v{v}/{name}"),
     ))
 }
 
@@ -581,12 +581,12 @@ mod tests {
         let latest = serde_json::json!({
             "version": "9.9.9",
             "assets": {
-                "windows-x64": "https://github.com/yxpil/BreanInTentacle/releases/download/v9.9.9/BIT_9.9.9_x64-setup.exe",
-                "windows-arm64": "https://github.com/yxpil/BreanInTentacle/releases/download/v9.9.9/BIT_9.9.9_aarch64-setup.exe",
-                "macos-arm64": "https://github.com/yxpil/BreanInTentacle/releases/download/v9.9.9/BIT_9.9.9_aarch64-app.zip",
-                "macos-x64": "https://github.com/yxpil/BreanInTentacle/releases/download/v9.9.9/BIT_9.9.9_x64-app.zip",
-                "linux-x64": "https://github.com/yxpil/BreanInTentacle/releases/download/v9.9.9/BIT_9.9.9_amd64.AppImage",
-                "linux-arm64": "https://github.com/yxpil/BreanInTentacle/releases/download/v9.9.9/BIT_9.9.9_aarch64.AppImage",
+                "windows-x64": "https://github.com/yxpil/BrainTentacle/releases/download/v9.9.9/BIT_9.9.9_x64-setup.exe",
+                "windows-arm64": "https://github.com/yxpil/BrainTentacle/releases/download/v9.9.9/BIT_9.9.9_aarch64-setup.exe",
+                "macos-arm64": "https://github.com/yxpil/BrainTentacle/releases/download/v9.9.9/BIT_9.9.9_aarch64-app.zip",
+                "macos-x64": "https://github.com/yxpil/BrainTentacle/releases/download/v9.9.9/BIT_9.9.9_x64-app.zip",
+                "linux-x64": "https://github.com/yxpil/BrainTentacle/releases/download/v9.9.9/BIT_9.9.9_amd64.AppImage",
+                "linux-arm64": "https://github.com/yxpil/BrainTentacle/releases/download/v9.9.9/BIT_9.9.9_aarch64.AppImage",
             }
         });
         let (name, url) = match pick_asset(&latest) {
@@ -617,7 +617,7 @@ mod tests {
         ] {
             let latest = serde_json::json!({ "version": "9.9.9", "assets": { "windows-x64": evil } });
             if let Some((_, url)) = pick_asset(&latest) {
-                assert!(url.starts_with("https://github.com/yxpil/BreanInTentacle/releases/"), "evil={evil} url={url}");
+                assert!(url.starts_with("https://github.com/yxpil/BrainTentacle/releases/"), "evil={evil} url={url}");
             }
         }
     }
@@ -630,7 +630,7 @@ mod tests {
             Some(x) => x,
             None => return, // exotic 平台
         };
-        assert!(url == format!("https://github.com/yxpil/BreanInTentacle/releases/download/v0.5.0/{name}"));
+        assert!(url == format!("https://github.com/yxpil/BrainTentacle/releases/download/v0.5.0/{name}"));
         assert!(name.contains("0.5.0"));
     }
 
@@ -646,7 +646,7 @@ mod tests {
         // 生产（allow_loopback=false）：回环 http 一律拒绝，HTTPS 白名单照常生效
         assert!(!trusted_asset_url_impl("http://127.0.0.1:9903/asset.bin", false));
         assert!(!trusted_asset_url_impl("http://github.com/a.bin", false));
-        assert!(trusted_asset_url_impl("https://github.com/yxpil/BreanInTentacle/releases/download/v1/x", false));
+        assert!(trusted_asset_url_impl("https://github.com/yxpil/BrainTentacle/releases/download/v1/x", false));
         assert!(trusted_asset_url_impl("https://osbt.space/bit.dmg", false));
     }
 

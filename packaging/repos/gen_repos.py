@@ -23,7 +23,7 @@ DEB_TO_DEB_ARCH = {"amd64": "amd64", "arm64": "arm64", "riscv64": "riscv64",
 DEB_TO_PAC_ARCH = {"amd64": "x86_64", "arm64": "aarch64", "riscv64": "riscv64",
                    "loongarch64": "loongarch64", "ppc64le": "powerpc64le"}
 PKGDESC = "BIT - 本地优先的 AI Agent 工具集（MCP / 工具注册 / 技能）"
-PKGURL = "https://github.com/yxpil/BreanInTentacle"
+PKGURL = "https://github.com/yxpil/BrainTentacle"
 
 
 def read_ar(data: bytes) -> dict:

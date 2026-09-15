@@ -48,7 +48,7 @@ def main():
     for sub, repo in MAP:
         print(f"== {repo} ==")
         subprocess.run(["gh", "repo", "create", repo, "--public",
-                        "--description", f"软件源 for 触手怪 (https://github.com/yxpil/BreanInTentacle)"],
+                        "--description", f"软件源 for 触手怪 (https://github.com/yxpil/BrainTentacle)"],
                        capture_output=True, text=True)
         for f in sorted((root / sub).rglob("*")):
             if f.is_file():

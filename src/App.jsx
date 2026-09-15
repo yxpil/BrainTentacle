@@ -546,7 +546,7 @@ export default function App() {
                 {t("app.qqGroup")}
               </button>
               <button
-                onClick={() => invoke("open_external", { url: "https://github.com/yxpil/BreanInTentacle" }).catch(() => {})}
+                onClick={() => invoke("open_external", { url: "https://github.com/yxpil/BrainTentacle" }).catch(() => {})}
                 className="pill pill-outline pill-hover px-3 py-1 text-xs"
               >
                 GitHub

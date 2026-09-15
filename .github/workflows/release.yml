@@ -489,7 +489,7 @@ jobs:
           NOTES=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body | head -c 300)
           # assets 映射：客户端自动更新按平台取直链（BIT 客户端 pick_asset 消费）
           BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
-          jq -n --arg v "$VERSION" --arg n "$NOTES" --arg u "https://yxpil.github.io/BreanInTentacle/$VERSION/" \
+          jq -n --arg v "$VERSION" --arg n "$NOTES" --arg u "https://yxpil.github.io/BrainTentacle/$VERSION/" \
             --arg w64 "$BASE/BIT_${VERSION}_x64-setup.exe" \
             --arg war "$BASE/BIT_${VERSION}_aarch64-setup.exe" \
             --arg maa "$BASE/BIT_${VERSION}_aarch64-app.zip" \

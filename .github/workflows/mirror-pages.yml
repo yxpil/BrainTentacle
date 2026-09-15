@@ -103,7 +103,7 @@ jobs:
           <li><a href="https://github.com/yxpil/bit-mobile"><span>安卓版</span><span class="size">bit-mobile</span></a></li>
           $ITEM_LIST
           </ul>
-          <p class=foot>触手怪 永久免费 / Tentacle is free forever · <a href="https://osbt.space">osbt.space</a> · <a href="https://github.com/yxpil/BreanInTentacle">GitHub</a> · <a href="./latest.json">latest.json</a></p>
+          <p class=foot>触手怪 永久免费 / Tentacle is free forever · <a href="https://osbt.space">osbt.space</a> · <a href="https://github.com/yxpil/BrainTentacle">GitHub</a> · <a href="./latest.json">latest.json</a></p>
           </body>
           </html>
           PAGEEOF
@@ -125,7 +125,7 @@ jobs:
           <li><a href="$LATEST_VERSION/"><span>v$LATEST_VERSION 全部文件 / All files</span></a></li>
           <li><a href="latest.json"><span>自动更新清单 / Update manifest (latest.json)</span></a></li>
           </ul>
-          <p class=foot>触手怪 永久免费 / Tentacle is free forever · <a href="https://osbt.space">osbt.space</a> · <a href="https://github.com/yxpil/BreanInTentacle">GitHub</a></p>
+          <p class=foot>触手怪 永久免费 / Tentacle is free forever · <a href="https://osbt.space">osbt.space</a> · <a href="https://github.com/yxpil/BrainTentacle">GitHub</a></p>
           </body>
           </html>
           ROOTEOF

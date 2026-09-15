@@ -799,8 +799,11 @@ const server = http.createServer((req, res) => {
       return respond(res, '好的，我来执行命令。\n[{"tool":"shell","params":{"command":"echo e2e-shell-ok"}}]', sse);
 
     // ── T22 工作区沙箱：pwd 验默认 cwd / 相对路径写文件 / 绝对路径逃逸必须被拒 ──
+    // Windows 默认 shell 是 pwsh：`pwd` 输出 PathInfo 表格（只有列头），必须显式取纯路径字符串
     if (last.includes("E2E-WS-PWD"))
-      return respond(res, '[{"tool":"shell","params":{"command":"pwd"}}]', sse);
+      return respond(res, process.platform === "win32"
+        ? '[{"tool":"shell","params":{"command":"Write-Output $PWD.Path"}}]'
+        : '[{"tool":"shell","params":{"command":"pwd"}}]', sse);
     if (last.includes("E2E-WS-WRITE"))
       return respond(res, '[{"tool":"write_file","params":{"path":"bit-ws-probe.txt","content":"ws-ok"}}]', sse);
     if (last.includes("E2E-WS-ESCAPE|")) {

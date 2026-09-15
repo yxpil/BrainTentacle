@@ -26,8 +26,8 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yxpil/BreanInTentacle.git"
+    "url": "git+https://github.com/yxpil/BrainTentacle.git"
   },
-  "homepage": "https://github.com/yxpil/BreanInTentacle",
-  "bugs": "https://github.com/yxpil/BreanInTentacle/issues"
+  "homepage": "https://github.com/yxpil/BrainTentacle",
+  "bugs": "https://github.com/yxpil/BrainTentacle/issues"
 }

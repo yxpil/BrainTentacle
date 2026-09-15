@@ -30,8 +30,8 @@
     <name>yxpil</name>
   </developer>
   <url type="homepage">https://osbt.space</url>
-  <url type="bugtracker">https://github.com/yxpil/BreanInTentacle/issues</url>
-  <url type="vcs-browser">https://github.com/yxpil/BreanInTentacle</url>
+  <url type="bugtracker">https://github.com/yxpil/BrainTentacle/issues</url>
+  <url type="vcs-browser">https://github.com/yxpil/BrainTentacle</url>
   <content_rating type="oars-1.1" />
   <releases>
     <release version="0.4.9" date="2026-09-02">
