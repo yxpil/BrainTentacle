@@ -224,10 +224,11 @@ jobs:
       # 打包后冒烟：隔离数据目录无头启动，audit.json 出现 ui.mounted 才放行（防黑屏包）
       - name: 冒烟测试
         run: |
-          # 主程序名随 productName 消毒规则变化（bit/BIT）；必须排除 chrome-sandbox（setuid 可执行）与 .so
-          BIN=""
-          for c in bit BIT; do [ -x "release/linux-unpacked/$c" ] && BIN="release/linux-unpacked/$c" && break; done
-          [ -z "$BIN" ] && BIN=$(find release/linux-unpacked -maxdepth 1 -type f -executable ! -name 'chrome-sandbox' ! -name '*.so*' | head -1)
+          # 主程序名随 productName 消毒规则变化；必须排除 Electron 辅助可执行（chrome-sandbox/
+          # chrome_crashpad_handler）与 .so——剩余唯一的 maxdepth-1 可执行即主程序
+          ls -la release/linux-unpacked | head -20
+          BIN=$(find release/linux-unpacked -maxdepth 1 -type f -executable \
+            ! -name 'chrome-sandbox' ! -name 'chrome_crashpad_handler' ! -name '*.so*' | head -1)
           echo "smoke target: $BIN"
           xvfb-run -a node e2e/smoke-ui.cjs "$BIN" 120
       - name: 上传到 Release
