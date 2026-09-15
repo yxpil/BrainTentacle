@@ -8,6 +8,7 @@ mod audit;
 mod autopilot;
 mod commands;
 mod config;
+mod console_codec;
 mod crash;
 mod delegation;
 // 本机操控三件套：依赖 enigo（Linux 需要 libxdo）。musl / exotic 架构 / 无 GUI 目标
