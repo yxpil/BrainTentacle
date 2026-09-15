@@ -3092,6 +3092,7 @@ pub fn get_security_settings(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
         "hidden_code_enabled": cfg.hidden_code_enabled,
         "l2pass_enabled": cfg.l2pass_enabled,
         "l2pass_provider_id": cfg.l2pass_provider_id,
+        "l2pass_cover_auto": cfg.l2pass_cover_auto,
     })
 }
 
@@ -3102,6 +3103,7 @@ pub fn set_security_settings(
     hidden_code_enabled: bool,
     l2pass_enabled: bool,
     l2pass_provider_id: String,
+    l2pass_cover_auto: bool,
 ) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
     if l2pass_enabled {
@@ -3121,6 +3123,7 @@ pub fn set_security_settings(
         cfg.hidden_code_enabled = hidden_code_enabled;
         cfg.l2pass_enabled = l2pass_enabled;
         cfg.l2pass_provider_id = l2pass_provider_id;
+        cfg.l2pass_cover_auto = l2pass_cover_auto;
         cfg.revision += 1;
     }
     ctx.save_config();

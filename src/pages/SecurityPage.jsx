@@ -17,6 +17,7 @@ export default function SecurityPage() {
     hidden_code_enabled: false,
     l2pass_enabled: false,
     l2pass_provider_id: "",
+    l2pass_cover_auto: false,
   });
   // —— HiddenCode 条目 ——
   const [entries, setEntries] = useState([]);
@@ -52,6 +53,7 @@ export default function SecurityPage() {
         next.hidden_code_enabled,
         next.l2pass_enabled,
         next.l2pass_provider_id,
+        next.l2pass_cover_auto,
       );
       setSec(r);
     } catch (e) {
@@ -331,6 +333,23 @@ export default function SecurityPage() {
               </option>
             ))}
           </select>
+        </div>
+
+        <div className={`flex items-center justify-between ${!sec.l2pass_enabled ? "opacity-40" : ""}`}>
+          <div>
+            <div className="text-sm">{t("sec.l2.coverAuto", "审核自动放行的工具")}</div>
+            <div className="text-xs text-neutral-500 dark:text-neutral-400">
+              {t(
+                "sec.l2.coverAutoHint",
+                "开启后 auto/全部放行模式下的工具也先过 L2 审核；审核模型不可达时保持原自动放行，不打断自动化",
+              )}
+            </div>
+          </div>
+          <PillSwitch
+            checked={sec.l2pass_cover_auto}
+            disabled={!sec.l2pass_enabled}
+            onChange={(v) => saveSec({ l2pass_cover_auto: v })}
+          />
         </div>
       </div>
     </div>

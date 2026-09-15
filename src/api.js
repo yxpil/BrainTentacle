@@ -56,11 +56,12 @@ export const api = {
   scanHiddenCandidates: (text) => invoke("scan_hidden_candidates", { text }),
   // 安全中心：HiddenCode / L2 PASS 总开关与审核 provider
   getSecuritySettings: () => invoke("get_security_settings"),
-  setSecuritySettings: (hidden_code_enabled, l2pass_enabled, l2pass_provider_id) =>
+  setSecuritySettings: (hidden_code_enabled, l2pass_enabled, l2pass_provider_id, l2pass_cover_auto) =>
     invoke("set_security_settings", {
       hiddenCodeEnabled: hidden_code_enabled,
       l2passEnabled: l2pass_enabled,
       l2passProviderId: l2pass_provider_id,
+      l2passCoverAuto: l2pass_cover_auto,
     }),
   // blocked_words 敏感词表：传数组=整体替换；传 [] = 恢复内置默认；不传 = 保持原值
   setBehaviorSettings: (auto_drive, tool_approval, moderation_enabled, auto_delegate, compat_mode, subagent_max, blocked_words) =>

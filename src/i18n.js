@@ -101,6 +101,8 @@ const dict = {
     "sec.l2.enabled": "启用 L2 审核",
     "sec.l2.provider": "审核 provider",
     "sec.l2.providerNone": "请选择审核 provider",
+    "sec.l2.coverAuto": "审核自动放行的工具",
+    "sec.l2.coverAutoHint": "开启后 auto/全部放行模式下的工具也先过 L2 审核；审核模型不可达时保持原自动放行，不打断自动化",
 
     // 主题页面
     "theme.title": "外观主题",
@@ -638,6 +640,8 @@ const dict = {
     "sec.l2.enabled": "Enable L2 review",
     "sec.l2.provider": "Review provider",
     "sec.l2.providerNone": "Select a review provider",
+    "sec.l2.coverAuto": "Review auto-passed tools",
+    "sec.l2.coverAutoHint": "When on, tools auto-passed in auto/allow-all mode are also reviewed by L2; if the reviewer is unreachable, the original auto-pass behavior is kept",
 
     // Theme page
     "theme.title": "Appearance",

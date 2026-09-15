@@ -324,7 +324,25 @@ pub async fn execute_tool_call(
     // HiddenCode 占位符还原（无启用条目时零开销原样返回）：
     // 后续 L2 审核用原始 params（占位符态，真实值不外发），审批展示与所有执行分支用 real
     let params_real = crate::hidden_code::unmask_params(ctx, params);
-    if !auto_pass(&ctx.config.lock().unwrap().tool_approval.clone(), name) {
+    let mode = ctx.config.lock().unwrap().tool_approval.clone();
+    if auto_pass(&mode, name) {
+        // 自动放行工具可选 L2 审核覆盖：Deny → 拦截；
+        // Unavailable（未启用/未选 provider/超时）→ 保持原自动放行语义，不回退人工
+        if ctx.config.lock().unwrap().l2pass_cover_auto {
+            match crate::l2pass::audit(ctx, name, params).await {
+                crate::l2pass::Verdict::Allow => {
+                    crate::l2pass::record_audit(ctx, "tool.l2pass_allow", name, None, true);
+                }
+                crate::l2pass::Verdict::Deny(reason) => {
+                    crate::l2pass::record_audit(ctx, "tool.l2pass_deny", name, Some(&reason), false);
+                    return Err(format!("L2 审核拦截自动放行工具 `{name}`：{reason}"));
+                }
+                crate::l2pass::Verdict::Unavailable => {
+                    crate::l2pass::record_audit(ctx, "tool.l2pass_unavailable", name, None, true);
+                }
+            }
+        }
+    } else {
         // L2 PASS 二级模型审核（实验）：Deny → 拒绝；Unavailable（未启用/超时/报错）→ 落回人工审批
         match crate::l2pass::audit(ctx, name, params).await {
             crate::l2pass::Verdict::Allow => {

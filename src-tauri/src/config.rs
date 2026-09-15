@@ -148,6 +148,10 @@ pub struct Config {
     /// 审核用 provider id（AiConfig.providers 里的 id），空 = 未选择
     #[serde(default)]
     pub l2pass_provider_id: String,
+    /// L2 审核覆盖自动放行：开启后 auto/allow_all 放行的工具也先过 L2 审核，
+    /// Deny 即拦截；审核不可达时保持原自动放行语义（不回退人工，避免打断自动化）
+    #[serde(default)]
+    pub l2pass_cover_auto: bool,
     /// 远程对话限速：每 60 秒滑动窗口内允许的对话请求上限（/api/chat 与 /v1/chat/completions
     /// 按客户端 IP 分别计数；0=不限）
     #[serde(default = "default_chat_rpm_max")]
@@ -282,6 +286,7 @@ impl Default for Config {
             hidden_code_enabled: false,
             l2pass_enabled: false,
             l2pass_provider_id: String::new(),
+            l2pass_cover_auto: false,
             device_registered_at: None,
             device_fp_hash: None,
             chat_rpm_max: default_chat_rpm_max(),
