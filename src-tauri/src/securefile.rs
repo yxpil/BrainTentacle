@@ -215,10 +215,10 @@ mod tests {
         let last = b.len() - 1;
         b[last] = if b[last] == b'A' { b'B' } else { b'A' };
         assert_eq!(decrypt_bytes(key, &String::from_utf8(b).unwrap()), Err(DecryptErr::BadMac));
-        // 翻转密文一位 → BadMac
+        // 翻转密文一位 → BadMac（用合法 base64 字符替换，XOR 可能跳出字母表变 BadBase64）
         let mut b2 = enc.clone().into_bytes();
         let n = b2.len() - 16; // 密文区
-        b2[n] ^= 0x01;
+        b2[n] = if b2[n] == b'A' { b'B' } else { b'A' };
         assert_eq!(decrypt_bytes(key, &String::from_utf8(b2).unwrap()), Err(DecryptErr::BadMac));
         // 错误 key → BadMac
         assert_eq!(decrypt_bytes("otherkey", &enc), Err(DecryptErr::BadMac));

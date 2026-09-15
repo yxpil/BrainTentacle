@@ -87,12 +87,13 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         mk(
             "builtin.write_file",
             "write_file",
-            "Write or overwrite a file. Use it to create a file or replace the whole content",
+            "Write or overwrite a file. Use it to create a file or replace the whole content. Encoding: auto-detected by default (existing file keeps its encoding; .bat/.cmd→GBK, .ps1→UTF-8 BOM on Windows); pass encoding to override",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Absolute path of the target file" },
-                    "content": { "type": "string", "description": "Full file content" }
+                    "content": { "type": "string", "description": "Full file content" },
+                    "encoding": { "type": "string", "description": "Optional explicit encoding: utf-8 (default), utf-8-bom, utf-16le, utf-16be, gbk/ansi. Overrides auto-detection" }
                 },
                 "required": ["path", "content"]
             }),
@@ -102,13 +103,14 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         mk(
             "builtin.read_file",
             "read_file",
-            "Read a text file in chunks. Returns numbered lines; use offset/limit for paging. Read the relevant chunk before editing",
+            "Read a text file in chunks. Returns numbered lines; use offset/limit for paging. Read the relevant chunk before editing. Encoding auto-detected (UTF-8/UTF-16/GBK); pass encoding to override",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Absolute path of the file to read" },
                     "offset": { "type": "integer", "description": "1-based start line (default 1)" },
-                    "limit": { "type": "integer", "description": "Max lines to return (default 200, max 2000)" }
+                    "limit": { "type": "integer", "description": "Max lines to return (default 200, max 2000)" },
+                    "encoding": { "type": "string", "description": "Optional explicit encoding: utf-8, utf-8-bom, utf-16le, utf-16be, gbk/ansi. Use only when auto-detection is wrong" }
                 },
                 "required": ["path"]
             }),
@@ -909,9 +911,18 @@ async fn builtin_invoke(
                 let _ = std::fs::create_dir_all(parent);
             }
             let path_str = path.to_string_lossy();
-            // Windows 脚本自动转码：.bat/.cmd 转 GBK（cmd.exe 按 ANSI 代码页解析）；
-            // .ps1/.psm1/.psd1 加 UTF-8 BOM（PS 5.1/7 双兼容）。其余原样 UTF-8
-            let enc = crate::console_codec::encode_script_write(&path_str, content);
+            // 编码策略：AI 显式 encoding 参数 > 脚本扩展名专用规则 > 源文件编码保持 > UTF-8
+            let enc = match params.get("encoding").and_then(|v| v.as_str()) {
+                Some(name) => crate::console_codec::encode_file(
+                    crate::console_codec::FileEnc::from_name(name)
+                        .ok_or_else(|| format!("未知编码 `{name}`；可选: utf-8, utf-8-bom, utf-16le, utf-16be, ansi/gbk"))?,
+                    content,
+                ),
+                None => {
+                    let source = std::fs::read(&path).ok();
+                    crate::console_codec::encode_for_write(&path_str, content, source.as_deref())
+                }
+            };
             std::fs::write(&path, &enc).map_err(|e| format!("Failed to write: {e}"))?;
             Ok(serde_json::json!({ "path": path_str, "bytes": enc.len() }))
         }
@@ -923,15 +934,25 @@ async fn builtin_invoke(
                 .to_str()
                 .ok_or_else(|| format!("工作区路径含非 UTF-8 字符：{}", resolved.display()))?;
             let raw = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
-            // 二进制守卫：头部 8KB 含 NUL 即拒绝（不把乱码灌进上下文）
-            let head = &raw[..raw.len().min(8192)];
-            if head.contains(&0) {
-                return Err(format!(
-                    "`{path}` looks like a binary file (NUL byte found); use view_image for pictures or shell commands for other binary data"
-                ));
+            // 二进制守卫：头部 8KB 含 NUL 即拒绝（不把乱码灌进上下文）；
+            // 带文本 BOM 的 UTF-16 文件即使含 NUL 也是文本，放行
+            if !crate::console_codec::has_text_bom(&raw) {
+                let head = &raw[..raw.len().min(8192)];
+                if head.contains(&0) {
+                    return Err(format!(
+                        "`{path}` looks like a binary file (NUL byte found); use view_image for pictures or shell commands for other binary data"
+                    ));
+                }
             }
-            // bat/cmd 可能是上次 write 写的 GBK：按扩展名解码，避免把乱码灌进上下文
-            let text = crate::console_codec::decode_script_read(path, &raw);
+            // 自动适应源文件编码（BOM/UTF-8/UTF-16/系统 ANSI），AI 也可用 encoding 参数显式指定
+            let text = match params.get("encoding").and_then(|v| v.as_str()) {
+                Some(name) => crate::console_codec::decode_with_enc(
+                    crate::console_codec::FileEnc::from_name(name)
+                        .ok_or_else(|| format!("未知编码 `{name}`；可选: auto, utf-8, utf-8-bom, utf-16le, utf-16be, ansi/gbk"))?,
+                    &raw,
+                ),
+                None => crate::console_codec::decode_file(&raw),
+            };
             let lines: Vec<&str> = text.lines().collect();
             let total = lines.len();
             let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
@@ -1215,8 +1236,8 @@ async fn builtin_invoke(
                 params.get("end_line").and_then(|v| v.as_u64()),
             ) {
                 let raw = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
-                // bat/cmd 可能是上次 write 写的 GBK：按扩展名解码后再按行处理
-                let text = crate::console_codec::decode_script_read(path, &raw);
+                // 自动适应源文件编码（GBK/UTF-16 等旧文件也能正确读改写）
+                let text = crate::console_codec::decode_file(&raw);
                 let mut lines: Vec<String> = text.lines().map(String::from).collect();
                 let total = lines.len();
                 let (sl, el) = (sl as usize, el as usize);
@@ -1232,7 +1253,15 @@ async fn builtin_invoke(
                 if text.ends_with('\n') {
                     updated.push('\n');
                 }
-                let enc = crate::console_codec::encode_script_write(path, &updated);
+                let enc = match params.get("encoding").and_then(|v| v.as_str()) {
+                    Some(name) => crate::console_codec::encode_file(
+                        crate::console_codec::FileEnc::from_name(name).ok_or_else(|| {
+                            format!("未知编码 `{name}`；可选: utf-8, utf-8-bom, utf-16le, utf-16be, ansi/gbk")
+                        })?,
+                        &updated,
+                    ),
+                    None => crate::console_codec::encode_for_write(path, &updated, Some(&raw)),
+                };
                 std::fs::write(path, &enc).map_err(|e| format!("Failed to write back: {e}"))?;
                 let replaced = el - sl + 1;
                 let res = serde_json::json!({ "path": path, "mode": "line_range", "replaced_lines": replaced, "total_lines": lines.len() });
@@ -1246,8 +1275,8 @@ async fn builtin_invoke(
                 return Err("old_string cannot be empty".into());
             }
             let raw = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
-            // bat/cmd 可能是上次 write 写的 GBK：按扩展名解码，保证 old_string 能匹配
-            let text = crate::console_codec::decode_script_read(path, &raw);
+            // 自动适应源文件编码：保证 old_string 能匹配 GBK/UTF-16 等旧文件
+            let text = crate::console_codec::decode_file(&raw);
             // 精确匹配失败时自动适配换行风格（文件 CRLF / 模型给 LF，或反过来）
             let mut count = text.matches(old).count();
             let mut old_eff = old.to_string();
@@ -1285,7 +1314,15 @@ async fn builtin_invoke(
             }
             let updated =
                 if replace_all { text.replace(&old_eff, &new_eff) } else { text.replacen(&old_eff, &new_eff, 1) };
-            std::fs::write(path, &updated).map_err(|e| format!("Failed to write back: {e}"))?;
+            let enc = match params.get("encoding").and_then(|v| v.as_str()) {
+                Some(name) => crate::console_codec::encode_file(
+                    crate::console_codec::FileEnc::from_name(name)
+                        .ok_or_else(|| format!("未知编码 `{name}`；可选: utf-8, utf-8-bom, utf-16le, utf-16be, ansi/gbk"))?,
+                    &updated,
+                ),
+                None => crate::console_codec::encode_for_write(path, &updated, Some(&raw)),
+            };
+            std::fs::write(path, &enc).map_err(|e| format!("Failed to write back: {e}"))?;
             Ok(serde_json::json!({ "path": path, "replaced": if replace_all { count } else { 1 } }))
         }
         // ── 5. 子智能体：开新会话独立完成任务 ──

@@ -41,6 +41,10 @@ BIT is a desktop app built on **Tauri 2 + React 18**: an auditable, remotely acc
 
 **Reliability & governance**
 
+- **Security Center**: shield icon in the left sidebar, two lines of defense:
+  - **HiddenCode masking**: API keys / phone numbers / emails / usernames are replaced with placeholders (`[HC:xxxxxx]`) or custom aliases (小明→李四) before being sent to the AI; real values are restored only when tools run locally. Supports built-in type masking, exact values, custom regexes, and paste-to-scan detection
+  - **L2 PASS second-model review (experimental)**: before a tool runs, a second model reviews it for Allow / Deny (can also cover auto-approved tools); falls back to manual approval when the reviewer is unreachable
+- **File encoding auto-detection**: read / write / edit auto-detect BOM / UTF-16 / GBK encodings, preserve source encoding on edit, adapt `.bat`/`.cmd`/`.ps1` script encoding on Windows, or take an explicit `encoding` parameter
 - **Audit log**: all tool calls and key operations are logged, viewable on the **Audit** page.
 - **Auto update**: checks, downloads, and swaps in new versions automatically on all platforms (can be disabled).
 - **Local-first data**: sessions, memory, skills, and settings all stay on your machine.
@@ -222,10 +226,15 @@ Website: [osbt.space](https://osbt.space) · [Docs](https://osbt.space/docs.html
 ## Security & Privacy
 
 - **Local-first data**: sessions, memory, skills, and settings all stay in the app's local data directory — no telemetry uploaded.
+- **Sensitive-data masking**: HiddenCode keeps real API keys / phone numbers / emails / usernames invisible to the AI; placeholders or aliases are restored only during local tool execution.
+- **Dual review**: beyond normal approvals, L2 PASS uses a second model to Allow / Deny tool calls — every verdict is recorded in the audit log.
 - **Two-factor auth**: Client Key (compared in constant time to prevent timing side channels) + access password; remote access is off by default.
+- **Encrypted storage**: sensitive settings are encrypted with a device-derived key and protected against tampering.
 - **Sandboxing and limits**: AI-built scripts run inside the restricted Rhai sandbox (depth / operation / wall-clock budgets); subprocess tools get timeout kills, output caps, and resource reaping.
 - **MCP session governance**: sessions idle out after 30 minutes, are capped in count, and can be explicitly terminated via DELETE.
 - **Signing transparency**: macOS ad-hoc signing / no Windows EV certificate (a trade-off of not paying for certificates — see the installation notes above); the source and CI build pipeline are fully public.
+
+See the Wiki: [Security Center](https://github.com/yxpil/bit/wiki/Security-Center)
 
 ## Development
 
