@@ -27,6 +27,7 @@ export default function SecurityPage() {
   // 新条目表单
   const [kind, setKind] = useState("phone");
   const [value, setValue] = useState("");
+  const [alias, setAlias] = useState("");
   const [asPattern, setAsPattern] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -65,8 +66,9 @@ export default function SecurityPage() {
     setErr("");
     setBusy(true);
     try {
-      await api.addHiddenCode(kind, value, asPattern);
+      await api.addHiddenCode(kind, value, asPattern, alias);
       setValue("");
+      setAlias("");
       api.getHiddenCodes().then((r) => setEntries(r || [])).catch(() => {});
     } catch (e) {
       setErr(String(e));
@@ -186,6 +188,15 @@ export default function SecurityPage() {
               }
               className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600"
             />
+            {!asPattern && (
+              <input
+                value={alias}
+                onChange={(e) => setAlias(e.target.value)}
+                placeholder={t("sec.hc.aliasPlaceholder", "别名（可选），如 李四")}
+                title={t("sec.hc.aliasHint", "AI 看到的是别名而非占位符；本机执行工具时自动换回真实值")}
+                className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600"
+              />
+            )}
             <button
               disabled={busy}
               onClick={addEntry}
@@ -231,6 +242,11 @@ export default function SecurityPage() {
                   ? e.value /* 正则/内置名本身不敏感，直接展示 */
                   : maskValue(e.value, revealed[e.id])}
               </span>
+              {e.alias && (
+                <span className="shrink-0 text-xs text-emerald-600 dark:text-emerald-400">
+                  → {e.alias}
+                </span>
+              )}
               {e.kind !== "pattern" && e.value && (
                 <button
                   onClick={() => setRevealed((r) => ({ ...r, [e.id]: !r[e.id] }))}

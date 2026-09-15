@@ -30,6 +30,10 @@ pub struct HiddenCodeEntry {
     pub label: String,
     /// value 条目 = 敏感原文；pattern 条目 = "builtin:phone" 等
     pub value: String,
+    /// 别名（仅 value 条目）：非空时 AI 看到别名而非 [HC:xxx] 占位符，
+    /// 如 小明 → 李四；本机执行工具时把别名还原为真实值
+    #[serde(default)]
+    pub alias: String,
     pub enabled: bool,
     pub created: String,
 }
@@ -87,12 +91,18 @@ fn hash_hex_len(values: &[&str]) -> usize {
     6
 }
 
-/// 构建 hash→value 映射（还原用；每次现算，不持久化）
+/// 构建 映射→真实值 表（还原用；每次现算，不持久化）。
+/// 别名条目：别名→真实值（AI 在工具调用里引用别名，本机执行时换回）；
+/// 普通条目：占位符→真实值
 fn build_map(entries: &[HiddenCodeEntry], hex_len: usize) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for e in entries {
         if e.enabled && e.kind == "value" && !e.value.is_empty() {
-            map.insert(placeholder(&e.value, hex_len), e.value.clone());
+            if !e.alias.is_empty() {
+                map.insert(e.alias.clone(), e.value.clone());
+            } else {
+                map.insert(placeholder(&e.value, hex_len), e.value.clone());
+            }
         }
     }
     map
@@ -113,11 +123,17 @@ pub fn mask_text(text: &str, entries: &[HiddenCodeEntry], hex_len: usize) -> Str
                 .into_owned();
         }
     }
-    // value 条目：精确替换（同值同占位符）
+    // value 条目：别名优先（替换为用户指定文本），否则占位符（同值同占位符）
     for e in entries.iter().filter(|e| e.enabled && e.kind == "value" && !e.value.is_empty()) {
-        let ph = placeholder(&e.value, hex_len);
-        if out.contains(e.value.as_str()) {
-            out = out.replace(e.value.as_str(), &ph);
+        if !e.alias.is_empty() {
+            if out.contains(e.value.as_str()) {
+                out = out.replace(e.value.as_str(), &e.alias);
+            }
+        } else {
+            let ph = placeholder(&e.value, hex_len);
+            if out.contains(e.value.as_str()) {
+                out = out.replace(e.value.as_str(), &ph);
+            }
         }
     }
     out
@@ -126,8 +142,10 @@ pub fn mask_text(text: &str, entries: &[HiddenCodeEntry], hex_len: usize) -> Str
 // ── 还原 ──
 
 fn unmask_text(text: &str, map: &HashMap<String, String>) -> String {
-    // 快速路径：不含占位符前缀直接返回
-    if !text.contains(PLACEHOLDER_PREFIX) {
+    // 快速路径：不含占位符前缀且映射表里没有别名键（别名不含 [HC: 前缀）直接返回
+    if !text.contains(PLACEHOLDER_PREFIX)
+        && map.keys().all(|k| k.starts_with(PLACEHOLDER_PREFIX))
+    {
         return text.to_string();
     }
     let mut out = text.to_string();
@@ -224,11 +242,15 @@ pub fn maybe_mask_messages(ctx: &Arc<Ctx>, messages: &[crate::ai::ChatMessage]) 
         }
     }
     if masked {
-        // 最后一条 user 消息附注记（无 user 消息则不动）
-        if let Some(m) = out.iter_mut().rev().find(|m| m.role == "user") {
-            m.content.push_str(
-                "\n\n[系统注记] 文中 [HC:xxxxxx] 为已脱敏的敏感值占位符；引用这些值的工具调用会在本机执行时自动还原为真实值。请原样引用占位符，不要猜测或编造其内容。",
-            );
+        // 仅当确实产生了 [HC:] 占位符时附注记；纯别名替换（如 小明→李四）
+        // 对 AI 就是普通文本，无需解释
+        if out.iter().any(|m| m.content.contains(PLACEHOLDER_PREFIX)) {
+            // 最后一条 user 消息附注记（无 user 消息则不动）
+            if let Some(m) = out.iter_mut().rev().find(|m| m.role == "user") {
+                m.content.push_str(
+                    "\n\n[系统注记] 文中 [HC:xxxxxx] 为已脱敏的敏感值占位符；引用这些值的工具调用会在本机执行时自动还原为真实值。请原样引用占位符，不要猜测或编造其内容。",
+                );
+            }
         }
     }
     out
@@ -261,6 +283,19 @@ mod tests {
             kind: kind.into(),
             label: label.into(),
             value: value.into(),
+            alias: String::new(),
+            enabled: true,
+            created: String::new(),
+        }
+    }
+
+    fn alias_entry(value: &str, alias: &str) -> HiddenCodeEntry {
+        HiddenCodeEntry {
+            id: "1".into(),
+            kind: "value".into(),
+            label: "username".into(),
+            value: value.into(),
+            alias: alias.into(),
             enabled: true,
             created: String::new(),
         }
@@ -339,6 +374,26 @@ mod tests {
         // 非法正则条目被跳过，不 panic
         let bad = vec![entry("pattern", "custom", "(?<!x)broken(")];
         assert_eq!(mask_text("sk-abc123def456", &bad, hl), "sk-abc123def456");
+    }
+
+    #[test]
+    fn alias_mask_and_unmask() {
+        // 短值（几个字符）也支持：别名替换，AI 看到别名而非占位符
+        let entries = vec![alias_entry("小明", "李四")];
+        let masked = mask_text("小明的钱包", &entries, 6);
+        assert_eq!(masked, "李四的钱包");
+        // 还原：AI 引用别名的工具调用，本机执行时换回真实值
+        let map = build_map(&entries, 6);
+        let mut v = serde_json::json!({ "name": "李四", "note": "联系李四本人" });
+        unmask_json(&mut v, &map);
+        assert_eq!(v["name"], "小明");
+        assert_eq!(v["note"], "联系小明本人");
+        // 别名与占位符条目可共存
+        let mixed = vec![alias_entry("小明", "李四"), entry("value", "k", "sk-secret000111")];
+        let m2 = mask_text("小明 key=sk-secret000111", &mixed, 6);
+        assert!(m2.starts_with("李四 key=[HC:")); // 别名 + 占位符共存
+        assert!(m2.contains(PLACEHOLDER_PREFIX));
+        assert!(!m2.contains("sk-secret000111"));
     }
 
     #[test]

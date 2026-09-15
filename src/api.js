@@ -49,8 +49,8 @@ export const api = {
   getBehaviorSettings: () => invoke("get_behavior_settings"),
   // 安全中心：HiddenCode 敏感信息脱敏
   getHiddenCodes: () => invoke("get_hidden_codes"),
-  addHiddenCode: (kind, value, as_pattern) =>
-    invoke("add_hidden_code", { kind, value, asPattern: as_pattern }),
+  addHiddenCode: (kind, value, as_pattern, alias) =>
+    invoke("add_hidden_code", { kind, value, asPattern: as_pattern, alias: alias || "" }),
   removeHiddenCode: (id) => invoke("remove_hidden_code", { id }),
   setHiddenCodeEnabled: (id, enabled) => invoke("set_hidden_code_enabled", { id, enabled }),
   scanHiddenCandidates: (text) => invoke("scan_hidden_candidates", { text }),

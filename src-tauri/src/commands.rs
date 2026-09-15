@@ -2983,6 +2983,7 @@ pub fn add_hidden_code(
     kind: String,
     value: String,
     as_pattern: bool,
+    alias: String,
 ) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
     let value = value.trim().to_string();
@@ -3000,6 +3001,7 @@ pub fn add_hidden_code(
                 kind: "pattern".into(),
                 label: kind,
                 value: pattern.into(),
+                alias: String::new(),
                 enabled: true,
                 created: crate::ai::now_ts(),
             }
@@ -3011,6 +3013,7 @@ pub fn add_hidden_code(
                 kind: "pattern".into(),
                 label: "custom".into(),
                 value,
+                alias: String::new(),
                 enabled: true,
                 created: crate::ai::now_ts(),
             }
@@ -3024,6 +3027,7 @@ pub fn add_hidden_code(
             kind: "value".into(),
             label: kind,
             value,
+            alias: String::new(), // value 条目随后由 alias 参数覆盖
             enabled: true,
             created: crate::ai::now_ts(),
         }
@@ -3033,6 +3037,10 @@ pub fn add_hidden_code(
     let max_id: u64 = codes.iter().filter_map(|e| e.id.parse::<u64>().ok()).max().unwrap_or(0);
     let mut entry = entry;
     entry.id = (max_id + 1).to_string();
+    // 别名仅对 value 条目生效：AI 看到别名而非 [HC:] 占位符（如 小明 → 李四）
+    if entry.kind == "value" {
+        entry.alias = alias.trim().to_string();
+    }
     codes.push(entry);
     drop(codes);
     ctx.save_hidden_codes();
