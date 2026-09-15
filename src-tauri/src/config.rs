@@ -299,35 +299,43 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn load(dir: &Path) -> Self {
-        let path = dir.join("config.json");
-        let mut cfg = match fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => Self::default(),
-        };
+    /// 全量配置存 bit.db（store "config"）。config.json 仅保留 device_key/client_key
+    /// 引导锚点（securefile::device_key 与 guardian 校验在 Ctx/db 可用前就要读文件）。
+    /// 首启 / 老版本升级：DB 无行时从旧版全量 config.json 导入（锚点形状的文件不算）。
+    pub fn load(dir: &Path, conn: &rusqlite::Connection) -> Self {
+        let mut cfg = crate::store::get_json::<Config>(conn, "config")
+            .or_else(|| Self::load_legacy_file(dir))
+            .unwrap_or_default();
         // 旧版本配置无密码字段：自动生成并持久化
         if cfg.access_password.as_deref().unwrap_or("").is_empty() {
             cfg.access_password = Some(generate_access_password());
         }
-        let _ = fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap());
+        cfg.persist(conn, dir);
         cfg
     }
 
-    pub fn save(&self, dir: &Path) {
-        // 原子写 + 重试：直接 fs::write 在文件被并发占用时会静默失败（let _ 吞掉错误），
-        // 表现为"设置开关不保存"。先写临时文件再 rename，rename 被占用则短暂重试，
-        // 全部失败时回退直接覆盖并把错误打到 stderr（不再无痕迹丢失）
+    /// 旧版全量 config.json 导入源（键数 > 3 才视为完整配置；只有锚点两三个键的跳过）
+    fn load_legacy_file(dir: &Path) -> Option<Self> {
+        let s = fs::read_to_string(dir.join("config.json")).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+        if v.as_object().map(|o| o.len() > 3).unwrap_or(false) {
+            serde_json::from_value(v).ok()
+        } else {
+            None
+        }
+    }
+
+    /// 配置入库 + 引导锚点原子写回（tmp+rename+重试，同原 save 模式）
+    fn persist(&self, conn: &rusqlite::Connection, dir: &Path) {
+        crate::store::put_json(conn, "config", self);
+        let anchor = serde_json::json!({
+            "device_key": self.device_key,
+            "client_key": self.client_key,
+        });
+        let body = serde_json::to_string_pretty(&anchor).unwrap_or_default();
         let path = dir.join("config.json");
-        let body = match serde_json::to_string_pretty(self) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("[config] serialize failed: {e}");
-                crate::worker::notify_reload();
-                return;
-            }
-        };
         let tmp = dir.join("config.json.tmp");
-        let mut ok = fs::write(&tmp, &body).is_ok();
+        let mut ok = fs::write(&tmp, body.as_bytes()).is_ok();
         if ok {
             ok = false;
             for _ in 0..4 {
@@ -339,12 +347,16 @@ impl Config {
             }
         }
         if !ok {
-            if fs::write(&path, &body).is_ok() {
+            if fs::write(&path, body.as_bytes()).is_ok() {
                 eprintln!("[config] rename retry exhausted, fallback direct write ok");
             } else {
-                eprintln!("[config] SAVE FAILED — settings may be lost (file locked?)");
+                eprintln!("[config] bootstrap anchor write FAILED (file locked?)");
             }
         }
+    }
+
+    pub fn save(&self, dir: &Path, conn: &rusqlite::Connection) {
+        self.persist(conn, dir);
         // agent worker 模式：宿主改配置后通知 worker 重读（worker 进程内调用为空操作）
         crate::worker::notify_reload();
     }
@@ -469,10 +481,17 @@ mod tests {
             r#"{"remote_enabled":true,"host":"0.0.0.0","port":8600,"client_key":"bit_x","revision":3}"#,
         )
         .unwrap();
-        let cfg = Config::load(&dir);
+        let conn = crate::store::open(&dir);
+        let cfg = Config::load(&dir, &conn);
         assert!(cfg.remote_enabled);
         assert_eq!(cfg.port, 8600);
         assert_eq!(cfg.revision, 3);
+        // 载入后配置已入库，且 config.json 收缩为引导锚点（只有少量键）
+        assert!(crate::store::get_json::<Config>(&conn, "config").is_some());
+        let anchor: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(anchor.as_object().unwrap().len() <= 3);
+        drop(conn);
         fs::remove_dir_all(&dir).ok();
     }
 

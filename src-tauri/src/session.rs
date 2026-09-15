@@ -62,14 +62,30 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
-    /// 载入：从新格式读取；若不存在则尝试迁移旧的 chats.json 为一个默认会话
-    pub fn load(data_dir: &std::path::Path) -> SessionStore {
+    /// 载入：bit.db 会话表（一行一个会话）为准；表为空时兜底遗留 sessions.json /
+    /// chats.json（import_legacy 正常路径已把 sessions.json 导入，兜底覆盖直接调用场景）
+    pub fn load(data_dir: &std::path::Path, conn: &rusqlite::Connection) -> SessionStore {
+        let (rows, active) = crate::store::load_sessions(conn);
+        if !rows.is_empty() {
+            let sessions: Vec<Session> = rows
+                .iter()
+                .filter_map(|(_, data)| serde_json::from_str(data).ok())
+                .collect();
+            if !sessions.is_empty() {
+                let mut st = SessionStore { sessions, active };
+                if !st.sessions.iter().any(|s| s.id == st.active) {
+                    st.active = st.sessions[0].id.clone();
+                }
+                return st;
+            }
+        }
+        // 兜底：遗留 sessions.json（旧整仓格式）
         if let Some(store) = read_json::<SessionStore>(&data_dir.join("sessions.json")) {
             if !store.sessions.is_empty() {
                 return store.normalized();
             }
         }
-        // 迁移旧的单一历史
+        // 兜底：旧 chats.json（单会话历史）迁移为默认会话
         let legacy: Vec<ChatMessage> =
             read_json(&data_dir.join("chats.json")).unwrap_or_default();
         let mut s = Session::new("默认对话");
@@ -124,45 +140,41 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &std::path::Path) -> Option<T> 
 }
 
 pub fn persist(ctx: &Arc<crate::state::Ctx>) {
-    // 多进程（host + agent-worker）共用 sessions.json：写前先把磁盘上其他进程
+    // 多进程（host + agent-worker）共用 bit.db 会话表：写前先把库侧其他进程
     // 的回合并入内存（updated 新者胜，不裁剪），否则整仓覆盖会抹掉并发回合
     // （host/worker 各持一份启动快照时，T41 双设备并发的历史隔离必挂）
     merge_from_disk(ctx, false);
-    let store = ctx.sessions.lock().unwrap();
-    let _ = std::fs::write(
-        ctx.data_dir.join("sessions.json"),
-        serde_json::to_string(&*store).unwrap_or_default(),
-    );
-    drop(store);
-    *ctx.sessions_disk_ts.lock().unwrap() = disk_mtime(ctx);
+    let rev = {
+        let store = ctx.sessions.lock().unwrap();
+        let conn = ctx.db.lock().unwrap();
+        crate::store::sync_sessions(&conn, &store.sessions, &store.active);
+        crate::store::sessions_rev(&conn)
+    };
+    *ctx.sessions_rev.lock().unwrap() = rev;
 }
 
-fn disk_mtime(ctx: &Arc<crate::state::Ctx>) -> Option<std::time::SystemTime> {
-    std::fs::metadata(ctx.data_dir.join("sessions.json"))
-        .and_then(|m| m.modified())
-        .ok()
-}
-
-/// 其他进程（bit 命令行等）可能写过 sessions.json：按 id 合并磁盘侧变更（updated 新者胜）。
-/// prune=true 时磁盘上已消失的会话视为被外部删除；prune=false 时保留内存独有会话
+/// 其他进程（bit 命令行等）可能写过 bit.db 会话表：按 id 合并库侧变更（updated 新者胜）。
+/// prune=true 时库中已消失的会话视为被外部删除；prune=false 时保留内存独有会话
 /// （persist 写前合并用：新建会话还只在内存，裁剪会把它丢掉）。
-/// mtime 未变则直接返回，避免每次列表都全量解析。
+/// rev 未变则直接返回，避免每次列表都全量解析（取代原 mtime 比对）
 fn merge_from_disk(ctx: &Arc<crate::state::Ctx>, prune: bool) {
-    let mtime = disk_mtime(ctx);
+    let rev = crate::store::sessions_rev(&ctx.db.lock().unwrap());
     {
-        let mut seen = ctx.sessions_disk_ts.lock().unwrap();
-        if *seen == mtime {
+        let mut seen = ctx.sessions_rev.lock().unwrap();
+        if *seen == rev {
             return;
         }
-        *seen = mtime.clone();
+        *seen = rev;
     }
-    let Some(disk) = read_json::<SessionStore>(&ctx.data_dir.join("sessions.json")) else {
-        return;
-    };
+    let (rows, _) = crate::store::load_sessions(&ctx.db.lock().unwrap());
+    let disk: Vec<Session> = rows
+        .iter()
+        .filter_map(|(_, data)| serde_json::from_str(data).ok())
+        .collect();
     let disk_ids: std::collections::HashSet<String> =
-        disk.sessions.iter().map(|s| s.id.clone()).collect();
+        disk.iter().map(|s| s.id.clone()).collect();
     let mut store = ctx.sessions.lock().unwrap();
-    for d in disk.sessions {
+    for d in disk {
         match store.sessions.iter_mut().find(|s| s.id == d.id) {
             Some(s) => {
                 if d.updated > s.updated {
@@ -177,7 +189,7 @@ fn merge_from_disk(ctx: &Arc<crate::state::Ctx>, prune: bool) {
     }
 }
 
-/// 读前刷新（GUI / 调试接口）：外部删除生效，mtime 守卫零成本
+/// 读前刷新（GUI / 调试接口）：外部删除生效，rev 守卫零成本
 pub fn refresh_from_disk(ctx: &Arc<crate::state::Ctx>) {
     merge_from_disk(ctx, true);
 }

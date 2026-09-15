@@ -253,7 +253,7 @@ pub fn arm(ctx: &Arc<Ctx>) {
     // 避免守护进程用磁盘 key 验签永久失败导致反复重布防
     if load_client_key(&ctx.data_dir).as_deref() != Some(key.as_str()) {
         let cfg = ctx.config.lock().unwrap();
-        cfg.save(&ctx.data_dir);
+        cfg.save(&ctx.data_dir, &ctx.db.lock().unwrap());
         drop(cfg);
         crate::audit::record(ctx, "local-app", "guardian.key_drift", "BIT", json!({ "resynced": true }), true);
     }

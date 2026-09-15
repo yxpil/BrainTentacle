@@ -724,22 +724,35 @@ fn host_alive(pid: &str) -> bool {
     }
 }
 
-/// worker 收到 reload：从磁盘重读配置 / 模型配置 / 工具 / 技能 / 记忆 / 目标 / 待办
+/// worker 收到 reload：从 bit.db 重读配置 / 模型配置 / 工具 / 技能 / 记忆 / 目标 / 待办
+/// （数据已统一入库，散落 JSON 只剩引导锚点 config.json）。db 与业务锁不重叠持有，
+/// 避免与 host 侧 config → db 的锁序纪律反序
 fn reload_state(ctx: &Arc<Ctx>) {
-    use crate::state::read_json;
     let dir = ctx.data_dir.clone();
-    *ctx.config.lock().unwrap() = crate::config::Config::load(&dir);
+    let cfg = {
+        let conn = ctx.db.lock().unwrap();
+        crate::config::Config::load(&dir, &conn)
+    };
+    *ctx.config.lock().unwrap() = cfg;
     let dk = ctx.config.lock().unwrap().device_key.clone();
-    *ctx.ai_config.lock().unwrap() =
-        crate::securefile::read_secret_json(&dir, "ai_config.json", dk.as_deref())
-            .value
-            .unwrap_or_default();
-    // 工具清单（内置重建 + 自建从 tools.json 合并）与 host 远程调用走同一入口，避免规则漂移
+    let (ai, skills, memories, goals, todos) = {
+        let conn = ctx.db.lock().unwrap();
+        (
+            crate::store::get_secret_json::<crate::ai::AiConfig>(&conn, "ai_config", dk.as_deref())
+                .unwrap_or_default(),
+            crate::store::get_json(&conn, "skills").unwrap_or_default(),
+            crate::store::get_json(&conn, "memories").unwrap_or_default(),
+            crate::store::get_json(&conn, "goals").unwrap_or_default(),
+            crate::store::get_json(&conn, "todos").unwrap_or_default(),
+        )
+    };
+    *ctx.ai_config.lock().unwrap() = ai;
+    // 工具清单（内置重建 + 自建从 tools 文档合并）与 host 远程调用走同一入口，避免规则漂移
     crate::registry::reload_custom_tools(ctx);
-    *ctx.skills.lock().unwrap() = read_json(&dir.join("skills.json")).unwrap_or_default();
-    *ctx.memories.lock().unwrap() = read_json(&dir.join("memories.json")).unwrap_or_default();
-    *ctx.goals.lock().unwrap() = read_json(&dir.join("goals.json")).unwrap_or_default();
-    *ctx.todos.lock().unwrap() = read_json(&dir.join("todos.json")).unwrap_or_default();
+    *ctx.skills.lock().unwrap() = skills;
+    *ctx.memories.lock().unwrap() = memories;
+    *ctx.goals.lock().unwrap() = goals;
+    *ctx.todos.lock().unwrap() = todos;
 }
 
 #[cfg(test)]

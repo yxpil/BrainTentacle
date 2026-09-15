@@ -660,8 +660,8 @@ mod relax_tests {
 /// host 的远程 invoke / 工具清单读取前调用：worker 回合里 add_tool 只落盘并更新
 /// worker 内存，host 不重刷就会调到旧版本（T10 实测调到上一轮残留的 tripled 版本）。
 pub fn reload_custom_tools(ctx: &Arc<crate::state::Ctx>) {
-    let disk: Vec<ToolDef> =
-        crate::state::read_json(&ctx.data_dir.join("tools.json")).unwrap_or_default();
+    let disk: Vec<ToolDef> = crate::store::get_json(&ctx.db.lock().unwrap(), "tools")
+        .unwrap_or_default();
     let builtin = builtin_tools();
     let builtin_names: std::collections::HashSet<String> =
         builtin.iter().map(|t| t.name.clone()).collect();

@@ -47,6 +47,8 @@ quick-xml = "0.42"
 sysinfo = "0.33"
 # 幻觉防护：中文分词（jieba 搜索粒度）检测回复中某个词异常重复
 jieba-rs = "0.7"
+# 全量数据存储：sessions/config/audit/memory 等统一入库（bundled 自带 SQLite 免系统依赖）
+rusqlite = { version = "0.32", features = ["bundled"] }
 # 远程二维码：网卡地址枚举（LAN IPv4 / 全球 IPv6）+ 离线二维码 SVG 生成
 if-addrs = "0.13"
 qrcode = { version = "0.14", features = ["svg"] }
@@ -68,3 +70,7 @@ crossterm = { version = "0.28", optional = true }
 default = ["desktop-ctl", "tui-ui"]
 desktop-ctl = ["dep:screenshots", "dep:enigo", "dep:image"]
 tui-ui = ["dep:ratatui", "dep:crossterm"]
+
+# Windows 原生加密第二层：DPAPI（CryptProtectData，CurrentUser 绑定本机本用户）
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }

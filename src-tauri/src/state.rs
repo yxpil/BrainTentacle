@@ -83,8 +83,10 @@ pub struct Ctx {
     pub goals: Mutex<Vec<Goal>>,
     pub todos: Mutex<Vec<Todo>>,
     pub sessions: Mutex<SessionStore>,
-    /// sessions.json 上次已知 mtime：判断文件是否被其他进程（bit 命令行等）改过
-    pub sessions_disk_ts: Mutex<Option<std::time::SystemTime>>,
+    /// bit.db 变更计数：判断库是否被其他进程（worker / bit 命令行）改过（见 store.rs）
+    pub sessions_rev: Mutex<u64>,
+    /// 全量数据存储：bit.db（SQLite，WAL 多进程共享；文档/会话统一入库，见 store.rs）
+    pub db: Mutex<rusqlite::Connection>,
     /// 已接入的 MCP 服务器（Streamable HTTP + stdio）
     pub mcp: Mutex<Vec<crate::mcp::McpServer>>,
     /// stdio MCP 子进程注册表：server_id → StdioSession。进程存活期间持有；重启需重连
@@ -161,21 +163,24 @@ impl Ctx {
         };
         fs::create_dir_all(&data_dir).ok();
 
-        let config = crate::config::Config::load(&data_dir);
+        // 全量数据存储：先开 bit.db，再由 Config::load 处理引导锚点与配置迁移
+        let db = crate::store::open(&data_dir);
+        let config = crate::config::Config::load(&data_dir, &db);
         let device_key = config.device_key.clone();
-        let ai_config: AiConfig =
-            crate::securefile::read_secret_json(&data_dir, "ai_config.json", device_key.as_deref())
-                .value
-                .unwrap_or_default();
-        let tools: Vec<ToolDef> =
-            read_json(&data_dir.join("tools.json")).unwrap_or_default();
-        let audit: Vec<AuditEntry> = read_json(&data_dir.join("audit.json"))
+        // 一次性导入遗留 JSON 文件（幂等；导入后原文件改名 .migrated 留档）
+        crate::store::import_legacy(&db, &data_dir, device_key.as_deref());
+
+        let ai_config: AiConfig = crate::store::get_secret_json(&db, "ai_config", device_key.as_deref())
             .unwrap_or_default();
+        let tools: Vec<ToolDef> =
+            crate::store::get_json(&db, "tools").unwrap_or_default();
+        let audit: Vec<AuditEntry> =
+            crate::store::get_json(&db, "audit").unwrap_or_default();
         let mut memories: Vec<Memory> =
-            read_json(&data_dir.join("memories.json")).unwrap_or_default();
-        let mut skills: Vec<Skill> = read_json(&data_dir.join("skills.json")).unwrap_or_default();
-        let mut goals: Vec<Goal> = read_json(&data_dir.join("goals.json")).unwrap_or_default();
-        let mut todos: Vec<Todo> = read_json(&data_dir.join("todos.json")).unwrap_or_default();
+            crate::store::get_json(&db, "memories").unwrap_or_default();
+        let mut skills: Vec<Skill> = crate::store::get_json(&db, "skills").unwrap_or_default();
+        let mut goals: Vec<Goal> = crate::store::get_json(&db, "goals").unwrap_or_default();
+        let mut todos: Vec<Todo> = crate::store::get_json(&db, "todos").unwrap_or_default();
         // 一次性迁移：旧 32 位 hex uuid id → 短数字 id（幂等，已是数字则保持）；
         // todo.goal_id 引用同步重映射。提示词/面板可读性（对比 4dca90f7… → 3）
         {
@@ -202,31 +207,18 @@ impl Ctx {
             for (i, s) in skills.iter_mut().enumerate() {
                 s.id = (i + 1).to_string();
             }
-            for (path, v) in [
-                ("memories.json", serde_json::to_string(&memories).unwrap_or_default()),
-                ("skills.json", serde_json::to_string(&skills).unwrap_or_default()),
-                ("goals.json", serde_json::to_string(&goals).unwrap_or_default()),
-                ("todos.json", serde_json::to_string(&todos).unwrap_or_default()),
-            ] {
-                let _ = fs::write(data_dir.join(path), v);
-            }
+            crate::store::put_json(&db, "memories", &memories);
+            crate::store::put_json(&db, "skills", &skills);
+            crate::store::put_json(&db, "goals", &goals);
+            crate::store::put_json(&db, "todos", &todos);
         }
-        let sessions = SessionStore::load(&data_dir);
-        let mcp: Vec<crate::mcp::McpServer> = crate::securefile::read_secret_json(
-            &data_dir,
-            "mcp_servers.json",
-            device_key.as_deref(),
-        )
-        .value
-        .unwrap_or_default();
+        let sessions = SessionStore::load(&data_dir, &db);
+        let mcp: Vec<crate::mcp::McpServer> =
+            crate::store::get_secret_json(&db, "mcp_servers", device_key.as_deref())
+                .unwrap_or_default();
         let hidden_codes: Vec<crate::hidden_code::HiddenCodeEntry> =
-            crate::securefile::read_secret_json(
-                &data_dir,
-                "hidden_codes.json",
-                device_key.as_deref(),
-            )
-            .value
-            .unwrap_or_default();
+            crate::store::get_secret_json(&db, "hidden_codes", device_key.as_deref())
+                .unwrap_or_default();
 
         // 内置工具随版本演进：始终以当前出厂的内置工具为准，
         // 移除历史遗留的内置项，保留用户 / AI 自建的工具，再把最新内置放到最前。
@@ -243,23 +235,20 @@ impl Ctx {
                 .collect();
             let mut merged = builtin;
             merged.append(&mut custom);
-            let _ = fs::write(
-                data_dir.join("tools.json"),
-                serde_json::to_string_pretty(&merged).unwrap(),
-            );
+            crate::store::put_json(&db, "tools", &merged);
             merged
         };
 
         // 解释器列表：每次启动都重新探测本机（自动发现新装的语言），
         // 同时沿用旧列表里的启用状态，并保留用户手动添加的项。
         let cached: Vec<Runtime> =
-            read_json(&data_dir.join("runtimes.json")).unwrap_or_default();
+            crate::store::get_json(&db, "runtimes").unwrap_or_default();
         // 解释器列表：启动时直接用缓存（探测在后台进行，不阻塞窗口显示），
         // 后台 refresh_runtimes() 完成后更新状态并通知前端
         let runtimes: Vec<Runtime> = cached;
-        // data_dir 要 move 进 Ctx，工具统计先读出来
         let tool_stats: toolstats::Store =
-            read_json(&data_dir.join("tool_stats.json")).unwrap_or_default();
+            crate::store::get_json(&db, "tool_stats").unwrap_or_default();
+        let sessions_rev = crate::store::sessions_rev(&db);
 
         Arc::new(Ctx {
             app,
@@ -274,7 +263,8 @@ impl Ctx {
             goals: Mutex::new(goals),
             todos: Mutex::new(todos),
             sessions: Mutex::new(sessions),
-            sessions_disk_ts: Mutex::new(None),
+            sessions_rev: Mutex::new(sessions_rev),
+            db: Mutex::new(db),
             mcp: Mutex::new(mcp),
             hidden_codes: Mutex::new(hidden_codes),
             mcp_stdio: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -305,14 +295,37 @@ impl Ctx {
 
     pub fn save_config(&self) {
         let cfg = self.config.lock().unwrap();
-        cfg.save(&self.data_dir);
+        let db = self.db.lock().unwrap();
+        cfg.save(&self.data_dir, &db);
+    }
+
+    // ---- store 快捷封装：文档读写 / 敏感文档双层加密读写 ----
+    // 锁序纪律：config → db（save_* 系列先锁业务 Mutex 再锁 db，均不反向）
+
+    pub fn db_put_json<T: serde::Serialize>(&self, name: &str, val: &T) {
+        crate::store::put_json(&self.db.lock().unwrap(), name, val);
+    }
+
+    pub fn db_get_json<T: serde::de::DeserializeOwned>(&self, name: &str) -> Option<T> {
+        crate::store::get_json(&self.db.lock().unwrap(), name)
+    }
+
+    /// 敏感文档：device_key（config 锁）→ 双层加密（BITENC1 + DPAPI）入库
+    pub fn db_put_secret<T: serde::Serialize>(&self, name: &str, val: &T) {
+        let key = self.config.lock().unwrap().device_key.clone();
+        crate::store::put_secret_json(&self.db.lock().unwrap(), name, key.as_deref().unwrap_or(""), val);
+    }
+
+    pub fn db_get_secret<T: serde::de::DeserializeOwned>(&self, name: &str) -> Option<T> {
+        let key = self.config.lock().unwrap().device_key.clone();
+        crate::store::get_secret_json(&self.db.lock().unwrap(), name, key.as_deref())
     }
 
     /// 后台重新探测本机解释器（保留启用状态与手动添加项）。
     /// 返回列表是否发生变化（由调用方决定是否通知前端）。
     pub fn refresh_runtimes(&self) -> bool {
         let cached: Vec<Runtime> =
-            read_json(&self.data_dir.join("runtimes.json")).unwrap_or_default();
+            crate::store::get_json(&self.db.lock().unwrap(), "runtimes").unwrap_or_default();
         let prev_enabled: std::collections::HashMap<String, bool> =
             cached.iter().map(|r| (r.id.clone(), r.enabled)).collect();
         let manual: Vec<Runtime> = cached.iter().filter(|r| r.manual).cloned().collect();
@@ -329,19 +342,15 @@ impl Ctx {
         }
         let changed = serde_json::to_string(&runtimes).unwrap()
             != serde_json::to_string(&cached).unwrap();
-        let _ = fs::write(
-            self.data_dir.join("runtimes.json"),
-            serde_json::to_string_pretty(&runtimes).unwrap(),
-        );
+        crate::store::put_json(&self.db.lock().unwrap(), "runtimes", &runtimes);
         *self.runtimes.lock().unwrap() = runtimes;
         changed
     }
 
     pub fn save_ai_config(&self) {
-        // 先取 device_key(drop config lock)再 lock ai_config，避免 config→ai_config 反序死锁
-        let key = self.config.lock().unwrap().device_key.clone();
+        // 锁序：config（取 key 即放）→ ai_config → db，避免反序死锁
         let cfg = self.ai_config.lock().unwrap();
-        crate::securefile::write_secret_json(&self.data_dir, "ai_config.json", key, &*cfg);
+        self.db_put_secret("ai_config", &*cfg);
         drop(cfg);
         // 必须通知 worker 重读：worker 的 ai_config 是启动时一次性加载的，
         // 漏通知会导致"设置里换了 provider，worker 还打旧端点"→ 旧端点限流/欠费时
@@ -351,10 +360,7 @@ impl Ctx {
 
     pub fn save_tools(&self) {
         let tools = self.tools.lock().unwrap();
-        let _ = fs::write(
-            self.data_dir.join("tools.json"),
-            serde_json::to_string_pretty(&*tools).unwrap(),
-        );
+        self.db_put_json("tools", &*tools);
         drop(tools);
         // 热加载：通知前端工具清单已变化（AI 注册/更新/删除/启停工具后页面即时刷新）
         use tauri::Emitter;
@@ -365,36 +371,31 @@ impl Ctx {
 
     pub fn save_runtimes(&self) {
         let runtimes = self.runtimes.lock().unwrap();
-        let _ = fs::write(
-            self.data_dir.join("runtimes.json"),
-            serde_json::to_string_pretty(&*runtimes).unwrap(),
-        );
+        self.db_put_json("runtimes", &*runtimes);
     }
 
     pub fn save_sessions(&self) {
         let store = self.sessions.lock().unwrap();
-        let _ = fs::write(
-            self.data_dir.join("sessions.json"),
-            serde_json::to_string(&*store).unwrap(),
-        );
+        crate::store::sync_sessions(&self.db.lock().unwrap(), &store.sessions, &store.active);
         drop(store);
-        *self.sessions_disk_ts.lock().unwrap() = fs::metadata(self.data_dir.join("sessions.json"))
-            .and_then(|m| m.modified())
-            .ok();
+        self.refresh_sessions_rev();
+    }
+
+    /// 从 bit.db 读最新变更计数（合并守卫用）
+    pub fn refresh_sessions_rev(&self) {
+        *self.sessions_rev.lock().unwrap() =
+            crate::store::sessions_rev(&self.db.lock().unwrap());
     }
 
     pub fn save_mcp(&self) {
         let mcp = self.mcp.lock().unwrap();
-        // 先取 device_key(drop config lock)再 lock mcp，避免 config→mcp 反序死锁
-        let key = self.config.lock().unwrap().device_key.clone();
-        crate::securefile::write_secret_json(&self.data_dir, "mcp_servers.json", key, &*mcp);
+        self.db_put_secret("mcp_servers", &*mcp);
     }
 
-    /// HiddenCode 条目落盘（设备密钥加密）。锁顺序同 save_mcp。
+    /// HiddenCode 条目入库（设备密钥 + DPAPI 双层加密）。锁顺序同 save_mcp。
     pub fn save_hidden_codes(&self) {
         let codes = self.hidden_codes.lock().unwrap();
-        let key = self.config.lock().unwrap().device_key.clone();
-        crate::securefile::write_secret_json(&self.data_dir, "hidden_codes.json", key, &*codes);
+        self.db_put_secret("hidden_codes", &*codes);
         drop(codes);
         // worker 进程同样一次性加载 hidden_codes，改条目后必须通知重读
         crate::worker::notify_reload();

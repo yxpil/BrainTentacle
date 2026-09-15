@@ -895,7 +895,7 @@ pub async fn qr_payload(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
             let id = crate::relay::gen_relay_id();
             c.relay_id = id.clone();
             c.revision += 1;
-            c.save(&ctx.data_dir);
+            c.save(&ctx.data_dir, &ctx.db.lock().unwrap());
             crate::audit::record(ctx, "local-app", "remote.relay_id", "generate", json!({}), true);
             id
         } else {
@@ -1388,7 +1388,7 @@ pub async fn set_tool_approval(state: State<'_, Arc<Ctx>>, mode: String) -> Resu
         let mut cfg = ctx.config.lock().unwrap();
         cfg.tool_approval = mode.clone();
         cfg.revision += 1;
-        cfg.save(&ctx.data_dir);
+        cfg.save(&ctx.data_dir, &ctx.db.lock().unwrap());
     }
     crate::audit::record(&ctx, "local-app", "tool.approval_mode", &mode, json!({ "mode": mode }), true);
     Ok(json!({ "mode": mode }))
@@ -1429,7 +1429,7 @@ pub fn set_autostart(
                 let mut cfg = c.config.lock().unwrap();
                 cfg.autostart = enabled;
                 cfg.revision += 1;
-                cfg.save(&c.data_dir);
+                cfg.save(&c.data_dir, &c.db.lock().unwrap());
             }
             crate::audit::record(&c, "local-app", "settings.autostart", &enabled.to_string(), json!({ "enabled": enabled }), true);
             Ok(json!({ "enabled": enabled }))
@@ -2840,7 +2840,7 @@ pub async fn set_elevation(app: tauri::AppHandle, state: State<'_, Arc<Ctx>>, en
             let mut cfg = c.config.lock().unwrap();
             cfg.elevated = enabled;
             cfg.revision += 1;
-            cfg.save(&c.data_dir);
+            cfg.save(&c.data_dir, &c.db.lock().unwrap());
         }
         return Ok(json!({ "active": active, "enabled": enabled }));
     }
@@ -2856,7 +2856,7 @@ pub async fn set_elevation(app: tauri::AppHandle, state: State<'_, Arc<Ctx>>, en
                 let mut cfg = c.config.lock().unwrap();
                 cfg.elevated = enabled;
                 cfg.revision += 1;
-                cfg.save(&c.data_dir);
+                cfg.save(&c.data_dir, &c.db.lock().unwrap());
             }
             // 正常重启交接：通知守护进程不要按意外死亡接力，新实例会重新布防
             crate::guardian::expect_exit(&c);

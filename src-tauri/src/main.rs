@@ -38,6 +38,8 @@ mod mcp;
 mod memory;
 mod netinfo;
 mod engine;
+mod osprotect;
+mod store;
 mod perms;
 mod plugins;
 mod registry;
