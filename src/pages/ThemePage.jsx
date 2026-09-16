@@ -283,6 +283,28 @@ export default function ThemePage() {
               <span>{t("theme.rounded", "圆润")}</span>
             </div>
           </div>
+
+          <div>
+            <label className="mb-2 flex items-center justify-between text-sm">
+              <span>{t("theme.fontScale", "字体大小")}</span>
+              <span className="font-mono text-neutral-500 dark:text-neutral-400">
+                {Math.round((look.fontScale ?? 1) * 100)}%
+              </span>
+            </label>
+            <input
+              type="range"
+              min="0.85"
+              max="1.25"
+              step="0.05"
+              value={look.fontScale ?? 1}
+              onChange={(e) => patch({ fontScale: Number(e.target.value) })}
+              className="w-full accent-[var(--accent)]"
+            />
+            <div className="mt-1 flex justify-between text-[11px] text-neutral-400">
+              <span>{t("theme.fontSmall", "小")}</span>
+              <span>{t("theme.fontLarge", "大")}</span>
+            </div>
+          </div>
         </div>
       </div>
 

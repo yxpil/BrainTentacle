@@ -35,6 +35,10 @@ function applyAccent(color) {
 // look 结构：{ enabled, bgColorLight, bgColorDark, bgOpacity, bgImage, borderOn, borderRadius, cardRadius, shadowOn }
 function applyLook(look) {
   const root = document.documentElement;
+  // 字体缩放：Tailwind 全 rem 布局，调根字号即全局等比缩放（窗口级属性，独立于外观开关）
+  const scale = look?.fontScale ?? 1;
+  if (scale === 1) root.style.removeProperty("font-size");
+  else root.style.fontSize = `${(16 * scale).toFixed(1)}px`;
   // 窗口外圆角：窗口级属性，独立于外观定制开关（透明窗体走 CSS 圆角，DWM 不给圆角）
   root.style.setProperty("--win-radius", (look?.winRadius ?? 0) + "px");
   if (!look || !look.enabled) {
@@ -88,6 +92,7 @@ const DEFAULT_LOOK = {
   borderRadius: 0,
   cardRadius: 24,
   winRadius: 16,
+  fontScale: 1,
   shadowOn: true,
 };
 
