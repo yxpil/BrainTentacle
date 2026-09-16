@@ -1316,14 +1316,24 @@ pub async fn chat_turn_stream(
                     let mut payload = record_and_payload(ctx, &target, &r.usage);
                     payload["type"] = json!("usage");
                     emit(payload);
-                    // 原生模式只认协议字段里的调用；正文 JSON 解析是兼容模式（文本约定）的专属职责
+                    // 原生模式优先认协议字段里的调用；但很多兼容网关/小模型会把
+                    // 工具调用直接写在正文里（无 tool_calls delta）——协议字段为空时
+                    // 降级解析正文（复用兼容模式的严格解析 + 防误判双重校验）。
                     // 原生分支同样要提取回复里的 SVG 绘图（与 chat_turn 同因：漏了导致原生模式下 SVG 不渲染）
                     let mut content = r.content;
                     let svg_note = deliver_svg_blocks(ctx, &target, &content);
                     if !svg_note.is_empty() {
                         content.push_str(&svg_note);
                     }
-                    (content, r.calls)
+                    let calls = if r.calls.is_empty() {
+                        match parse_tool_calls(&content) {
+                            Some(tc) if !tc.is_empty() && looks_like_tool_calls(&tc) => text_calls_to_native(&tc),
+                            _ => Vec::new(),
+                        }
+                    } else {
+                        r.calls
+                    };
+                    (content, calls)
                 }
                 Err(ai::NativeErr::Unsupported(e)) => {
                     // 端点拒绝 tools 参数：标准协议直接报错，不做自动降级。

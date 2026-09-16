@@ -241,9 +241,8 @@ async fn ensure_spawned(ctx: &Arc<Ctx>) -> Result<(), String> {
     #[cfg(windows)]
     {
         // debug 构建是控制台子系统：防每次拉起 worker 闪黑窗（release GUI 子系统本就无窗口）
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW(0x0800_0000) + DETACHED_PROCESS(0x0000_0008)：既不创建新窗口也不附着父控制台
-        cmd.creation_flags(0x0800_0000 | 0x0000_0008);
+        // 仅 CREATE_NO_WINDOW：DETACHED_PROCESS 与之互斥，且会破坏 stdout 管道（worker 靠 stdio 握手）
+        crate::registry::no_window(&mut cmd);
     }
     let mut child = cmd
         .spawn()

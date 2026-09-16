@@ -287,7 +287,7 @@ fn spawn_guardian(guardian_bin: &Path, target: &Path, app_args: &[String], state
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    crate::registry::no_window(&mut cmd); // CREATE_NO_WINDOW + DETACHED_PROCESS：守护进程完全脱离父控制台
+    crate::registry::no_window(&mut cmd); // 仅 CREATE_NO_WINDOW（与 DETACHED_PROCESS 互斥，后者破坏 stdio）
     cmd.spawn().ok().map(|_| ())
 }
 

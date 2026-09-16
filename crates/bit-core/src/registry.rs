@@ -812,14 +812,14 @@ pub fn safe_trunc(s: &str, n: usize) -> String {
     format!("{}…", &s[..end])
 }
 
-/// Windows 下隐藏子进程控制台窗口（CREATE_NO_WINDOW | DETACHED_PROCESS），
-/// 双重保险：既不创建新控制台，也不附着父进程控制台（detached 由调用方按需加）
+/// Windows 下隐藏子进程控制台窗口（仅 CREATE_NO_WINDOW）
+/// 注意：不能与 DETACHED_PROCESS 同设——两者互斥（都控制控制台分配，MSDN 行为未定义），
+/// 且 DETACHED_PROCESS 会干扰 console 子系统程序（pwsh/cmd）的 stdout 管道，导致输出为空
 #[cfg(windows)]
 pub fn no_window(cmd: &mut std::process::Command) {
     use std::os::windows::process::CommandExt;
-    // CREATE_NO_WINDOW = 0x0800_0000（阻止新控制台）
-    // DETACHED_PROCESS = 0x0000_0008（不附着父进程控制台；单独用会让 cmd.exe 中转弹黑窗）
-    cmd.creation_flags(0x0800_0000 | 0x0000_0008);
+    // CREATE_NO_WINDOW = 0x0800_0000（不创建新控制台窗口，stdio 管道继承正常）
+    cmd.creation_flags(0x0800_0000);
 }
 #[cfg(not(windows))]
 pub fn no_window(_cmd: &mut std::process::Command) {}
@@ -827,8 +827,7 @@ pub fn no_window(_cmd: &mut std::process::Command) {}
 /// 同 no_window，用于 tokio 进程
 #[cfg(windows)]
 pub fn no_window_tokio(cmd: &mut tokio::process::Command) {
-    // tokio::process::Command::creation_flags 是 u32
-    cmd.creation_flags(0x0800_0000 | 0x0000_0008);
+    cmd.creation_flags(0x0800_0000);
 }
 #[cfg(not(windows))]
 pub fn no_window_tokio(_cmd: &mut tokio::process::Command) {}
