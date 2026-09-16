@@ -77,13 +77,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: 构建（${{ matrix.triple }}）
         run: cargo build --release --locked --target ${{ matrix.triple }} -p bit-napi -p bit-core
-      - name: 归一物料名（bit.node + bit-cli → packaging/native）
+      - name: 归一物料名（bit.node + bit-cli + icon.ico → packaging/native）
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force packaging/native | Out-Null
           Copy-Item "target/${{ matrix.triple }}/release/${{ matrix.lib }}" packaging/native/bit.node
           $cli = "target/${{ matrix.triple }}/release/bit-cli"
           if (Test-Path "$cli.exe") { Copy-Item "$cli.exe" packaging/native/bit-cli.exe } else { Copy-Item $cli packaging/native/bit-cli }
+          # 托盘/通知图标随物料走（packaging/native 不入库，CI checkout 里无此文件；
+          # 缺了它 extraResources 不注入 → 打包产物 resources/icon.ico 缺失 → 托盘空图标）
+          Copy-Item "src-tauri/icons/icon.ico" packaging/native/icon.ico
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.name }}
