@@ -111,7 +111,10 @@
     font-size: 11px; color: var(--text3); background: none; border: none; cursor: pointer;
     padding: 3px 8px; border-radius: 8px; transition: color 0.15s, background-color 0.15s;
   }
-  .quit:hover { color: #dc2626; background: rgba(220,38,38,0.08); }
+  .quit:hover { color: var(--text); background: rgba(0,0,0,0.06); }
+  body.dark .quit:hover { background: rgba(255,255,255,0.1); }
+  .quit.danger:hover { color: #dc2626; background: rgba(220,38,38,0.08); }
+  .foot .gap { width: 10px; }
   .foot .hint { margin-left: auto; font-size: 10px; color: var(--text3); }
 </style>
 </head>
@@ -148,7 +151,9 @@
     </div>
   </div>
   <div class="foot">
-    <button class="quit" id="btn-quit">退出应用</button>
+    <button class="quit" id="btn-show">显示主界面</button>
+    <span class="gap"></span>
+    <button class="quit danger" id="btn-quit">退出应用</button>
     <span class="hint">左键托盘图标 = 主界面 · 失焦自动收起</span>
   </div>
 </div>
@@ -192,6 +197,7 @@
   }
 
   $('btn-close').onclick = () => ipcRenderer.send('tray:hide');
+  $('btn-show').onclick = () => ipcRenderer.send('tray:show');
   $('btn-quit').onclick = () => ipcRenderer.send('tray:quit');
   ipcRenderer.on('tray:status', (_e, s) => { snap = s || snap; render(); });
   setInterval(render, 1000); // 秒级刷新耗时

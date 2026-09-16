@@ -79,7 +79,11 @@ ipcMain.on('bit:theme-changed', (_e, dark) => {
   const t = dark ? 'dark' : 'light';
   if (trayState.theme !== t) { trayState.theme = t; traySchedulePush(); }
 });
-// 任务面板控制：关闭按钮（隐藏）与退出（真正退出链）
+// 任务面板控制：显示主界面 / 关闭按钮（隐藏）与退出（真正退出链）
+ipcMain.on('tray:show', () => {
+  showWindow();
+  try { statusWin?.hide(); } catch {} // 弹层行为：点了就收起
+});
 ipcMain.on('tray:hide', () => { try { statusWin?.hide(); } catch {} });
 ipcMain.on('tray:quit', () => {
   try { statusWin?.destroy(); } catch {}
@@ -210,13 +214,18 @@ function showStatusWindow(fromTray) {
   statusWin.setMenuBarVisibility(false);
   statusWin.loadFile(path.join(__dirname, 'tray-status.html'));
   statusWin.on('closed', () => { statusWin = null; });
+  let statusFocused = false; // 面板是否真正获得过焦点（自动化/后台打开时拿不到焦点，不应触发失焦收起）
+  statusWin.on('focus', () => { statusFocused = true; });
   statusWin.on('blur', () => { // 失焦自动收起（弹层行为）
+    if (!statusFocused) return;
+    statusFocused = false;
     if (statusWin && !statusWin.webContents.isDevToolsOpened()) {
       try { statusWin.hide(); } catch {}
     }
   });
   statusWin.once('ready-to-show', () => {
-    if (fromTray) statusWin.show(); else statusWin.show();
+    statusWin.show();
+    statusWin.focus();
     traySchedulePush();
   });
 }
