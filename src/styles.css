@@ -80,6 +80,11 @@
     background-color: var(--look-bg-color-dark, #18181b);
     color-scheme: dark;
   }
+  /* 背景模糊遮罩：磨砂质感（主题页「背景模糊」滑块，0=关闭）
+     backdrop-filter 采样其后内容做模糊——背景图/透明窗口下层内容均被柔化 */
+  .has-bg-blur #root::before {
+    backdrop-filter: blur(var(--look-bg-blur, 24px));
+  }
   /* 滚动条：悬浮小胶囊。thumb 用透明边框内缩（background-clip: padding-box），
      上下端不贴轨道两端、左右不贴容器边缘，圆角容器里也不会顶出圆角 */
   ::-webkit-scrollbar {
