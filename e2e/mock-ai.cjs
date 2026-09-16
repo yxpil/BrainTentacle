@@ -853,6 +853,18 @@ const server = http.createServer((req, res) => {
         sse
       );
 
+    // 通用工具驱动：E2E-TOOLRUN:<base64(json 调用数组)> → 第一轮原样返回调用数组，
+    // 反馈轮走 generic 收尾。一个场景覆盖任意工具序列（全工具扫描用）
+    if (last.startsWith("E2E-TOOLRUN:") && rounds === 0) {
+      try {
+        const b64 = last.slice("E2E-TOOLRUN:".length).trim();
+        const calls = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+        return respond(res, `按指令执行工具。\n${JSON.stringify(calls)}`, sse);
+      } catch (e) {
+        return respond(res, `TOOLRUN 协议解析失败: ${e.message}`, sse);
+      }
+    }
+
     // 无 index 的流式 tool_calls（部分 OpenAI 兼容网关形态）：两个完整调用、不带 index 字段，
     // 验证 BIT 按 id 分槽聚合（修复前全部并入槽 0 → name/args 交错成垃圾）
     if (last.includes("E2E-NOINDEX")) {
