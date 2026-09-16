@@ -146,25 +146,33 @@ function trayTrackEvent(e) {
 }
 // goals 轮询：主进程直接查 core（失败静默，不影响主流程）
 let goalsTimer = null;
+async function loadGoals() {
+  try {
+    const r = await bit.invoke('list_goals');
+    const list = r?.goals || [];
+    const active = list.filter((g) => g.status === 'active' || g.status === 'in_progress');
+    const goals = active.map((g) => ({
+      id: g.id,
+      text: g.goal || g.title || '(未命名目标)',
+      pending: (g.todos || []).filter((t2) => t2.status !== 'completed' && t2.status !== 'done').length,
+    }));
+    const sig = JSON.stringify(goals);
+    if (sig !== trayState._goalsSig) {
+      trayState._goalsSig = sig;
+      trayState.goals = goals;
+      traySchedulePush();
+    }
+  } catch { /* core 未就绪或命令不可用：静默跳过 */ }
+}
+// 面板「活跃计划」删除按钮 → 删目标（级联删其待办）→ 立即刷新
+ipcMain.on('tray:remove-goal', async (_e, id) => {
+  try { await bit.invoke('remove_goal', { id }); } catch {}
+  loadGoals();
+});
 function startGoalsPolling() {
   if (goalsTimer) return;
-  goalsTimer = setInterval(async () => {
-    try {
-      const r = await bit.invoke('list_goals');
-      const list = r?.goals || [];
-      const active = list.filter((g) => g.status === 'active' || g.status === 'in_progress');
-      const goals = active.map((g) => ({
-        text: g.goal || g.title || '(未命名目标)',
-        pending: (g.todos || []).filter((t2) => t2.status !== 'completed' && t2.status !== 'done').length,
-      }));
-      const sig = JSON.stringify(goals);
-      if (sig !== trayState._goalsSig) {
-        trayState._goalsSig = sig;
-        trayState.goals = goals;
-        traySchedulePush();
-      }
-    } catch { /* core 未就绪或命令不可用：静默跳过 */ }
-  }, 10000);
+  loadGoals();
+  goalsTimer = setInterval(loadGoals, 10000);
 }
 let quitting = false; // 真正退出（quit_app / app.quit）时置位：窗口关闭不再隐藏到托盘
 

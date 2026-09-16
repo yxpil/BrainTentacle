@@ -101,6 +101,15 @@
   .item .badge { flex-shrink: 0; font-size: 10px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text2); }
   .badge.b-run { color: var(--run); border-color: color-mix(in srgb, var(--run) 35%, transparent); }
   .badge.b-pending { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+  /* 计划条目删除按钮：默认低调，hover 条目时浮现，hover 按钮变红（危险操作） */
+  .gdel {
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 999px;
+    color: var(--text3); background: transparent; border: none; cursor: pointer;
+    opacity: 0; transition: opacity 0.12s, background-color 0.15s, color 0.15s;
+  }
+  .item:hover .gdel { opacity: 1; }
+  .gdel:hover { background: rgba(220,38,38,0.1); color: #dc2626; }
   .empty { border: 1px dashed var(--border); border-radius: 12px; padding: 12px; text-align: center; color: var(--text3); font-size: 12px; }
 
   .foot {
@@ -216,12 +225,17 @@
     renderSection('subs', 'c-subs', 'd-subs', snap.subs, '没有派生的子代理', (it) =>
       '<div class="item"><span class="badge b-run">委派</span><span class="label">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
     renderSection('goals', 'c-goals', 'd-goals', snap.goals, '没有活跃计划', (g) =>
-      '<div class="item" title="' + esc(g.text) + '"><span class="badge ' + (g.pending ? 'b-pending' : 'b-run') + '">' + (g.pending ? '待办 ' + g.pending : '进行中') + '</span><span class="label">' + esc(g.text) + '</span></div>');
+      '<div class="item" title="' + esc(g.text) + '"><span class="badge ' + (g.pending ? 'b-pending' : 'b-run') + '">' + (g.pending ? '待办 ' + g.pending : '进行中') + '</span><span class="label">' + esc(g.text) + '</span><button class="gdel" data-gid="' + esc(g.id) + '" title="删除此计划"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>');
   }
 
   $('btn-close').onclick = () => ipcRenderer.send('tray:hide');
   $('btn-show').onclick = () => ipcRenderer.send('tray:show');
   $('btn-quit').onclick = () => ipcRenderer.send('tray:quit');
+  // 删除计划：事件委托（goals 区 innerHTML 按签名重建，直接绑会丢）
+  $('goals').addEventListener('click', (e) => {
+    const btn = e.target?.closest?.('.gdel');
+    if (btn?.dataset?.gid) ipcRenderer.send('tray:remove-goal', btn.dataset.gid);
+  });
   ipcRenderer.on('tray:status', (_e, s) => { snap = s || snap; render(); });
   setInterval(render, 1000); // 秒级刷新耗时
   render();

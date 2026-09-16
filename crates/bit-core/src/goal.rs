@@ -37,34 +37,33 @@ fn now() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-fn persist(ctx: &Arc<crate::state::Ctx>) {
-    let goals = ctx.goals.lock().unwrap();
-    let _ = std::fs::write(
-        ctx.data_dir.join("goals.json"),
-        serde_json::to_string(&*goals).unwrap_or_default(),
-    );
-    drop(goals);
-    let todos = ctx.todos.lock().unwrap();
-    let _ = std::fs::write(
-        ctx.data_dir.join("todos.json"),
-        serde_json::to_string(&*todos).unwrap_or_default(),
-    );
+/// 落库：bit.db documents "goals"/"todos"（name TEXT PRIMARY KEY）。
+/// 历史教训：曾写 goals.json/todos.json 文件，而启动加载源是 bit.db——
+/// 数据分裂导致运行期删除的目标重启后"复活"（面板删不掉）。统一以 bit.db 为唯一持久层。
+/// 锁顺序约定：先 goals/todos（短临界区取克隆），后 db——persist/refresh 双向都不持有重叠。
+pub fn persist(ctx: &Arc<crate::state::Ctx>) {
+    let goals = ctx.goals.lock().unwrap().clone();
+    let todos = ctx.todos.lock().unwrap().clone();
+    let db = ctx.db.lock().unwrap();
+    crate::store::put_json(&db, "goals", &goals);
+    crate::store::put_json(&db, "todos", &todos);
 }
 
-/// 从磁盘重载目标/待办：桌面端会话在 worker 子进程里跑时，plan 等工具写的是
-/// worker 内存 + goals.json/todos.json，host 的调试/远程接口读取前必须同步，
-/// 否则跨进程看到空表（create_goal 每次都落盘，磁盘即最新状态，直接整体替换）
+/// 从 bit.db 重载目标/待办：桌面端会话在 worker 子进程里跑时，plan 等工具写的是
+/// worker 内存 + bit.db，host 的调试/远程接口读取前必须同步（整体替换，库侧即最新状态）。
 pub fn refresh_from_disk(ctx: &Arc<crate::state::Ctx>) {
-    let read = |name: &str| std::fs::read_to_string(ctx.data_dir.join(name)).ok();
-    if let Some(s) = read("goals.json") {
-        if let Ok(g) = serde_json::from_str::<Vec<Goal>>(&s) {
-            *ctx.goals.lock().unwrap() = g;
-        }
+    let (g, t) = {
+        let db = ctx.db.lock().unwrap();
+        (
+            crate::store::get_json::<Vec<Goal>>(&db, "goals"),
+            crate::store::get_json::<Vec<Todo>>(&db, "todos"),
+        )
+    }; // db 锁先释放，再取内存锁（避免 goals→db / db→goals 交叉死锁）
+    if let Some(g) = g {
+        *ctx.goals.lock().unwrap() = g;
     }
-    if let Some(s) = read("todos.json") {
-        if let Ok(t) = serde_json::from_str::<Vec<Todo>>(&s) {
-            *ctx.todos.lock().unwrap() = t;
-        }
+    if let Some(t) = t {
+        *ctx.todos.lock().unwrap() = t;
     }
 }
 

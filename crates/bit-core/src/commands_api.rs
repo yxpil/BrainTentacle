@@ -1472,8 +1472,28 @@ pub fn delete_session(ctx: &Arc<Ctx>, session_id: String) -> Result<serde_json::
         }
         active = store.active.clone();
     }
+    // 级联清理该会话派生的目标/待办（否则删对话后"活跃计划"残留且无法删除）
+    let ids: std::collections::HashSet<String> = [session_id.clone()].into_iter().collect();
+    purge_plan_for_sessions(ctx, &ids);
     ctx.save_sessions();
     Ok(json!({ "deleted": true, "active": active }))
+}
+
+/// 删除会话的级联清理：该会话派生的目标/待办一并从 bit.db 删除。
+/// 目标被删后，挂在目标下的待办（即使创建于其他会话）也一并清理，避免孤儿数据。
+pub fn purge_plan_for_sessions(ctx: &Arc<Ctx>, ids: &std::collections::HashSet<String>) {
+    {
+        let mut goals = ctx.goals.lock().unwrap();
+        goals.retain(|g| g.session_id.as_deref().map_or(true, |s| !ids.contains(s)));
+        let live: std::collections::HashSet<&str> = goals.iter().map(|g| g.id.as_str()).collect();
+        let mut todos = ctx.todos.lock().unwrap();
+        todos.retain(|t| {
+            let own = t.session_id.as_deref().map_or(false, |s| ids.contains(s));
+            let orphan = t.goal_id.as_deref().map_or(false, |gid| !live.contains(gid));
+            !own && !orphan
+        });
+    }
+    crate::goal::persist(ctx);
 }
 
 /// 收藏 / 取消收藏会话（收藏的会话置顶，批量删除时受保护）
@@ -1503,6 +1523,7 @@ pub fn set_session_color(ctx: &Arc<Ctx>, session_id: String, color: String) -> R
 pub fn delete_sessions(ctx: &Arc<Ctx>, session_ids: Vec<String>) -> Result<serde_json::Value, String> {
     let mut deleted = 0usize;
     let mut skipped = 0usize;
+    let mut removed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let active;
     {
         let mut store = ctx.sessions.lock().unwrap();
@@ -1515,6 +1536,7 @@ pub fn delete_sessions(ctx: &Arc<Ctx>, session_ids: Vec<String>) -> Result<serde
                 true
             } else {
                 deleted += 1;
+                removed.insert(s.id.clone());
                 false
             }
         });
@@ -1526,6 +1548,10 @@ pub fn delete_sessions(ctx: &Arc<Ctx>, session_ids: Vec<String>) -> Result<serde
             store.active = store.sessions.last().map(|s| s.id.clone()).unwrap_or_default();
         }
         active = store.active.clone();
+    }
+    // 级联清理被删会话（收藏被跳过不删）派生的目标/待办
+    if !removed.is_empty() {
+        purge_plan_for_sessions(ctx, &removed);
     }
     ctx.save_sessions();
     Ok(json!({ "deleted": deleted, "skipped": skipped, "active": active }))
