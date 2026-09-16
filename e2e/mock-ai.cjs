@@ -838,7 +838,7 @@ const server = http.createServer((req, res) => {
 
     // 控制台面板场景：跑 >2s 长命令（超过 FRONT_WINDOW_MS 自动转后台）→
     // 验证 shell-job started/done 事件、list_running_shells、get_shell_detail 实时日志
-    if (last.includes("E2E-CMD-BG") && rounds === 0)
+    if (last.includes("E2E-CMD-BG"))
       return respond(
         res,
         '跑一个长命令：\n[{"tool":"shell","params":{"command":"sleep 3 && echo bg-done-ok"}}]',
@@ -846,16 +846,22 @@ const server = http.createServer((req, res) => {
       );
 
     // 控制台取消场景：跑 10s 长命令，测试侧在后台期间 cancel_shell → 应收到 killed
-    if (last.includes("E2E-CMD-CANCEL") && rounds === 0)
+    if (last.includes("E2E-CMD-CANCEL"))
       return respond(
         res,
         '跑一个长命令：\n[{"tool":"shell","params":{"command":"sleep 10 && echo never-done"}}]',
         sse
       );
 
-    // 通用工具驱动：E2E-TOOLRUN:<base64(json 调用数组)> → 第一轮原样返回调用数组，
-    // 反馈轮走 generic 收尾。一个场景覆盖任意工具序列（全工具扫描用）
-    if (last.startsWith("E2E-TOOLRUN:") && rounds === 0) {
+    // 自动推进防陷：E2E 场景留下的未完成目标会被 auto_drive 无限续跑、占住会话——
+    // 直接回复一个空结论终止该轮（无工具调用，目标仍在，但不阻塞测试）
+    if (last.startsWith("继续（自动推进）") || last.startsWith("Continue (auto-drive)"))
+      return respond(res, "E2E-AUTODRIVE-STOP（测试模式：不推进目标）", sse);
+
+    // 通用工具驱动：E2E-TOOLRUN:<base64(json 调用数组)> → 首轮原样返回调用数组，
+    // 反馈轮走 generic 收尾。一个场景覆盖任意工具序列（全工具扫描用）。
+    // 用 last 前缀判断而非 rounds===0：复用会话时历史 rounds 已 >0，rounds 判断会失效
+    if (last.startsWith("E2E-TOOLRUN:")) {
       try {
         const b64 = last.slice("E2E-TOOLRUN:".length).trim();
         const calls = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
