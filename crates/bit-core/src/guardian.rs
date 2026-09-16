@@ -287,7 +287,7 @@ fn spawn_guardian(guardian_bin: &Path, target: &Path, app_args: &[String], state
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    crate::registry::no_window(&mut cmd); // 守护二进制是 console 子系统，不闪黑窗
+    crate::registry::no_window(&mut cmd); // CREATE_NO_WINDOW + DETACHED_PROCESS：守护进程完全脱离父控制台
     cmd.spawn().ok().map(|_| ())
 }
 
@@ -410,12 +410,15 @@ pub fn run_guardian(state_path: PathBuf, log_path: PathBuf, target: Option<PathB
                 return;
             }
         }
-        match std::process::Command::new(&exe)
-            .args(&app_args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
+        match {
+            let mut c = std::process::Command::new(&exe);
+            c.args(&app_args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            crate::registry::no_window(&mut c); // 守护进程复活主进程也不弹控制台
+            c.spawn()
+        }
         {
             Ok(child) => {
                 append_event(&log_path, "restart", &format!("main pid {} died; relaunched as {}", state.pid, child.id()));
