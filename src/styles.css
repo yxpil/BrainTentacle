@@ -170,6 +170,9 @@
   #root {
     position: relative;
     isolation: isolate;
+    /* 窗口外圆角：透明窗体 DWM 不给圆角，由根元素 CSS 圆角实现（--win-radius 由主题页控制） */
+    border-radius: var(--win-radius, 0px);
+    overflow: hidden;
   }
   /* 让 card / pill / 外层容器的圆角可被 --look-*-radius 覆盖 */
   .card {

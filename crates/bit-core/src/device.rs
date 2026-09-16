@@ -36,9 +36,10 @@ fn trim_take(s: String) -> String {
 /// 执行系统命令取 stdout（失败返回空串；采集失败不致命，指纹允许弱化）
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn sysout(cmd: &str, args: &[&str]) -> String {
-    std::process::Command::new(cmd)
-        .args(args)
-        .output()
+    let mut c = std::process::Command::new(cmd);
+    c.args(args);
+    crate::registry::no_window(&mut c); // 开机指纹采集（wmic 等）不闪黑窗
+    c.output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default()
 }

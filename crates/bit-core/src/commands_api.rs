@@ -1736,6 +1736,7 @@ pub fn open_external(url: String) -> Result<serde_json::Value, String> {
         // rundll32 FileProtocolHandler 直接调系统 URL 关联处理，不经 cmd
         let mut c = std::process::Command::new("rundll32");
         c.args(["url.dll,FileProtocolHandler", &url]);
+        crate::registry::no_window(&mut c); // rundll32 是 console 子系统，不闪黑窗
         c
     };
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -1769,7 +1770,11 @@ pub fn get_diagnostics(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
             tools.iter().filter(|t| t.enabled).count(),
         )
     };
-    // 数据文件清单：存在性与大小（排障时确认哪些数据在、哪些丢失）
+    // 数据存储清单（SQLite 迁移后如实报告）：
+    //   - bit.db：配置/会话/工具/记忆/技能等真实数据所在（SQLite + 双重加密）
+    //   - 仍在使用的边车文件：审计日志 / 守护握手 / 守护与崩溃日志
+    //   - legacy JSON（config.json / sessions.json 等）已完成一次性导入并改名
+    //     .migrated，不再列出——列出来只会是常驻的"缺失"误报
     let file = |name: &str| {
         let p = ctx.data_dir.join(name);
         json!({
@@ -1778,12 +1783,10 @@ pub fn get_diagnostics(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
             "bytes": std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0),
         })
     };
-    let names = [
-        "config.json", "ai_config.json", "tools.json", "runtimes.json", "skills.json",
-        "memories.json", "sessions.json", "goals.json", "todos.json", "mcp_servers.json",
-        "audit.json", "tool_stats.json", "guardian.json", "guardian.log", "crash.log",
-    ];
-    let files: Vec<serde_json::Value> = names.iter().map(|n| file(n)).collect();
+    let files: Vec<serde_json::Value> = ["bit.db", "audit.json", "guardian.json", "guardian.log", "crash.log"]
+        .iter()
+        .map(|n| file(n))
+        .collect();
     // 低成功率工具：有失败记录的取前 5（快照已按失败次数降序）
     let stats = crate::state::toolstats::snapshot(ctx);
     let worst: Vec<serde_json::Value> = stats

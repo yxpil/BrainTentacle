@@ -456,6 +456,7 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
     fn build_command(cmd: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
         let mut c = tokio::process::Command::new("cmd");
         c.arg("/c").arg(cmd).args(args);
+        crate::registry::no_window_tokio(&mut c); // cmd.exe 中转不闪黑窗
         for (k, v) in env {
             c.env(k, v);
         }

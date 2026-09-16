@@ -261,6 +261,28 @@ export default function ThemePage() {
               <span>{t("theme.rounded", "圆润")}</span>
             </div>
           </div>
+
+          <div>
+            <label className="mb-2 flex items-center justify-between text-sm">
+              <span>{t("theme.winRadius", "窗口外圆角")}</span>
+              <span className="font-mono text-neutral-500 dark:text-neutral-400">
+                {look.winRadius ?? 0}px
+              </span>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="32"
+              step="2"
+              value={look.winRadius ?? 0}
+              onChange={(e) => patch({ winRadius: Number(e.target.value) })}
+              className="w-full accent-[var(--accent)]"
+            />
+            <div className="mt-1 flex justify-between text-[11px] text-neutral-400">
+              <span>{t("theme.square", "直角")}</span>
+              <span>{t("theme.rounded", "圆润")}</span>
+            </div>
+          </div>
         </div>
       </div>
 

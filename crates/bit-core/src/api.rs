@@ -115,14 +115,37 @@ pub fn ui_mounted(ctx: &Arc<Ctx>) {
     );
 }
 
-/// 本进程内存占用（字节）：页眉仪表盘展示，前端每 3 秒轮询。
-/// Electron 形态下此值是 bit.node 所在的主进程内存（诊断页注明）
+/// 应用内存占用（字节）：本进程 + 全部后代进程 RSS 之和（页眉仪表盘展示，前端每 3 秒轮询）。
+/// Electron 形态 = 主进程（bit.node 所在）+ 渲染/GPU/工具进程 + worker（bit-cli sidecar）；
+/// Tauri 形态 = 主进程 + worker；CLI 形态 = 自身 + shell 子命令。只看单进程会严重低估。
 pub fn mem_usage() -> u64 {
-    use sysinfo::{ProcessesToUpdate, System};
+    use std::collections::{HashMap, HashSet};
+    use sysinfo::{Pid, ProcessesToUpdate, System};
     let mut sys = System::new();
-    let pid = sysinfo::Pid::from_u32(std::process::id());
-    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-    sys.process(pid).map(|p| p.memory()).unwrap_or(0)
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let me = Pid::from_u32(std::process::id());
+    // parent → children 邻接表，从本进程 DFS 求和
+    let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
+    for (pid, p) in sys.processes() {
+        if let Some(pp) = p.parent() {
+            children.entry(pp).or_default().push(*pid);
+        }
+    }
+    let mut total = 0u64;
+    let mut stack = vec![me];
+    let mut seen: HashSet<Pid> = HashSet::new();
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        if let Some(p) = sys.process(pid) {
+            total += p.memory();
+        }
+        if let Some(kids) = children.get(&pid) {
+            stack.extend(kids.iter().copied());
+        }
+    }
+    total
 }
 
 /// 首页概览聚合（工具/记忆/技能/目标/待办/审计计数 + 远程访问状态 + AI 配置态）

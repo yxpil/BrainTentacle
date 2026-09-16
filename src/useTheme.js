@@ -35,6 +35,8 @@ function applyAccent(color) {
 // look 结构：{ enabled, bgColorLight, bgColorDark, bgOpacity, bgImage, borderOn, borderRadius, cardRadius, shadowOn }
 function applyLook(look) {
   const root = document.documentElement;
+  // 窗口外圆角：窗口级属性，独立于外观定制开关（透明窗体走 CSS 圆角，DWM 不给圆角）
+  root.style.setProperty("--win-radius", (look?.winRadius ?? 0) + "px");
   if (!look || !look.enabled) {
     // 恢复默认
     root.style.removeProperty("--app-bg-image");
@@ -85,6 +87,7 @@ const DEFAULT_LOOK = {
   borderOn: true,
   borderRadius: 0,
   cardRadius: 24,
+  winRadius: 16,
   shadowOn: true,
 };
 
@@ -123,6 +126,21 @@ export function useTheme() {
     localStorage.setItem(LOOK_KEY, JSON.stringify(look));
     applyLook(look);
   }, [look]);
+
+  // 最大化/全屏时窗口外圆角归零（贴边不留缝），还原后恢复
+  useEffect(() => {
+    const onResize = () => {
+      const maxed =
+        window.innerWidth >= window.screen.availWidth - 1 &&
+        window.innerHeight >= window.screen.availHeight - 1;
+      document.documentElement.style.setProperty(
+        "--win-radius",
+        maxed ? "0px" : (look.winRadius ?? 0) + "px"
+      );
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [look.winRadius]);
 
   // 亮 → 暗 → 亮，简单二态切换（长按/右键可扩展 auto）
   const toggle = () => setMode((m) => (isDark ? "light" : "dark"));

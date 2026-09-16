@@ -86,6 +86,7 @@ fn run_interpreted(
     }
 
     let mut cmd = Command::new(&program);
+    crate::registry::no_window(&mut cmd); // Windows 控制台解释器（node/python…）不闪黑窗
     if rt.id == "deno" {
         cmd.arg("run").arg("--allow-all");
     }
@@ -132,6 +133,7 @@ fn run_compiled(
             let src = work.join("Main.java");
             write_private(&src, code).map_err(|e| format!("Failed to write source: {e}"))?;
             let mut cmd = Command::new(&rt.path); // java
+            crate::registry::no_window(&mut cmd);
             cmd.arg(&src);
             run_with_limit(cmd, Some(params), timeout)
         }
@@ -145,7 +147,8 @@ fn run_compiled(
             crate::registry::no_window(&mut compile);
             match run_with_limit(compile, None, timeout) {
                 Ok(o) if o.status.success() => {
-                    let cmd = Command::new(&bin);
+                    let mut cmd = Command::new(&bin);
+                    crate::registry::no_window(&mut cmd); // 编译产物（console 子系统）不闪黑窗
                     run_with_limit(cmd, Some(params), timeout)
                 }
                 Ok(o) => {
@@ -161,6 +164,7 @@ fn run_compiled(
             let src = work.join("main.go");
             write_private(&src, code).map_err(|e| format!("Failed to write source: {e}"))?;
             let mut cmd = Command::new(&rt.path); // go
+            crate::registry::no_window(&mut cmd);
             cmd.arg("run").arg(&src);
             run_with_limit(cmd, Some(params), timeout)
         }
@@ -179,7 +183,8 @@ fn run_compiled(
             crate::registry::no_window(&mut compile);
             match run_with_limit(compile, None, timeout) {
                 Ok(o) if o.status.success() => {
-                    let cmd = Command::new(&bin);
+                    let mut cmd = Command::new(&bin);
+                    crate::registry::no_window(&mut cmd); // 编译产物（console 子系统）不闪黑窗
                     run_with_limit(cmd, Some(params), timeout)
                 }
                 Ok(o) => {
@@ -199,7 +204,8 @@ fn run_compiled(
             crate::registry::no_window(&mut compile);
             match run_with_limit(compile, None, timeout) {
                 Ok(o) if o.status.success() => {
-                    let cmd = Command::new(&bin);
+                    let mut cmd = Command::new(&bin);
+                    crate::registry::no_window(&mut cmd); // 编译产物（console 子系统）不闪黑窗
                     run_with_limit(cmd, Some(params), timeout)
                 }
                 Ok(o) => {
@@ -226,6 +232,7 @@ fn run_exec(
     home: &std::path::Path,
 ) -> Result<serde_json::Value, String> {
     let mut cmd = Command::new(&rt.path);
+    crate::registry::no_window(&mut cmd);
     for a in &rt.run_args {
         cmd.arg(a);
     }

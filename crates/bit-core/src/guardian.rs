@@ -278,18 +278,17 @@ pub fn arm(ctx: &Arc<Ctx>) {
 fn spawn_guardian(guardian_bin: &Path, target: &Path, app_args: &[String], state_path: &Path, log_path: &Path) -> Option<()> {
     // 复活目标 + 启动参数原样排进守护 argv（bit-cli 解析：argv[4]=exe，argv[5..]=启动参数）。
     // Electron 形态 target 是 electron.exe，必须带 [main.cjs]——裸拉只会打开默认欢迎页
-    std::process::Command::new(guardian_bin)
-        .arg(GUARDIAN_FLAG)
+    let mut cmd = std::process::Command::new(guardian_bin);
+    cmd.arg(GUARDIAN_FLAG)
         .arg(state_path)
         .arg(log_path)
         .arg(target) // 复活目标：Electron 下 ≠ 守护二进制（bit-cli 拉起的是 Electron 启动器）
         .args(app_args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()
-        .map(|_| ())
+        .stderr(std::process::Stdio::null());
+    crate::registry::no_window(&mut cmd); // 守护二进制是 console 子系统，不闪黑窗
+    cmd.spawn().ok().map(|_| ())
 }
 
 /// 主进程侧巡检任务：守护进程意外死亡时重新拉起（互为看门狗的另一半）。

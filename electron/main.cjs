@@ -25,7 +25,7 @@ if (process.argv.slice(1).includes('--bit-guardian')) {
     : path.join(__dirname, '..', 'src-tauri', 'target', 'debug', 'bit-cli.exe');
   if (fs.existsSync(cli)) {
     require('child_process')
-      .spawn(cli, process.argv.slice(process.argv.indexOf('--bit-guardian')), { stdio: 'ignore', detached: true })
+      .spawn(cli, process.argv.slice(process.argv.indexOf('--bit-guardian')), { stdio: 'ignore', detached: true, windowsHide: true })
       .unref();
   }
   process.exit(0);
@@ -244,7 +244,7 @@ async function hostCommand(cmd, args) {
         const verb = enabled ? 'RunAs' : undefined;
         const ps = `Start-Process -FilePath '${exe.replace(/'/g, "''")}'` + (verb ? ` -Verb ${verb}` : '');
         await new Promise((resolve, reject) => {
-          spawn('powershell.exe', ['-NoProfile', '-Command', ps], { detached: true })
+          spawn('powershell.exe', ['-NoProfile', '-Command', ps], { detached: true, windowsHide: true })
             .on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`授权被取消 (${code})`))))
             .on('error', reject);
         });
