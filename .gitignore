@@ -43,3 +43,12 @@ packaging/npm/*.tgz
 crates/bit-napi/*.node
 crates/bit-napi/index.js
 crates/bit-napi/index.d.ts
+
+# E2E 测试数据目录（运行时生成：bit.db/electron-userdata/迁移残留，不入库）
+e2e/bit-data-*/
+
+# E2E 运行日志与截图（.cjs 探针脚本保留入库，运行输出不入库）
+e2e/*.txt
+e2e/*.png
+.e2e-*.txt
+.e2e-*.png
