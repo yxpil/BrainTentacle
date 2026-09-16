@@ -1,0 +1,91 @@
+# Debian 单独构建：主 release 链只出 Windows 包；本工作流手动触发，
+# 为指定 tag 单独构建 deb（x64/arm64）并上传到该 tag 的 Release。
+# 不触发渠道同步 / latest.json / 镜像刷新（Debian 用户手动安装）。
+
+name: build-debian
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要构建并上传 deb 的 tag（如 v0.6.27）"
+        required: true
+        default: "v0.6.27"
+
+permissions:
+  contents: write
+
+jobs:
+  # napi：linux 双架构原生构建（bit.node + bit-cli sidecar + 托盘 icon 物料）
+  napi-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64,   os: ubuntu-24.04,     triple: x86_64-unknown-linux-gnu,  lib: libbit_napi.so, arch: amd64 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, lib: libbit_napi.so, arch: aarch64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+      - name: 构建（${{ matrix.triple }}）
+        run: cargo build --release --locked --target ${{ matrix.triple }} -p bit-napi -p bit-core
+      - name: 归一物料名（bit.node + bit-cli + icon.ico → packaging/native）
+        run: |
+          mkdir -p packaging/native
+          cp "target/${{ matrix.triple }}/release/${{ matrix.lib }}" packaging/native/bit.node
+          cp "target/${{ matrix.triple }}/release/bit-cli" packaging/native/bit-cli
+          cp src-tauri/icons/icon.ico packaging/native/icon.ico
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.name }}
+          path: packaging/native/*
+          if-no-files-found: error
+
+  # GUI：electron-builder 出 deb（打包宿主统一 x64，可交叉出 arm64 deb）
+  gui-debian:
+    needs: napi-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64,   napi: linux-x64,   arch: amd64,   eb_arch: x64 }
+          - { name: linux-arm64, napi: linux-arm64, arch: aarch64, eb_arch: arm64 }
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: 前端构建
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.napi }}
+          path: packaging/native
+      - name: electron-builder（deb ${{ matrix.eb_arch }}）
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          npx electron-builder --linux deb --${{ matrix.eb_arch }} \
+            "-c.artifactName=BIT_${VERSION}_${{ matrix.arch }}.deb" --publish never
+      - name: 确保 Release 存在并上传
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "触手怪 $TAG" --generate-notes
+          gh release upload "$TAG" release/BIT_*.deb --clobber
