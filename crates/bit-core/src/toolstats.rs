@@ -11,7 +11,7 @@ use crate::state::Ctx;
 /// 近期成功率窗口：只看最近 N 次结果，让近期表现优先于历史累计
 const RECENT_WINDOW: usize = 50;
 
-/// 单个工具的质量统计（持久化到 tool_stats.json）
+/// 单个工具的质量统计（持久化到 bit.db documents "tool_stats"）
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct ToolStat {
     /// 近期结果窗口（true=成功），超出窗口淘汰最旧
@@ -44,13 +44,13 @@ impl ToolStat {
     }
 }
 
-/// tool_id → 统计。Ctx 持有内存态，启动时从 tool_stats.json 载入
+/// tool_id → 统计。Ctx 持有内存态，启动时从 bit.db 载入
 pub type Store = HashMap<String, ToolStat>;
 
-/// 记录一次工具调用结果（含耗时与失败原因），即时落盘。任何 IO 失败静默放弃（不影响调用）
+/// 记录一次工具调用结果（含耗时与失败原因），即时落库。任何 IO 失败静默放弃（不影响调用）
 pub fn record(ctx: &Arc<Ctx>, tool_id: &str, ok: bool, dur_ms: u64, err: Option<&str>) {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let json = {
+    let map = {
         let mut map = ctx.tool_stats.lock().unwrap();
         let s = map.entry(tool_id.to_string()).or_default();
         s.recent.push(ok);
@@ -68,9 +68,10 @@ pub fn record(ctx: &Arc<Ctx>, tool_id: &str, ok: bool, dur_ms: u64, err: Option<
         }
         s.sum_ms += dur_ms;
         s.last_used = now;
-        serde_json::to_string(&*map).unwrap_or_default()
+        map.clone()
     };
-    let _ = std::fs::write(ctx.data_dir.join("tool_stats.json"), json);
+    let db = ctx.db.lock().unwrap();
+    crate::store::put_json(&db, "tool_stats", &map);
 }
 
 /// 前端快照：附工具名，按失败次数降序

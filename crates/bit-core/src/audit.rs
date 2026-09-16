@@ -42,13 +42,12 @@ pub fn record(
     persist(ctx);
 }
 
-/// 把当前内存审计日志全量落盘（调用方须已释放 audit 锁）
+/// 把当前内存审计日志全量落库（调用方须已释放 audit 锁）。
+/// 历史教训：曾写 audit.json 文件，而启动加载源是 bit.db——运行期记录重启即丢。统一以 bit.db 为准。
 pub fn persist(ctx: &Arc<crate::state::Ctx>) {
-    let log = ctx.audit.lock().unwrap();
-    let _ = std::fs::write(
-        ctx.data_dir.join("audit.json"),
-        serde_json::to_string(&*log).unwrap_or_default(),
-    );
+    let log = ctx.audit.lock().unwrap().clone();
+    let db = ctx.db.lock().unwrap();
+    crate::store::put_json(&db, "audit", &log);
 }
 
 /// 清空审计日志（内存 + 持久化）

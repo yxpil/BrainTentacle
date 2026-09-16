@@ -245,15 +245,8 @@ pub fn sync(ctx: &Arc<crate::state::Ctx>) {
             }
         }
     }
-    // 持久化 skills/memories
-    {
-        let skills = ctx.skills.lock().unwrap();
-        let _ = fs::write(ctx.data_dir.join("skills.json"), serde_json::to_string(&*skills).unwrap_or_default());
-    }
-    {
-        let memories = ctx.memories.lock().unwrap();
-        let _ = fs::write(ctx.data_dir.join("memories.json"), serde_json::to_string(&*memories).unwrap_or_default());
-    }
+    // 持久化 skills/memories（统一走 bit.db，复用 memory::persist——原直写 JSON 文件与启动加载源分裂）
+    crate::memory::persist(ctx);
 
     // 更新内存里的插件列表
     {
@@ -299,26 +292,39 @@ pub fn prompt_fragment(ctx: &Arc<crate::state::Ctx>) -> String {
 
 // ---------- 定时任务调度 ----------
 
-/// 任务上次执行时间（toolhomes/plugins/_jobs.json）：key = "<插件id>/<job名>"
+/// 任务上次执行时间（bit.db documents "plugin_jobs"）：key = "<插件id>/<job名>"
+/// 历史遗留：曾存 toolhomes/plugins/_jobs.json，启动时一次性迁移入库
 type JobState = HashMap<String, String>;
 
-fn jobs_state_path(ctx: &Arc<crate::state::Ctx>) -> PathBuf {
+fn jobs_legacy_path(ctx: &Arc<crate::state::Ctx>) -> PathBuf {
     dir(ctx).join("_jobs.json")
 }
 
 fn load_job_state(ctx: &Arc<crate::state::Ctx>) -> JobState {
-    fs::read_to_string(jobs_state_path(ctx))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    {
+        let db = ctx.db.lock().unwrap();
+        if let Some(st) = crate::store::get_json::<JobState>(&db, "plugin_jobs") {
+            return st;
+        }
+    } // db 锁先释放
+      // 一次性迁移遗留 _jobs.json（db 无该文档时）：导入后改名 .migrated 留档
+    let p = jobs_legacy_path(ctx);
+    if let Ok(raw) = fs::read_to_string(&p) {
+        if let Ok(st) = serde_json::from_str::<JobState>(&raw) {
+            {
+                let db = ctx.db.lock().unwrap();
+                crate::store::put_json(&db, "plugin_jobs", &st);
+            }
+            let _ = fs::rename(&p, p.with_extension("json.migrated"));
+            return st;
+        }
+    }
+    JobState::default()
 }
 
 fn save_job_state(ctx: &Arc<crate::state::Ctx>, st: &JobState) {
-    let _ = fs::create_dir_all(dir(ctx));
-    let _ = fs::write(
-        jobs_state_path(ctx),
-        serde_json::to_string_pretty(st).unwrap_or_default(),
-    );
+    let db = ctx.db.lock().unwrap();
+    crate::store::put_json(&db, "plugin_jobs", st);
 }
 
 /// 解析 "every Ns/m/h" 与 "daily HH:MM"。

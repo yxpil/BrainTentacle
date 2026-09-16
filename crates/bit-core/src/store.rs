@@ -282,6 +282,10 @@ pub fn import_legacy(conn: &Connection, data_dir: &Path, device_key: Option<&str
         };
         if get(conn, name).is_none() {
             put(conn, name, raw.as_bytes());
+        } else {
+            // 库里已有该文档：合并而非覆盖。旧版本运行期只写文件不写库，
+            // 文件里可能带有库里没有的较新数据（如运行期新增的记忆/审计），直接丢弃会丢数据
+            merge_doc(conn, name, &raw);
         }
         rename_migrated(&file);
     }
@@ -316,6 +320,42 @@ pub fn import_legacy(conn: &Connection, data_dir: &Path, device_key: Option<&str
         }
         rename_migrated(&cf);
     }
+}
+
+/// 库与遗留文件同有该文档时的合并（升级时一次性执行）：
+/// - 数组：按 "id" 字段并集（文件侧多出的条目追加；库侧已有的以库为准）
+/// - 对象：按键并集（文件侧新键补入，已有键以库为准——tool_stats / plugin_jobs 等映射）
+/// - 结构不一致或解析失败：保持库侧不变（宁缺勿损）
+fn merge_doc(conn: &Connection, name: &str, raw: &str) {
+    let Ok(fv) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return;
+    };
+    let Some(dbv) = get_json::<serde_json::Value>(conn, name) else {
+        return;
+    };
+    let merged = match (dbv, fv) {
+        (serde_json::Value::Array(mut db), serde_json::Value::Array(f)) => {
+            let ids: std::collections::HashSet<String> = db
+                .iter()
+                .filter_map(|x| x.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()))
+                .collect();
+            for item in f {
+                match item.get("id").and_then(|i| i.as_str()) {
+                    Some(k) if ids.contains(k) => {}
+                    _ => db.push(item),
+                }
+            }
+            serde_json::Value::Array(db)
+        }
+        (serde_json::Value::Object(mut db), serde_json::Value::Object(f)) => {
+            for (k, v) in f {
+                db.entry(k).or_insert(v);
+            }
+            serde_json::Value::Object(db)
+        }
+        _ => return,
+    };
+    put_json(conn, name, &merged);
 }
 
 fn import_sessions_json(conn: &Connection, v: &serde_json::Value) {
@@ -448,6 +488,41 @@ mod tests {
         // 二次启动：行已存在，不重复导入、不报错
         import_legacy(&conn, &dir, Some("dk"));
         assert_eq!(load_sessions(&conn).0.len(), 1);
+    }
+
+    #[test]
+    fn legacy_import_merges_when_doc_exists() {
+        // 升级场景：库里已有文档（新版启动写入过），遗留文件里还有旧版运行期
+        // 只写文件产生的较新条目——合并导入而不是丢弃
+        let dir = tmp_dir("merge");
+        let conn = open(&dir);
+        // 库侧：goals 有 1，memories 是映射
+        put_json(&conn, "goals", &serde_json::json!([{"id":"1","title":"db-side"}]));
+        put_json(&conn, "tool_stats", &serde_json::json!({"tool_a":{"ok":3}}));
+        // 文件侧：goals 多出 id=2（追加），id=1 冲突以库为准；tool_stats 多出 tool_b
+        std::fs::write(
+            dir.join("goals.json"),
+            r#"[{"id":"1","title":"file-side-stale"},{"id":"2","title":"file-only"}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("tool_stats.json"),
+            r#"{"tool_a":{"ok":99},"tool_b":{"ok":1}}"#,
+        )
+        .unwrap();
+        import_legacy(&conn, &dir, None);
+        let goals = get_json::<serde_json::Value>(&conn, "goals").unwrap();
+        let arr = goals.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["title"], "db-side"); // 冲突以库为准
+        assert_eq!(arr[1]["title"], "file-only"); // 文件侧新条目保留
+        let stats = get_json::<serde_json::Value>(&conn, "tool_stats").unwrap();
+        assert_eq!(stats["tool_a"]["ok"], 3); // 已有键以库为准
+        assert!(stats.get("tool_b").is_some()); // 新键补入
+        // 文件已留档，二次启动不再有可合并内容
+        assert!(!dir.join("goals.json").exists());
+        import_legacy(&conn, &dir, None);
+        assert_eq!(get_json::<serde_json::Value>(&conn, "goals").unwrap().as_array().unwrap().len(), 2);
     }
 
     /// e2e：模拟应用生命周期——遗留数据导入 → 读写 → 崩溃模拟（连接强杀）→ 重启恢复

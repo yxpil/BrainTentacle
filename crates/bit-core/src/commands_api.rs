@@ -1797,9 +1797,9 @@ pub fn get_diagnostics(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
         )
     };
     // 数据存储清单（SQLite 迁移后如实报告）：
-    //   - bit.db：配置/会话/工具/记忆/技能等真实数据所在（SQLite + 双重加密）
-    //   - 仍在使用的边车文件：审计日志 / 守护握手 / 守护与崩溃日志
-    //   - legacy JSON（config.json / sessions.json 等）已完成一次性导入并改名
+    //   - bit.db：配置/会话/工具/记忆/技能/审计等真实数据所在（SQLite + 双重加密）
+    //   - 仍在使用的边车文件：守护握手 / 守护与崩溃日志
+    //   - legacy JSON（config.json / audit.json / sessions.json 等）已完成一次性导入并改名
     //     .migrated，不再列出——列出来只会是常驻的"缺失"误报
     let file = |name: &str, optional: bool| -> serde_json::Value {
         let p = ctx.data_dir.join(name);
@@ -1810,7 +1810,7 @@ pub fn get_diagnostics(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
             "optional": optional,
         })
     };
-    let required: &[&str] = &["bit.db", "audit.json", "guardian.json"];
+    let required: &[&str] = &["bit.db", "guardian.json"];
     let optional: &[&str] = &["guardian.log", "crash.log"];
     let mut files: Vec<serde_json::Value> = required.iter().map(|n| file(n, false)).collect();
     files.extend(optional.iter().map(|n| file(n, true)));

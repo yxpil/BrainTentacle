@@ -66,18 +66,16 @@ pub fn add_skill(ctx: &Arc<crate::state::Ctx>, name: &str, summary: &str, source
     s
 }
 
-fn persist(ctx: &Arc<crate::state::Ctx>) {
-    let mem = ctx.memories.lock().unwrap();
-    let _ = std::fs::write(
-        ctx.data_dir.join("memories.json"),
-        serde_json::to_string(&*mem).unwrap_or_default(),
-    );
-    drop(mem);
-    let skills = ctx.skills.lock().unwrap();
-    let _ = std::fs::write(
-        ctx.data_dir.join("skills.json"),
-        serde_json::to_string(&*skills).unwrap_or_default(),
-    );
+/// 落库 bit.db documents "memories"/"skills"。
+/// 历史教训：曾写 memories.json/skills.json 文件，而启动加载源是 bit.db——
+/// 运行期沉淀的记忆/技能重启即丢。统一以 bit.db 为唯一持久层。
+/// 锁顺序约定：先内存锁（逐个取克隆后立即释放），后 db 锁——避免交叉死锁。
+pub fn persist(ctx: &Arc<crate::state::Ctx>) {
+    let mem = ctx.memories.lock().unwrap().clone();
+    let skills = ctx.skills.lock().unwrap().clone();
+    let db = ctx.db.lock().unwrap();
+    crate::store::put_json(&db, "memories", &mem);
+    crate::store::put_json(&db, "skills", &skills);
 }
 
 /// 延迟合并落盘：AI 一轮连存 N 条记忆/技能时（如批量提炼 14 条），
