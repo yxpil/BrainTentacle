@@ -73,11 +73,19 @@ const trayState = {
   subagents: new Map(), // session_id -> { title, since }  子代理
   goals: [],            // [{ text, pending }]  活跃计划（10s 轮询 list_goals）
   theme: null,          // 'dark' | 'light'  主界面主题联动（渲染层推送，未推送前跟随系统）
+  look: null,           // { light, dark }  主界面真实背景色（外观定制可改，面板复用以保持同色）
 };
-// 主界面主题 → 任务面板联动：preload 监听 html.dark class 变化后 send 此通道
-ipcMain.on('bit:theme-changed', (_e, dark) => {
+// 主界面主题 → 任务面板联动：preload 监听 html.dark class + 提取真实背景色 → 透传给面板
+// 解决"一个黑一个白"：面板不再硬编码色板，直接复用主界面的 --look-bg-color-light/dark
+ipcMain.on('bit:theme-changed', (_e, payload) => {
+  // 兼容旧版 boolean 与新版 { dark, look }
+  const dark = typeof payload === 'boolean' ? payload : payload?.dark;
+  const look = typeof payload === 'boolean' ? null : payload?.look;
   const t = dark ? 'dark' : 'light';
-  if (trayState.theme !== t) { trayState.theme = t; traySchedulePush(); }
+  const changed = trayState.theme !== t || JSON.stringify(trayState.look) !== JSON.stringify(look);
+  trayState.theme = t;
+  if (look) trayState.look = look;
+  if (changed) traySchedulePush();
 });
 // 任务面板控制：显示主界面 / 关闭按钮（隐藏）与退出（真正退出链）
 ipcMain.on('tray:show', () => {
@@ -102,6 +110,7 @@ function traySchedulePush() {
       subs: [...trayState.subagents.entries()].map(([id, v]) => ({ id, label: v.title || '子代理', since: v.since })),
       goals: trayState.goals,
       theme: trayState.theme || (nativeTheme?.shouldUseDarkColors ? 'dark' : 'light'),
+      look: trayState.look || { light: '#ffffff', dark: '#18181b' },
       ts: now,
     };
     if (statusWin && !statusWin.isDestroyed()) {
@@ -176,8 +185,11 @@ function createTray() {
 // ── 任务面板网页（右键托盘弹出，风格与主界面一致） ──
 function showStatusWindow(fromTray) {
   if (statusWin && !statusWin.isDestroyed()) {
-    if (fromTray) statusWin.hide(); // 再次右键 = 收起（toggle）
-    else { statusWin.show(); statusWin.focus(); }
+    // 右键 = 可靠弹出（已显示则保持前置）。不做 toggle——"收起"与"弹出"共用 isVisible
+    // 会和失焦自动收起产生焦点竞态（面板刚被失焦收起时右键被误判为"再收一次"→ 弹不出）
+    statusWin.show();
+    statusWin.focus();
+    traySchedulePush();
     return;
   }
   const { screen } = require('electron');

@@ -7,7 +7,8 @@
 <style>
   :root {
     --win-radius: 16px;
-    --bg: #f5f5f5;
+    /* --bg 由 render() 按快照注入主界面真实背景色（--look-bg-*），默认值与主界面 styles.css 一致 */
+    --bg: #ffffff;
     --card: #ffffff;
     --border: #e5e5e5;
     --text: #171717;
@@ -18,7 +19,7 @@
     --warn: #ea580c;
   }
   body.dark {
-    --bg: #0a0a0a;
+    --bg: #18181b;
     --card: #171717;
     --border: #262626;
     --text: #fafafa;
@@ -191,6 +192,12 @@
 
   function render() {
     if (snap.theme) document.body.classList.toggle('dark', snap.theme === 'dark');
+    // 背景色用主界面真实渲染色（外观定制跟随）——杜绝"面板一个色、主界面另一个色"
+    if (snap.look) {
+      const bg = snap.theme === 'dark' ? (snap.look.dark || '#18181b') : (snap.look.light || '#ffffff');
+      document.body.style.setProperty('--bg', bg);
+      document.getElementById('root').style.setProperty('--bg', bg);
+    }
     const total = snap.chats.length + snap.jobs.length + snap.subs.length;
     const ovSig = total + '|' + snap.chats.length + '|' + snap.jobs.length + '|' + snap.subs.length + '|' + snap.theme;
     if (lastSigs._ov !== ovSig) {

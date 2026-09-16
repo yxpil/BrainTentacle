@@ -172,9 +172,20 @@ document.addEventListener('dblclick', (e) => {
   window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize', {});
 });
 
-// 主题联动：html.dark class 变化 → 通知主进程（托盘任务面板跟随主界面主题）
+// 主题联动：html.dark class 变化 → 通知主进程（托盘任务面板跟随主界面主题与真实背景色）
 try {
-  const notifyTheme = () => ipcRenderer.send('bit:theme-changed', document.documentElement.classList.contains('dark'));
+  const notifyTheme = () => {
+    // 提取主界面实际渲染色（--look-* 由外观定制写入，未定制时回退与 styles.css 相同的默认值），
+    // 面板直接用同色，避免硬编码色板与主界面"一个黑一个白"
+    let look = null;
+    try {
+      const cs = getComputedStyle(document.documentElement);
+      const light = cs.getPropertyValue('--look-bg-color-light').trim() || '#ffffff';
+      const dark = cs.getPropertyValue('--look-bg-color-dark').trim() || '#18181b';
+      look = { light, dark };
+    } catch { look = null; }
+    ipcRenderer.send('bit:theme-changed', { dark: document.documentElement.classList.contains('dark'), look });
+  };
   notifyTheme();
   new MutationObserver(notifyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 } catch { /* 主题联动失败不影响主流程 */ }
