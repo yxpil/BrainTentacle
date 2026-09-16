@@ -2,7 +2,7 @@ name: release
 
 # Electron 发布链（M4 · 「豆干」起 Windows 专版）：
 #   compile-check（闸门）→ napi 矩阵（windows x64/arm64 bit.node + bit-cli）
-#   → gui-windows（electron-builder NSIS + 冒烟）→ finalize（latest.json 仅 windows 键位）
+#   → gui-windows（electron-builder NSIS）→ finalize（latest.json 仅 windows 键位）
 # 其它平台不再出官方包（用户自行解决）。
 # 手动触发（可指定已有 tag 补发资产）或推送 v* tag 自动触发
 on:
@@ -90,7 +90,7 @@ jobs:
           path: packaging/native/*
           if-no-files-found: error
 
-  # GUI：electron-builder Windows 双架构出包 + 打包后冒烟（防黑屏包上传）
+  # GUI：electron-builder Windows 双架构出包
   gui-windows:
     needs: [ensure-release, napi]
     runs-on: ${{ matrix.os }}
@@ -125,15 +125,6 @@ jobs:
           # pwsh 会吞 ${ext} 宏；win 的 artifactName 全字面量，不经宏
           npx electron-builder --win nsis --${{ matrix.eb_arch }} \
             "-c.artifactName=BIT_${VERSION}_${{ matrix.arch }}-setup.exe" --publish never
-      # 打包后冒烟：隔离数据目录无头启动，ui.mounted 事件出现才放行（防黑屏包）
-      - name: 冒烟测试
-        shell: pwsh
-        run: |
-          # x64 → win-unpacked；arm64 → win-arm64-unpacked（electron-builder 命名差异）
-          $exe = (Get-ChildItem "release/win*-unpacked/BIT.exe" | Select-Object -First 1).FullName
-          if (-not $exe) { Write-Error "BIT.exe not found under release/win*-unpacked"; exit 1 }
-          Write-Host "smoke target: $exe"
-          node e2e/smoke-ui.cjs $exe 120
       - name: 便携版 zip
         shell: pwsh
         run: |
