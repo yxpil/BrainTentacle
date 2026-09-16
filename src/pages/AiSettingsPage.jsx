@@ -979,7 +979,7 @@ export default function AiSettingsPage({ onStats, stats }) {
             setShowForm(false);
           }}
         >
-      <form onClick={(e) => e.stopPropagation()} onSubmit={submit} className="card flex max-h-[85vh] w-full max-w-lg flex-col gap-4 overflow-y-auto shadow-xl">
+      <form onClick={(e) => e.stopPropagation()} onSubmit={submit} className="card flex max-h-[85vh] w-full max-w-lg flex-col gap-4 overflow-y-auto shadow-[inset_0_2px_14px_rgba(0,0,0,0.08)] dark:shadow-[inset_0_2px_14px_rgba(0,0,0,0.45)]">
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium">{editing ? t("ai.editProvider") : t("ai.addProvider")}</p>
           <button

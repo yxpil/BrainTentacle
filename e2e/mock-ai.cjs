@@ -838,6 +838,35 @@ const server = http.createServer((req, res) => {
 
     // 控制台面板场景：跑 >2s 长命令（超过 FRONT_WINDOW_MS 自动转后台）→
     // 验证 shell-job started/done 事件、list_running_shells、get_shell_detail 实时日志
+    // 任务面板场景：12s 长后台命令（面板打开后查询窗口内 job 仍在跑）
+    // 注意：必须放在 E2E-CMD-BG 之前——includes("E2E-CMD-BG") 会截胡带 -LONG 后缀的消息
+    if (last.includes("E2E-CMD-BG-LONG"))
+      return respond(
+        res,
+        '跑一个更长的命令：\n[{"tool":"shell","params":{"command":"sleep 12 && echo bg-long-ok"}}]',
+        sse
+      );
+
+    // 任务面板场景：慢流式正文（50 chunk × 150ms ≈ 7.5s），保证会话回合在查询窗口内仍运行中
+    if (last.includes("E2E-STREAM-SLOW")) {
+      if (sse) {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        const usage = usageFor(messages);
+        let i = 0;
+        const timer = setInterval(() => {
+          res.write(`data: ${JSON.stringify({ id: "mock", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: `E2E-SLOW-${i} ` } }] })}\n\n`);
+          if (++i >= 50) {
+            clearInterval(timer);
+            res.write(`data: ${JSON.stringify({ id: "mock", object: "chat.completion.chunk", choices: [{ index: 0, delta: {} }], usage })}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+          }
+        }, 150);
+        return;
+      }
+      return respond(res, "E2E-STREAM-SLOW 需要流式请求", sse);
+    }
+
     if (last.includes("E2E-CMD-BG"))
       return respond(
         res,

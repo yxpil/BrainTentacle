@@ -2240,7 +2240,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
             onClick={() => setPreviewFile(null)}
           >
             <div
-              className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-neutral-900"
+              className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-[inset_0_2px_14px_rgba(0,0,0,0.08)] dark:bg-neutral-900 dark:shadow-[inset_0_2px_14px_rgba(0,0,0,0.45)]"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center gap-3 border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">

@@ -6,7 +6,7 @@
 //!   3) invoke 路由：B 类宿主命令（对话框/自启/热键/提权/换装重启）JS 拦截，
 //!      其余透传 Rust dispatch（白名单查表）
 //!   4) bit-asset 协议替代 Tauri assetProtocol（convertFileSrc 的文件图片访问）
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -64,6 +64,95 @@ const ICON = isDev
 let bit = null; // bit.node 导出：hostStart / invoke / onUiEvent
 let win = null;
 let tray = null;
+let statusWin = null; // 任务面板窗口（托盘打开的网页）
+
+// ── 托盘任务状态（从 core 事件流推导，纯内存；推送给任务面板网页） ──
+const trayState = {
+  chats: new Map(),     // evtName -> { since }  运行中的会话回合（chat-stream-* 动态事件名）
+  bgJobs: new Map(),    // job_id -> { command, session_id, since }  后台 shell 任务
+  subagents: new Map(), // session_id -> { title, since }  子代理
+  goals: [],            // [{ text, pending }]  活跃计划（10s 轮询 list_goals）
+  theme: null,          // 'dark' | 'light'  主界面主题联动（渲染层推送，未推送前跟随系统）
+};
+// 主界面主题 → 任务面板联动：preload 监听 html.dark class 变化后 send 此通道
+ipcMain.on('bit:theme-changed', (_e, dark) => {
+  const t = dark ? 'dark' : 'light';
+  if (trayState.theme !== t) { trayState.theme = t; traySchedulePush(); }
+});
+// 任务面板控制：关闭按钮（隐藏）与退出（真正退出链）
+ipcMain.on('tray:hide', () => { try { statusWin?.hide(); } catch {} });
+ipcMain.on('tray:quit', () => {
+  try { statusWin?.destroy(); } catch {}
+  statusWin = null;
+  bit?.invoke('quit_app').catch(() => app.quit());
+});
+let trayPushTimer = null;
+function traySchedulePush() {
+  if (trayPushTimer) return;
+  trayPushTimer = setTimeout(() => {
+    trayPushTimer = null;
+    const now = Date.now();
+    const snap = {
+      chats: [...trayState.chats.entries()].map(([k, v]) => ({ label: k === 'chat-stream' ? '会话回合' : `会话 ${k.replace(/^chat-stream-/, '')}`, since: v.since })),
+      jobs: [...trayState.bgJobs.entries()].map(([id, v]) => ({ id, label: v.command, since: v.since })),
+      subs: [...trayState.subagents.entries()].map(([id, v]) => ({ id, label: v.title || '子代理', since: v.since })),
+      goals: trayState.goals,
+      theme: trayState.theme || (nativeTheme?.shouldUseDarkColors ? 'dark' : 'light'),
+      ts: now,
+    };
+    if (statusWin && !statusWin.isDestroyed()) {
+      try { statusWin.webContents.send('tray:status', snap); } catch {}
+    }
+  }, 200); // 合并密集 delta 期间的重复推送
+}
+function trayTrackEvent(e) {
+  const evt = e?.event || '';
+  const p = e?.payload || {};
+  let dirty = false;
+  if (evt === 'chat-stream' || evt.startsWith('chat-stream-')) {
+    if (p.type === 'final' || p.type === 'error') {
+      if (trayState.chats.has(evt)) { trayState.chats.delete(evt); dirty = true; }
+    } else if (p.type && !trayState.chats.has(evt)) {
+      trayState.chats.set(evt, { since: Date.now() }); dirty = true;
+    }
+  } else if (evt === 'shell-job') {
+    if (p.phase === 'started' || p.phase === 'background') {
+      trayState.bgJobs.set(p.job_id, { command: p.command || '', session_id: p.session_id || '', since: Date.now() });
+      dirty = true;
+    } else if (p.phase && trayState.bgJobs.has(p.job_id)) {
+      trayState.bgJobs.delete(p.job_id); dirty = true;
+    }
+  } else if (evt === 'subagent-lifecycle') {
+    if (p.phase === 'spawn') {
+      trayState.subagents.set(p.session_id, { title: p.title || '', since: Date.now() }); dirty = true;
+    } else if ((p.phase === 'done' || p.phase === 'error') && trayState.subagents.has(p.session_id)) {
+      trayState.subagents.delete(p.session_id); dirty = true;
+    }
+  }
+  if (dirty) traySchedulePush();
+}
+// goals 轮询：主进程直接查 core（失败静默，不影响主流程）
+let goalsTimer = null;
+function startGoalsPolling() {
+  if (goalsTimer) return;
+  goalsTimer = setInterval(async () => {
+    try {
+      const r = await bit.invoke('list_goals');
+      const list = r?.goals || [];
+      const active = list.filter((g) => g.status === 'active' || g.status === 'in_progress');
+      const goals = active.map((g) => ({
+        text: g.goal || g.title || '(未命名目标)',
+        pending: (g.todos || []).filter((t2) => t2.status !== 'completed' && t2.status !== 'done').length,
+      }));
+      const sig = JSON.stringify(goals);
+      if (sig !== trayState._goalsSig) {
+        trayState._goalsSig = sig;
+        trayState.goals = goals;
+        traySchedulePush();
+      }
+    } catch { /* core 未就绪或命令不可用：静默跳过 */ }
+  }, 10000);
+}
 let quitting = false; // 真正退出（quit_app / app.quit）时置位：窗口关闭不再隐藏到托盘
 
 // ── 托盘常驻（M3）：点击/菜单唤起主界面，退出走真正退出链 ──
@@ -75,19 +164,61 @@ function createTray() {
     return;
   }
   tray.setToolTip('触手怪 Tentacle');
-  const menu = Menu.buildFromTemplate([
-    { label: '显示主界面', click: showWindow },
-    { type: 'separator' },
-    {
-      label: '退出',
-      click: () => {
-        // 与前端 quit_app 同链路：expect_exit 通知守护进程 + core 收尾
-        bit?.invoke('quit_app').catch(() => app.quit());
-      },
-    },
-  ]);
-  tray.setContextMenu(menu);
+  // 右键托盘 = 直接弹出任务面板网页（无原生菜单）；左键 = 主界面
+  tray.on('right-click', () => showStatusWindow(true));
   tray.on('click', showWindow); // Windows 单击托盘图标
+}
+
+// ── 任务面板网页（右键托盘弹出，风格与主界面一致） ──
+function showStatusWindow(fromTray) {
+  if (statusWin && !statusWin.isDestroyed()) {
+    if (fromTray) statusWin.hide(); // 再次右键 = 收起（toggle）
+    else { statusWin.show(); statusWin.focus(); }
+    return;
+  }
+  const { screen } = require('electron');
+  const W = 400, H = 560;
+  let x, y;
+  if (fromTray && tray) {
+    // 定位到托盘图标上方（Win11 弹层式）
+    const tb = tray.getBounds();
+    const wa = screen.getDisplayNearestPoint({ x: tb.x, y: tb.y }).workArea;
+    x = Math.round(Math.min(Math.max(tb.x + tb.width / 2 - W / 2, wa.x), wa.x + wa.width - W));
+    y = Math.round(tb.y - H - 8);
+    if (y < wa.y) y = wa.y;
+  }
+  statusWin = new BrowserWindow({
+    width: W,
+    height: H,
+    x, y,
+    minWidth: 320,
+    minHeight: 400,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    skipTaskbar: true,
+    show: false,
+    resizable: false,
+    backgroundColor: '#00000000',
+    icon: ICON,
+    webPreferences: {
+      contextIsolation: false, // 本地自研面板：直接用 ipcRenderer 收状态快照
+      nodeIntegration: true,
+      spellcheck: false,
+    },
+  });
+  statusWin.setMenuBarVisibility(false);
+  statusWin.loadFile(path.join(__dirname, 'tray-status.html'));
+  statusWin.on('closed', () => { statusWin = null; });
+  statusWin.on('blur', () => { // 失焦自动收起（弹层行为）
+    if (statusWin && !statusWin.webContents.isDevToolsOpened()) {
+      try { statusWin.hide(); } catch {}
+    }
+  });
+  statusWin.once('ready-to-show', () => {
+    if (fromTray) statusWin.show(); else statusWin.show();
+    traySchedulePush();
+  });
 }
 
 function showWindow() {
@@ -116,6 +247,7 @@ function routeCoreEvent(e) {
     try { win.webContents.send('bit:core-event', e); } catch {}
   }
   handleCoreEventHooks(e);
+  trayTrackEvent(e); // 托盘任务状态跟踪（纯内存，不阻塞）
 
   // E2E 收集：fire-and-forget，await 会把每个事件卡一次 TCP 往返，密集 delta 时
   // 会堆积出几百 ms 的延迟甚至乱序（fetch A 比 fetch B 晚完则 webContents.send 乱序）
@@ -144,6 +276,7 @@ function monitorInfo(d) {
 }
 
 function handleWindowOp(op, args) {
+  if (op === 'open-status') { showStatusWindow(); return null; } // 任务面板（托盘菜单同入口）
   if (!win) return null;
   const { screen } = require('electron');
   switch (op) {
@@ -498,6 +631,7 @@ app.whenReady().then(async () => {
 
   // 托盘常驻（M3）+ 启动时按配置注册全局热键（与 Tauri 版 setup 行为一致）
   createTray();
+  startGoalsPolling(); // 活跃计划状态（托盘任务面板用）
   try {
     const hk = await bit.invoke('get_hotkey', {});
     await ipcInvokeSetHotkey(String(hk?.hotkey || ''));
@@ -532,6 +666,10 @@ app.on('before-quit', () => {
     globalShortcut?.unregisterAll();
   } catch {}
   try {
+    if (goalsTimer) clearInterval(goalsTimer);
+    if (trayPushTimer) clearTimeout(trayPushTimer);
+    if (statusWin && !statusWin.isDestroyed()) statusWin.destroy();
+    statusWin = null;
     tray?.destroy();
     tray = null;
   } catch {}

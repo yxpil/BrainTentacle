@@ -172,6 +172,13 @@ document.addEventListener('dblclick', (e) => {
   window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize', {});
 });
 
+// 主题联动：html.dark class 变化 → 通知主进程（托盘任务面板跟随主界面主题）
+try {
+  const notifyTheme = () => ipcRenderer.send('bit:theme-changed', document.documentElement.classList.contains('dark'));
+  notifyTheme();
+  new MutationObserver(notifyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+} catch { /* 主题联动失败不影响主流程 */ }
+
 // 诊断口：控制台可查 shim 状态
 contextBridge; // 保持引用（避免 lint 误报未使用；实际导出走主世界直挂）
 console.info('[BIT] __TAURI_INTERNALS__ shim 就绪');
