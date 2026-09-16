@@ -48,8 +48,7 @@ function applyLook(look) {
     root.style.removeProperty("--look-bg-color-light");
     root.style.removeProperty("--look-bg-color-dark");
     root.style.removeProperty("--look-bg-opacity");
-    root.style.removeProperty("--look-bg-blur");
-    root.classList.remove("no-border", "no-shadow", "has-bg-image", "has-transparency", "has-bg-blur");
+    root.classList.remove("no-border", "no-shadow", "has-bg-image", "has-transparency");
     return;
   }
   // 背景色（light/dark 各自生效）
@@ -75,16 +74,6 @@ function applyLook(look) {
   // 圆角
   root.style.setProperty("--look-card-radius", (look.cardRadius ?? 24) + "px");
 
-  // 背景模糊遮罩（px）：0 = 关闭；>0 时磨砂质感
-  const bgBlur = look.bgBlur ?? 0;
-  if (bgBlur > 0) {
-    root.style.setProperty("--look-bg-blur", bgBlur + "px");
-    root.classList.add("has-bg-blur");
-  } else {
-    root.style.removeProperty("--look-bg-blur");
-    root.classList.remove("has-bg-blur");
-  }
-
   // 边框 & 阴影开关
   root.classList.toggle("no-border", !look.borderOn);
   root.classList.toggle("no-shadow", !look.shadowOn);
@@ -104,7 +93,6 @@ const DEFAULT_LOOK = {
   cardRadius: 24,
   winRadius: 16,
   fontScale: 1,
-  bgBlur: 0,
   shadowOn: true,
 };
 

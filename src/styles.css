@@ -291,13 +291,6 @@ html.has-bg-image #root::after {
 html.dark.has-bg-image #root::after {
   background: rgba(0, 0, 0, 0.45);
 }
-/* 背景模糊遮罩（主题页「背景模糊」滑块，0=关闭）：
-   backdrop-filter 只采样元素**后面**的内容、不含自身背景——
-   所以必须挂在盖住背景层(::before, z:-2)的独立遮罩层(::after, z:-1)上，
-   才能把背景色/背景图真正糊开 */
-html.has-bg-blur #root::after {
-  backdrop-filter: blur(var(--look-bg-blur, 24px));
-}
 
 /* Markdown 正文里的 SVG（模型直接输出的图表等）：约束不超容器宽，等比缩放 */
 .md svg {

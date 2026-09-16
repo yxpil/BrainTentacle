@@ -39,10 +39,10 @@ jobs:
           else
             echo "version=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
           fi
-      - name: brew / scoop / apt / pacman / dnf
+      - name: scoop（Windows 专版后仅同步 Windows 渠道；brew/apt/pacman/dnf 已弃）
         env:
           GITHUB_TOKEN: ${{ secrets.CHANNELS_TOKEN }}
-        run: python3 packaging/channels/sync_channels.py "${{ steps.v.outputs.version }}"
+        run: python3 packaging/channels/sync_channels.py "${{ steps.v.outputs.version }}" --only scoop
 
   npm:
     # 渠道同步失败（如个别仓库 404）不应连坐阻塞 npm/winget

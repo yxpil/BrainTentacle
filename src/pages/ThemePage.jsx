@@ -286,28 +286,6 @@ export default function ThemePage() {
 
           <div>
             <label className="mb-2 flex items-center justify-between text-sm">
-              <span>{t("theme.bgBlur", "背景模糊遮罩")}</span>
-              <span className="font-mono text-neutral-500 dark:text-neutral-400">
-                {look.bgBlur ? `${look.bgBlur}px` : t("theme.blurOff", "关闭")}
-              </span>
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="40"
-              step="2"
-              value={look.bgBlur ?? 0}
-              onChange={(e) => patch({ bgBlur: Number(e.target.value) })}
-              className="w-full accent-[var(--accent)]"
-            />
-            <div className="mt-1 flex justify-between text-[11px] text-neutral-400">
-              <span>{t("theme.blurOff", "关闭")}</span>
-              <span>{t("theme.blurStrong", "磨砂")}</span>
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-2 flex items-center justify-between text-sm">
               <span>{t("theme.fontScale", "字体大小")}</span>
               <span className="font-mono text-neutral-500 dark:text-neutral-400">
                 {Math.round((look.fontScale ?? 1) * 100)}%
