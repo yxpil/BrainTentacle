@@ -19,17 +19,15 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::path::Path;
 
-/// 普通文档（明文 JSON 入库）
+/// 普通文档（明文 JSON 入库）。
+/// goals/todos/audit 已行级化为独立表（见 open 的建表语句），不再走 documents
 pub const PLAIN_DOCS: &[&str] = &[
     "config",
     "tools",
     "runtimes",
     "tool_stats",
-    "audit",
     "memories",
     "skills",
-    "goals",
-    "todos",
     "plugin_jobs",
 ];
 
@@ -59,6 +57,37 @@ pub fn open(data_dir: &Path) -> Connection {
         CREATE TABLE IF NOT EXISTS meta(
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS goals(
+            id TEXT PRIMARY KEY,
+            ts TEXT NOT NULL DEFAULT '',
+            updated_ts TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            source TEXT NOT NULL DEFAULT '',
+            session_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_goals_session ON goals(session_id);
+        CREATE TABLE IF NOT EXISTS todos(
+            id TEXT PRIMARY KEY,
+            ts TEXT NOT NULL DEFAULT '',
+            goal_id TEXT,
+            content TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            source TEXT NOT NULL DEFAULT '',
+            session_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_todos_goal ON todos(goal_id);
+        CREATE INDEX IF NOT EXISTS idx_todos_session ON todos(session_id);
+        CREATE TABLE IF NOT EXISTS audit(
+            id TEXT PRIMARY KEY,
+            ts TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT NOT NULL,
+            detail TEXT NOT NULL,
+            ok INTEGER NOT NULL DEFAULT 1
         );",
     )
     .expect("[store] schema init failed");
@@ -290,6 +319,84 @@ pub fn import_legacy(conn: &Connection, data_dir: &Path, device_key: Option<&str
         rename_migrated(&file);
     }
 
+    // goals/todos/audit 已行级化：遗留 JSON 文件 + 旧版 documents blob 一并迁入独立表。
+    // INSERT OR IGNORE 天然实现并集语义：库侧已有 id 以库为准，新 id 插入
+    for (table, file_name) in [("goals", "goals.json"), ("todos", "todos.json"), ("audit", "audit.json")] {
+        let mut sources: Vec<serde_json::Value> = Vec::new();
+        // 旧版数据库形态：documents 里的整包 blob
+        if let Some(raw) = get(conn, table) {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw) {
+                if let Some(arr) = v.as_array() {
+                    sources.extend(arr.iter().cloned());
+                }
+            }
+            del(conn, table);
+        }
+        // 更早的文件形态
+        let file = data_dir.join(file_name);
+        if let Ok(raw) = std::fs::read_to_string(&file) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(arr) = v.as_array() {
+                    sources.extend(arr.iter().cloned());
+                }
+            }
+            rename_migrated(&file);
+        }
+        for item in sources {
+            let Some(id) = item.get("id").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            match table {
+                "goals" => {
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO goals(id,ts,updated_ts,title,detail,status,source,session_id)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                        rusqlite::params![
+                            id,
+                            item.get("ts").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("updated_ts").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("title").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("detail").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("status").and_then(|x| x.as_str()).unwrap_or("active"),
+                            item.get("source").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("session_id").and_then(|x| x.as_str()),
+                        ],
+                    );
+                }
+                "todos" => {
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO todos(id,ts,goal_id,content,status,source,session_id)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                        rusqlite::params![
+                            id,
+                            item.get("ts").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("goal_id").and_then(|x| x.as_str()),
+                            item.get("content").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("status").and_then(|x| x.as_str()).unwrap_or("pending"),
+                            item.get("source").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("session_id").and_then(|x| x.as_str()),
+                        ],
+                    );
+                }
+                _ => {
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO audit(id,ts,actor,action,target,detail,ok)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                        rusqlite::params![
+                            id,
+                            item.get("ts").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("actor").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("action").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("target").and_then(|x| x.as_str()).unwrap_or(""),
+                            item.get("detail").map(|x| x.to_string()).unwrap_or_default(),
+                            item.get("ok").and_then(|x| x.as_bool()).map(|b| b as i64).unwrap_or(1),
+                        ],
+                    );
+                }
+            }
+        }
+    }
+
     // sessions.json → 按会话逐行导入
     let sf = data_dir.join("sessions.json");
     if let Ok(raw) = std::fs::read_to_string(&sf) {
@@ -474,8 +581,8 @@ mod tests {
 
         let conn = open(&dir);
         import_legacy(&conn, &dir, Some("dk"));
-        // 明文导入
-        assert!(get_json::<serde_json::Value>(&conn, "goals").is_some());
+        // 明文导入（goals 已行级化：迁入独立表）
+        assert_eq!(count_rows(&conn, "goals"), 1);
         // 密文导入后可用原 key 读
         assert!(get_secret_json::<serde_json::Value>(&conn, "ai_config", Some("dk")).is_some());
         // 会话按行导入
@@ -492,12 +599,15 @@ mod tests {
 
     #[test]
     fn legacy_import_merges_when_doc_exists() {
-        // 升级场景：库里已有文档（新版启动写入过），遗留文件里还有旧版运行期
+        // 升级场景：表/库里已有数据，遗留文件里还有旧版运行期
         // 只写文件产生的较新条目——合并导入而不是丢弃
         let dir = tmp_dir("merge");
         let conn = open(&dir);
-        // 库侧：goals 有 1，memories 是映射
-        put_json(&conn, "goals", &serde_json::json!([{"id":"1","title":"db-side"}]));
+        // 库侧：goals 表已有 1，tool_stats 文档是映射
+        let _ = conn.execute(
+            "INSERT INTO goals(id,ts,updated_ts,title,detail,status,source,session_id) VALUES('1','','','db-side','','active','','')",
+            [],
+        );
         put_json(&conn, "tool_stats", &serde_json::json!({"tool_a":{"ok":3}}));
         // 文件侧：goals 多出 id=2（追加），id=1 冲突以库为准；tool_stats 多出 tool_b
         std::fs::write(
@@ -511,18 +621,25 @@ mod tests {
         )
         .unwrap();
         import_legacy(&conn, &dir, None);
-        let goals = get_json::<serde_json::Value>(&conn, "goals").unwrap();
-        let arr = goals.as_array().unwrap();
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0]["title"], "db-side"); // 冲突以库为准
-        assert_eq!(arr[1]["title"], "file-only"); // 文件侧新条目保留
+        assert_eq!(count_rows(&conn, "goals"), 2);
+        let titles: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT title FROM goals ORDER BY id").unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.flatten().collect()
+        };
+        assert_eq!(titles, vec!["db-side".to_string(), "file-only".to_string()]); // 冲突以库为准 + 文件侧新条目保留
         let stats = get_json::<serde_json::Value>(&conn, "tool_stats").unwrap();
         assert_eq!(stats["tool_a"]["ok"], 3); // 已有键以库为准
         assert!(stats.get("tool_b").is_some()); // 新键补入
         // 文件已留档，二次启动不再有可合并内容
         assert!(!dir.join("goals.json").exists());
         import_legacy(&conn, &dir, None);
-        assert_eq!(get_json::<serde_json::Value>(&conn, "goals").unwrap().as_array().unwrap().len(), 2);
+        assert_eq!(count_rows(&conn, "goals"), 2);
+    }
+
+    fn count_rows(conn: &Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap_or(0)
     }
 
     /// e2e：模拟应用生命周期——遗留数据导入 → 读写 → 崩溃模拟（连接强杀）→ 重启恢复
@@ -535,15 +652,19 @@ mod tests {
         let conn = open(&dir);
         import_legacy(&conn, &dir, Some("dk"));
         put_secret_json(&conn, "hidden_codes", "dk", &serde_json::json!([{"value":"sk-1"}]));
-        // 模拟崩溃：不做任何 flush 直接 drop（WAL 保证已提交事务不丢）
-        put_json(&conn, "todos", &vec!["t1"]);
+        // 模拟崩溃：不做任何 flush 直接 drop（WAL 保证已提交事务不丢）。
+        // todos 行级表写入
+        let _ = conn.execute(
+            "INSERT INTO todos(id,ts,goal_id,content,status,source,session_id) VALUES('t1','','','x','pending','','')",
+            [],
+        );
         drop(conn);
 
         // 第二代：重启（新连接），所有数据完好
         let conn = open(&dir);
         assert!(get_json::<serde_json::Value>(&conn, "tools").is_some());
-        assert!(get_json::<serde_json::Value>(&conn, "audit").is_some());
-        assert_eq!(get_json::<Vec<String>>(&conn, "todos"), Some(vec!["t1".into()]));
+        assert_eq!(count_rows(&conn, "audit"), 1); // audit 已行级化
+        assert_eq!(count_rows(&conn, "todos"), 1);
         assert!(get_secret_json::<serde_json::Value>(&conn, "hidden_codes", Some("dk")).is_some());
 
         // 第三代：会话多进程并发写（updated 新者胜 = 后写覆盖）

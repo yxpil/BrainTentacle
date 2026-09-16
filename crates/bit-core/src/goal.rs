@@ -37,34 +37,105 @@ fn now() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-/// 落库：bit.db documents "goals"/"todos"（name TEXT PRIMARY KEY）。
-/// 历史教训：曾写 goals.json/todos.json 文件，而启动加载源是 bit.db——
-/// 数据分裂导致运行期删除的目标重启后"复活"（面板删不掉）。统一以 bit.db 为唯一持久层。
+// ---------- 行级存储（bit.db goals/todos 独立表）----------
+// 历史教训：goals/todos 曾整包 JSON 存 documents 一行（后期又分裂成文件），
+// 行级化后删除/级联/按会话清理都是精确 SQL，配合 session_id/goal_id 索引。
+
+pub fn db_goals(conn: &rusqlite::Connection) -> Vec<Goal> {
+    let mut out = Vec::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT id,ts,updated_ts,title,detail,status,source,session_id FROM goals ORDER BY rowid") {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok(Goal {
+                id: r.get(0)?,
+                ts: r.get(1)?,
+                updated_ts: r.get(2)?,
+                title: r.get(3)?,
+                detail: r.get(4)?,
+                status: r.get(5)?,
+                source: r.get(6)?,
+                session_id: r.get(7)?,
+            })
+        }) {
+            for g in rows.flatten() {
+                out.push(g);
+            }
+        }
+    }
+    out
+}
+
+pub fn db_todos(conn: &rusqlite::Connection) -> Vec<Todo> {
+    let mut out = Vec::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT id,ts,goal_id,content,status,source,session_id FROM todos ORDER BY rowid") {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok(Todo {
+                id: r.get(0)?,
+                ts: r.get(1)?,
+                goal_id: r.get(2)?,
+                content: r.get(3)?,
+                status: r.get(4)?,
+                source: r.get(5)?,
+                session_id: r.get(6)?,
+            })
+        }) {
+            for t in rows.flatten() {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
+
+fn insert_goal(conn: &rusqlite::Connection, g: &Goal) {
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO goals(id,ts,updated_ts,title,detail,status,source,session_id)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        rusqlite::params![g.id, g.ts, g.updated_ts, g.title, g.detail, g.status, g.source, g.session_id],
+    );
+}
+
+fn insert_todo(conn: &rusqlite::Connection, t: &Todo) {
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO todos(id,ts,goal_id,content,status,source,session_id)
+         VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        rusqlite::params![t.id, t.ts, t.goal_id, t.content, t.status, t.source, t.session_id],
+    );
+}
+
+/// 全量同步：内存 goals/todos 为准覆盖表（迁移兜底路径；常规路径走单行 INSERT/UPDATE/DELETE）
+pub fn sync_rows(conn: &mut rusqlite::Connection, goals: &[Goal], todos: &[Todo]) {
+    let Ok(mut tx) = conn.transaction() else {
+        return; // 拿不到写锁（另一进程正写）：放弃本次同步，下次重试
+    };
+    let _ = tx.execute("DELETE FROM goals", []);
+    let _ = tx.execute("DELETE FROM todos", []);
+    for g in goals {
+        insert_goal(&tx, g);
+    }
+    for t in todos {
+        insert_todo(&tx, t);
+    }
+    let _ = tx.commit();
+}
+
+/// 落库：内存 goals/todos 全量同步到行级表（保留兼容入口，调用方持有其他锁时先释放）
 /// 锁顺序约定：先 goals/todos（短临界区取克隆），后 db——persist/refresh 双向都不持有重叠。
 pub fn persist(ctx: &Arc<crate::state::Ctx>) {
     let goals = ctx.goals.lock().unwrap().clone();
     let todos = ctx.todos.lock().unwrap().clone();
-    let db = ctx.db.lock().unwrap();
-    crate::store::put_json(&db, "goals", &goals);
-    crate::store::put_json(&db, "todos", &todos);
+    let mut db = ctx.db.lock().unwrap();
+    sync_rows(&mut db, &goals, &todos);
 }
 
-/// 从 bit.db 重载目标/待办：桌面端会话在 worker 子进程里跑时，plan 等工具写的是
+/// 从 bit.db 行级表重载目标/待办：桌面端会话在 worker 子进程里跑时，plan 等工具写的是
 /// worker 内存 + bit.db，host 的调试/远程接口读取前必须同步（整体替换，库侧即最新状态）。
 pub fn refresh_from_disk(ctx: &Arc<crate::state::Ctx>) {
     let (g, t) = {
         let db = ctx.db.lock().unwrap();
-        (
-            crate::store::get_json::<Vec<Goal>>(&db, "goals"),
-            crate::store::get_json::<Vec<Todo>>(&db, "todos"),
-        )
+        (db_goals(&db), db_todos(&db))
     }; // db 锁先释放，再取内存锁（避免 goals→db / db→goals 交叉死锁）
-    if let Some(g) = g {
-        *ctx.goals.lock().unwrap() = g;
-    }
-    if let Some(t) = t {
-        *ctx.todos.lock().unwrap() = t;
-    }
+    *ctx.goals.lock().unwrap() = g;
+    *ctx.todos.lock().unwrap() = t;
 }
 
 // ---------- Goal ----------
@@ -87,20 +158,23 @@ pub fn create_goal(
     if title.is_empty() {
         return Err("目标标题不能为空".into());
     }
-    let mut goals = ctx.goals.lock().unwrap();
-    let g = Goal {
-        id: next_short_id(goals.iter().map(|x| &x.id)),
-        ts: now(),
-        updated_ts: now(),
-        title: title.to_string(),
-        detail: detail.trim().to_string(),
-        status: "active".into(),
-        source: source.to_string(),
-        session_id: session.map(|s| s.to_string()),
+    let g = {
+        let mut goals = ctx.goals.lock().unwrap();
+        let g = Goal {
+            id: next_short_id(goals.iter().map(|x| &x.id)),
+            ts: now(),
+            updated_ts: now(),
+            title: title.to_string(),
+            detail: detail.trim().to_string(),
+            status: "active".into(),
+            source: source.to_string(),
+            session_id: session.map(|s| s.to_string()),
+        };
+        goals.push(g.clone());
+        g
     };
-    goals.push(g.clone());
-    drop(goals);
-    persist(ctx);
+    let db = ctx.db.lock().unwrap();
+    insert_goal(&db, &g);
     Ok(g)
 }
 
@@ -127,41 +201,50 @@ pub fn normalize_todo_status(s: &str) -> Option<&'static str> {
 pub fn update_goal_status(ctx: &Arc<crate::state::Ctx>, id: &str, status: &str) -> Result<Goal, String> {
     let status = normalize_goal_status(status)
         .ok_or("状态必须是 active / achieved / abandoned（也接受：进行中/已完成/放弃 等同义词）")?;
-    let mut goals = ctx.goals.lock().unwrap();
-    // 防抢跑：还有未完成待办时禁止把 active 目标标成 achieved（AI 曾因此跳过全部待办）。
-    // 宿主自动推进（全部完成后）不受影响——那时 pending 已为空。
-    if status == "achieved" {
-        let pending = {
-            let todos = ctx.todos.lock().unwrap();
-            todos
-                .iter()
-                .filter(|t| t.goal_id.as_deref() == Some(id) && t.status != "completed")
-                .count()
-        };
-        if pending > 0 {
-            return Err(format!(
-                "目标 {id} 下还有 {pending} 条未完成待办，不能标记 achieved；请先逐条完成并标记待办（或把目标改为 abandoned 放弃）"
-            ));
+    let out = {
+        let mut goals = ctx.goals.lock().unwrap();
+        // 防抢跑：还有未完成待办时禁止把 active 目标标成 achieved（AI 曾因此跳过全部待办）。
+        // 宿主自动推进（全部完成后）不受影响——那时 pending 已为空。
+        if status == "achieved" {
+            let pending = {
+                let todos = ctx.todos.lock().unwrap();
+                todos
+                    .iter()
+                    .filter(|t| t.goal_id.as_deref() == Some(id) && t.status != "completed")
+                    .count()
+            };
+            if pending > 0 {
+                return Err(format!(
+                    "目标 {id} 下还有 {pending} 条未完成待办，不能标记 achieved；请先逐条完成并标记待办（或把目标改为 abandoned 放弃）"
+                ));
+            }
         }
-    }
-    let g = goals.iter_mut().find(|g| g.id == id).ok_or("目标不存在")?;
-    g.status = status.to_string();
-    g.updated_ts = now();
-    let out = g.clone();
-    drop(goals);
-    persist(ctx);
+        let g = goals.iter_mut().find(|g| g.id == id).ok_or("目标不存在")?;
+        g.status = status.to_string();
+        g.updated_ts = now();
+        g.clone()
+    };
+    let db = ctx.db.lock().unwrap();
+    let _ = db.execute(
+        "UPDATE goals SET status = ?2, updated_ts = ?3 WHERE id = ?1",
+        rusqlite::params![id, out.status, out.updated_ts],
+    );
     Ok(out)
 }
 
 pub fn remove_goal(ctx: &Arc<crate::state::Ctx>, id: &str) -> Result<(), String> {
-    let mut goals = ctx.goals.lock().unwrap();
-    goals.retain(|g| g.id != id);
-    drop(goals);
-    // 级联删除关联待办
-    let mut todos = ctx.todos.lock().unwrap();
-    todos.retain(|t| t.goal_id.as_deref() != Some(id));
-    drop(todos);
-    persist(ctx);
+    {
+        let mut goals = ctx.goals.lock().unwrap();
+        goals.retain(|g| g.id != id);
+    }
+    // 级联删除关联待办（内存 + 表）
+    {
+        let mut todos = ctx.todos.lock().unwrap();
+        todos.retain(|t| t.goal_id.as_deref() != Some(id));
+    }
+    let db = ctx.db.lock().unwrap();
+    let _ = db.execute("DELETE FROM goals WHERE id = ?1", [id]);
+    let _ = db.execute("DELETE FROM todos WHERE goal_id = ?1", [id]);
     Ok(())
 }
 
@@ -184,39 +267,43 @@ pub fn add_todo(
             return Err("关联目标不存在".into());
         }
     }
-    let mut todos = ctx.todos.lock().unwrap();
-    let t = Todo {
-        id: next_short_id(todos.iter().map(|x| &x.id)),
-        ts: now(),
-        goal_id,
-        content: content.to_string(),
-        status: "pending".into(),
-        source: source.to_string(),
-        session_id: session.map(|s| s.to_string()),
+    let t = {
+        let mut todos = ctx.todos.lock().unwrap();
+        let t = Todo {
+            id: next_short_id(todos.iter().map(|x| &x.id)),
+            ts: now(),
+            goal_id,
+            content: content.to_string(),
+            status: "pending".into(),
+            source: source.to_string(),
+            session_id: session.map(|s| s.to_string()),
+        };
+        todos.push(t.clone());
+        t
     };
-    todos.push(t.clone());
-    drop(todos);
-    persist(ctx);
+    let db = ctx.db.lock().unwrap();
+    insert_todo(&db, &t);
     Ok(t)
 }
 
 pub fn update_todo_status(ctx: &Arc<crate::state::Ctx>, id: &str, status: &str) -> Result<Todo, String> {
     let status = normalize_todo_status(status)
         .ok_or("状态必须是 pending / in_progress / completed（也接受：todo/done/进行中/已完成 等同义词）")?;
-    let mut todos = ctx.todos.lock().unwrap();
-    let t = todos.iter_mut().find(|t| t.id == id).ok_or("待办不存在")?;
-    t.status = status.to_string();
-    let out = t.clone();
-    drop(todos);
-    persist(ctx);
+    let out = {
+        let mut todos = ctx.todos.lock().unwrap();
+        let t = todos.iter_mut().find(|t| t.id == id).ok_or("待办不存在")?;
+        t.status = status.to_string();
+        t.clone()
+    };
+    let db = ctx.db.lock().unwrap();
+    let _ = db.execute("UPDATE todos SET status = ?2 WHERE id = ?1", rusqlite::params![id, out.status]);
     Ok(out)
 }
 
 pub fn remove_todo(ctx: &Arc<crate::state::Ctx>, id: &str) -> Result<(), String> {
-    let mut todos = ctx.todos.lock().unwrap();
-    todos.retain(|t| t.id != id);
-    drop(todos);
-    persist(ctx);
+    ctx.todos.lock().unwrap().retain(|t| t.id != id);
+    let db = ctx.db.lock().unwrap();
+    let _ = db.execute("DELETE FROM todos WHERE id = ?1", [id]);
     Ok(())
 }
 
@@ -228,41 +315,55 @@ pub fn rewrite_todos(
     source: &str,
     session: Option<&str>,
 ) -> Result<usize, String> {
-    let mut todos = ctx.todos.lock().unwrap();
-    // 清空同范围内旧待办
-    match &goal_id {
-        Some(gid) => todos.retain(|t| t.goal_id.as_deref() != Some(gid.as_str())),
-        None => todos.retain(|t| t.goal_id.is_some()),
-    }
-    let mut count = 0;
-    for item in items {
-        // 同时支持 string 和 object：schema 允许 string[]，但 object[] 更丰富
-        let (content, status_str) = if let Some(s) = item.as_str() {
-            (s.trim().to_string(), "pending".to_string())
-        } else {
-            let c = item.get("content").and_then(|v| v.as_str()).unwrap_or_default().trim().to_string();
-            let s = item.get("status").and_then(|v| v.as_str()).unwrap_or("pending").to_string();
-            (c, s)
-        };
-        if content.is_empty() {
-            continue;
+    let mut fresh: Vec<Todo> = Vec::new();
+    {
+        let mut todos = ctx.todos.lock().unwrap();
+        // 清空同范围内旧待办
+        match &goal_id {
+            Some(gid) => todos.retain(|t| t.goal_id.as_deref() != Some(gid.as_str())),
+            None => todos.retain(|t| t.goal_id.is_some()),
         }
-        let status = normalize_todo_status(&status_str).unwrap_or("pending").to_string();
-        let new_id = next_short_id(todos.iter().map(|x| &x.id));
-        todos.push(Todo {
-            id: new_id,
-            ts: now(),
-            goal_id: goal_id.clone(),
-            content,
-            status,
-            source: source.to_string(),
-            session_id: session.map(|s| s.to_string()),
-        });
-        count += 1;
+        for item in items {
+            // 同时支持 string 和 object：schema 允许 string[]，但 object[] 更丰富
+            let (content, status_str) = if let Some(s) = item.as_str() {
+                (s.trim().to_string(), "pending".to_string())
+            } else {
+                let c = item.get("content").and_then(|v| v.as_str()).unwrap_or_default().trim().to_string();
+                let s = item.get("status").and_then(|v| v.as_str()).unwrap_or("pending").to_string();
+                (c, s)
+            };
+            if content.is_empty() {
+                continue;
+            }
+            let status = normalize_todo_status(&status_str).unwrap_or("pending").to_string();
+            let new_id = next_short_id(todos.iter().chain(fresh.iter()).map(|x| &x.id));
+            fresh.push(Todo {
+                id: new_id,
+                ts: now(),
+                goal_id: goal_id.clone(),
+                content,
+                status,
+                source: source.to_string(),
+                session_id: session.map(|s| s.to_string()),
+            });
+        }
+        todos.extend(fresh.iter().cloned());
     }
-    let n = todos.len();
-    drop(todos);
-    let _ = n;
-    persist(ctx);
-    Ok(count)
+    // 表侧：删范围 + 批量插入（单事务）
+    let mut db = ctx.db.lock().unwrap();
+    if let Ok(mut tx) = db.transaction() {
+        match &goal_id {
+            Some(gid) => {
+                let _ = tx.execute("DELETE FROM todos WHERE goal_id = ?1", [gid]);
+            }
+            None => {
+                let _ = tx.execute("DELETE FROM todos WHERE goal_id IS NULL", []);
+            }
+        }
+        for t in &fresh {
+            insert_todo(&tx, t);
+        }
+        let _ = tx.commit();
+    }
+    Ok(fresh.len())
 }

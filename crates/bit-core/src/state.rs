@@ -238,7 +238,7 @@ impl Ctx {
         fs::create_dir_all(&data_dir).ok();
 
         // 全量数据存储：先开 bit.db，再由 Config::load 处理引导锚点与配置迁移
-        let db = crate::store::open(&data_dir);
+        let mut db = crate::store::open(&data_dir);
         let config = crate::config::Config::load(&data_dir, &db);
         let device_key = config.device_key.clone();
         // 一次性导入遗留 JSON 文件（幂等；导入后原文件改名 .migrated 留档）
@@ -248,13 +248,13 @@ impl Ctx {
             .unwrap_or_default();
         let tools: Vec<ToolDef> =
             crate::store::get_json(&db, "tools").unwrap_or_default();
-        let audit: Vec<AuditEntry> =
-            crate::store::get_json(&db, "audit").unwrap_or_default();
+        let audit: Vec<AuditEntry> = crate::audit::db_entries(&db);
         let mut memories: Vec<Memory> =
             crate::store::get_json(&db, "memories").unwrap_or_default();
         let mut skills: Vec<Skill> = crate::store::get_json(&db, "skills").unwrap_or_default();
-        let mut goals: Vec<Goal> = crate::store::get_json(&db, "goals").unwrap_or_default();
-        let mut todos: Vec<Todo> = crate::store::get_json(&db, "todos").unwrap_or_default();
+        // goals/todos 已行级化：从独立表加载（import_legacy 已把旧 blob/文件迁入）
+        let mut goals: Vec<Goal> = crate::goal::db_goals(&db);
+        let mut todos: Vec<Todo> = crate::goal::db_todos(&db);
         // 一次性迁移：旧 32 位 hex uuid id → 短数字 id（幂等，已是数字则保持）；
         // todo.goal_id 引用同步重映射。提示词/面板可读性（对比 4dca90f7… → 3）
         {
@@ -283,8 +283,8 @@ impl Ctx {
             }
             crate::store::put_json(&db, "memories", &memories);
             crate::store::put_json(&db, "skills", &skills);
-            crate::store::put_json(&db, "goals", &goals);
-            crate::store::put_json(&db, "todos", &todos);
+            // goals/todos 重映射后全量同步回行级表
+            crate::goal::sync_rows(&mut db, &goals, &todos);
         }
         let sessions = SessionStore::load(&data_dir, &db);
         let mcp: Vec<crate::mcp::McpServer> =

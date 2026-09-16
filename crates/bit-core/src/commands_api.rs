@@ -1479,7 +1479,7 @@ pub fn delete_session(ctx: &Arc<Ctx>, session_id: String) -> Result<serde_json::
     Ok(json!({ "deleted": true, "active": active }))
 }
 
-/// 删除会话的级联清理：该会话派生的目标/待办一并从 bit.db 删除。
+/// 删除会话的级联清理：该会话派生的目标/待办一并删除（内存 + 行级表）。
 /// 目标被删后，挂在目标下的待办（即使创建于其他会话）也一并清理，避免孤儿数据。
 pub fn purge_plan_for_sessions(ctx: &Arc<Ctx>, ids: &std::collections::HashSet<String>) {
     {
@@ -1493,7 +1493,17 @@ pub fn purge_plan_for_sessions(ctx: &Arc<Ctx>, ids: &std::collections::HashSet<S
             !own && !orphan
         });
     }
-    crate::goal::persist(ctx);
+    // 表侧：行级 SQL 精确删除（goals.session_id / todos.goal_id 有索引）
+    let db = ctx.db.lock().unwrap();
+    for sid in ids {
+        let _ = db.execute("DELETE FROM todos WHERE session_id = ?1", [sid]);
+        let _ = db.execute("DELETE FROM goals WHERE session_id = ?1", [sid]);
+    }
+    // 孤儿待办：挂在已删除目标下（在目标删除后统一清一次）
+    let _ = db.execute(
+        "DELETE FROM todos WHERE goal_id IS NOT NULL AND goal_id NOT IN (SELECT id FROM goals)",
+        [],
+    );
 }
 
 /// 收藏 / 取消收藏会话（收藏的会话置顶，批量删除时受保护）
