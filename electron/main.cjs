@@ -101,15 +101,31 @@ function showWindow() {
 }
 
 // ── core 事件路由：TSFN {event, payload} → 广播给渲染层（preload 本地有监听表）──
+// BIT_E2E_COLLECTOR=127.0.0.1:9999 时同时 POST 到本地日志服务器（E2E 自动收集）
+const COLLECTOR = process.env.BIT_E2E_COLLECTOR || '';
 function routeCoreEvent(e) {
-  if (!win || win.isDestroyed()) return;
-  try {
-    win.webContents.send('bit:core-event', e);
-  } catch {
-    /* 窗口关闭竞态：忽略 */
+  const evt = e?.event || '?';
+  const pj = JSON.stringify(e?.payload || {}).slice(0, 400);
+  // 主进程直接打印原始 payload（绕过 preload 层 Object 序列化）
+  console.debug(`[BIT][core-event] → ${evt}`, pj);
+
+  // 关键：先立刻广播给渲染层——TSFN 回调必须在 Node 单线程上尽快返回，
+  // 阻塞在 I/O 会让后续排队的事件（密集 delta 流）全部延迟甚至丢帧。
+  // 托盘钩子也同步处理（纯内存操作不阻塞）。
+  if (win && !win.isDestroyed()) {
+    try { win.webContents.send('bit:core-event', e); } catch {}
   }
-  // 托盘/通知钩子在收到事件时顺带处理（M3）
   handleCoreEventHooks(e);
+
+  // E2E 收集：fire-and-forget，await 会把每个事件卡一次 TCP 往返，密集 delta 时
+  // 会堆积出几百 ms 的延迟甚至乱序（fetch A 比 fetch B 晚完则 webContents.send 乱序）
+  if (COLLECTOR) {
+    fetch(`http://${COLLECTOR}/event`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ts: Date.now(), event: evt, payload: e?.payload }),
+    }).catch(() => {});
+  }
 }
 
 // ── 渲染层窗口命令映射（plugin:window|* → BrowserWindow）──
@@ -335,24 +351,20 @@ function createWindow() {
     minHeight: 620,
     center: true,
     title: '触手怪',
-    frame: false, // 前端自绘标题栏（与 Tauri decorations:false 一致）
+    frame: false,
     transparent: true,
     hasShadow: true,
-    show: false, // 首帧渲染完成后由前端 invoke is_headless → win.show()
+    show: false,
     backgroundColor: '#00000000',
     icon: ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: false, // 与 Tauri 模型一致：前端与 shim 同世界（回调函数可直达）
+      contextIsolation: false,
       nodeIntegration: false,
       spellcheck: false,
     },
   });
-
   win.setMenuBarVisibility(false);
-  win.on('closed', () => {
-    win = null;
-  });
 
   // 冒烟模式（BIT_SMOKE=1）：渲染管线 console 转发 stdout，便于无窗诊断
   if (process.env.BIT_SMOKE === '1') {
@@ -421,6 +433,11 @@ app.whenReady().then(async () => {
     return;
   }
 
+  // UI 事件回流：TSFN → 渲染层广播 + 托盘/通知钩子
+  // ⚠ 必须在 hostStart 之前注册——hostStart 内部从 EMITTER OnceLock 取回调注入 Ctx，
+  // 顺序错则 Ctx 永远带着 NoopEmitter，所有 ctx.emit(...) 都静默丢弃
+  bit.onUiEvent(routeCoreEvent);
+
   // 宿主点火：数据目录默认 %APPDATA%/com.bit.hub（与 Tauri 版共享 bit.db）；
   // BIT_DATA_DIR 可隔离（E2E/冒烟不污染真实数据）。
   // app_args：guardian 复活时透传给 electron.exe（裸拉只会打开默认欢迎页）
@@ -432,9 +449,6 @@ app.whenReady().then(async () => {
     process.execPath,
     JSON.stringify([__filename]),
   );
-
-  // UI 事件回流：TSFN → 渲染层广播 + 托盘/通知钩子
-  bit.onUiEvent(routeCoreEvent);
 
   // 优雅退出：core quit_app → ElectronHostHooks::exit_app → 这里 app.quit()
   // （before-quit 里做 globalShortcut 清理；core 侧的硬退 exit(0) 仅兜底）

@@ -18,6 +18,10 @@ const nextId = (prefix) => `${prefix}${++seq}`;
 const eventListeners = new Map();
 
 function deliverEvent(event, payload) {
+  // 把 payload 序列化完整打印——CDP 里 Object 参数只显示占位符，必须 string 才看得见
+  let pj;
+  try { pj = JSON.stringify(payload); } catch { pj = String(payload); }
+  console.debug(`[BIT][event] ← ${event} | ${pj}`);
   const m = eventListeners.get(event);
   if (!m) return;
   for (const [eventId, handlerId] of m) {

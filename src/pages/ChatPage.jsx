@@ -956,6 +956,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
             }
             break;
           default:
+            console.warn("[BIT][chat] 未处理事件类型:", ev?.type || "(无 type)", ev);
             break;
         }
       }, item.imgData);

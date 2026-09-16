@@ -44,19 +44,40 @@
     @apply antialiased;
     font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   }
-  /* 覆盖 Tailwind v4 preflight 的默认背景色（它会给 body 加 opaque 底色）
-     同时 Tauri transparent 窗口需要整个 DOM 树全透明 */
-  html, body, #root {
+  /* 覆盖 Tailwind v4 preflight 的默认背景色 — 透明窗口需要最外层透明 */
+  html, body {
     background-color: transparent !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
-  /* 默认外观：窗口透明，由 #root::before 根据 CSS 变量决定底色
-     --look-bg-color-light/dark 默认 transparent，启用外观定制后才会覆盖 */
+  /* #root 必须铺满窗口 + border-radius + overflow:hidden ——
+     Windows transparent 窗口裁圆角的唯一条件：
+     overflow:hidden 裁掉圆角外的"溢出"，但溢出的是透明像素，
+     所以必须让某个**有实色背景**的子层也有 border-radius + overflow:hidden。
+     下面 #root::before 就是用户说的"垫一层" */
+  #root {
+    position: relative;
+    isolation: isolate;
+    width: 100dvw;
+    height: 100dvh;
+    background-color: transparent !important;
+    border-radius: var(--win-radius, 16px);
+    overflow: hidden;
+  }
+  /* 底层垫一层：实色背景 + 同半径圆角 + overflow:hidden
+     → Windows 透明窗口会裁掉圆角外的透明像素，让系统 compositor 只看到圆角内的实色 */
   #root::before {
-    background-color: var(--look-bg-color-light, transparent);
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-color: var(--look-bg-color-light, #ffffff);
+    border-radius: inherit;
+    overflow: hidden;
     color-scheme: light;
   }
   .dark #root::before {
-    background-color: var(--look-bg-color-dark, transparent);
+    background-color: var(--look-bg-color-dark, #18181b);
     color-scheme: dark;
   }
   /* 滚动条：悬浮小胶囊。thumb 用透明边框内缩（background-clip: padding-box），
@@ -166,14 +187,8 @@
   }
 
   /* ========== 外观引擎：圆角/边框/阴影变量 ========== */
-  /* 默认卡片圆角：24px；无外观配置时就是原始值 */
-  #root {
-    position: relative;
-    isolation: isolate;
-    /* 窗口外圆角：透明窗体 DWM 不给圆角，由根元素 CSS 圆角实现（--win-radius 由主题页控制） */
-    border-radius: var(--win-radius, 0px);
-    overflow: hidden;
-  }
+  /* #root 的 border-radius/overflow:hidden 已在上面"底层垫一层"段定义，
+     此处只留卡片等容器的外观变量 */
   /* 让 card / pill / 外层容器的圆角可被 --look-*-radius 覆盖 */
   .card {
     border-radius: var(--look-card-radius, 1.5rem);

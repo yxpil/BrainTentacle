@@ -970,26 +970,6 @@ export default function AiSettingsPage({ onStats, stats }) {
       </div>
       {hotkeyErr && <p className="-mt-2 text-xs text-red-500 dark:text-red-400">{hotkeyErr}</p>}
 
-      {/* 高权限模式：以管理员/root 身份重启（触发系统授权弹窗），提权后 AI 的 shell 等工具拥有管理员权限 */}
-      <div className="card flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">{t("ai.elevTitle")}</p>
-          <p className="mt-0.5 text-xs text-neutral-500">{t("ai.elevDesc")}</p>
-          {elevErr && <p className="mt-1 text-xs text-red-500 dark:text-red-400">{elevErr}</p>}
-          {elevation?.active && !elevErr && (
-            <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-400">{t("ai.elevActive")}</p>
-          )}
-          {!elevation?.active && elevation?.enabled && !elevErr && (
-            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{t("ai.elevInactive")}</p>
-          )}
-        </div>
-        <PillSwitch
-          checked={!!elevation?.active}
-          disabled={!elevation}
-          onChange={toggleElevation}
-        />
-      </div>
-
       {/* 新增 / 编辑表单：悬浮弹窗（点遮罩关闭），平时不占页面空间 */}
       {showForm && (
         <div

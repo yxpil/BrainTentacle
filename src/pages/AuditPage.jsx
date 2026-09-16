@@ -147,20 +147,33 @@ export default function AuditPage() {
                 <div>
                   <p className="mb-1 font-medium text-neutral-500">{t("diag.files")}</p>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
-                    {(diag.files || []).map((f) => (
-                      <div key={f.name} className="flex items-baseline justify-between gap-2">
-                        <span className="truncate font-mono">{f.name}</span>
-                        <span
-                          className={
-                            f.exists
-                              ? "shrink-0 text-neutral-400"
-                              : "shrink-0 text-amber-600 dark:text-amber-400"
-                          }
-                        >
-                          {f.exists ? fmtBytes(f.bytes) : t("diag.fileMissing")}
-                        </span>
-                      </div>
-                    ))}
+                    {(diag.files || []).map((f) => {
+                      const missing = !f.exists;
+                      const optional = !!f.optional;
+                      return (
+                        <div key={f.name} className="flex items-baseline justify-between gap-2">
+                          <span className="truncate font-mono">
+                            {f.name}
+                            {optional && <span className="ml-1 text-xs text-neutral-400">·可选</span>}
+                          </span>
+                          <span
+                            className={
+                              missing
+                                ? optional
+                                  ? "shrink-0 text-neutral-400"  // 可选文件缺失 = 正常
+                                  : "shrink-0 text-amber-600 dark:text-amber-400"
+                                : "shrink-0 text-neutral-400"
+                            }
+                          >
+                            {missing
+                              ? optional
+                                ? t("diag.fileOptional")
+                                : t("diag.fileMissing")
+                              : fmtBytes(f.bytes)}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 

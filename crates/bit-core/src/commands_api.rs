@@ -1775,18 +1775,19 @@ pub fn get_diagnostics(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
     //   - 仍在使用的边车文件：审计日志 / 守护握手 / 守护与崩溃日志
     //   - legacy JSON（config.json / sessions.json 等）已完成一次性导入并改名
     //     .migrated，不再列出——列出来只会是常驻的"缺失"误报
-    let file = |name: &str| {
+    let file = |name: &str, optional: bool| -> serde_json::Value {
         let p = ctx.data_dir.join(name);
         json!({
             "name": name,
             "exists": p.exists(),
             "bytes": std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0),
+            "optional": optional,
         })
     };
-    let files: Vec<serde_json::Value> = ["bit.db", "audit.json", "guardian.json", "guardian.log", "crash.log"]
-        .iter()
-        .map(|n| file(n))
-        .collect();
+    let required: &[&str] = &["bit.db", "audit.json", "guardian.json"];
+    let optional: &[&str] = &["guardian.log", "crash.log"];
+    let mut files: Vec<serde_json::Value> = required.iter().map(|n| file(n, false)).collect();
+    files.extend(optional.iter().map(|n| file(n, true)));
     // 低成功率工具：有失败记录的取前 5（快照已按失败次数降序）
     let stats = crate::state::toolstats::snapshot(ctx);
     let worst: Vec<serde_json::Value> = stats

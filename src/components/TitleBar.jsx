@@ -138,7 +138,7 @@ export default function TitleBar() {
     const poll = async () => {
       try {
         const b = await invoke("mem_usage");
-        if (!stop) setMemMB(Math.round(b / 1048576));
+        if (!stop) setMemMB(Math.round((b?.bytes ?? b ?? 0) / 1048576));
       } catch {
         /* 忽略：命令不可用时隐藏该项 */
       }
@@ -154,7 +154,7 @@ export default function TitleBar() {
   return (
     <div
       data-tauri-drag-region
-      className="flex h-7 shrink-0 select-none items-center gap-1 px-4"
+      className="flex h-9 shrink-0 select-none items-center gap-2 pl-4 pr-4 pt-1"
       style={isMac ? { paddingLeft: 76 } : undefined}
     >
       {/* 页眉仪表盘（可拖动） */}
