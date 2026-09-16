@@ -169,10 +169,22 @@
   };
   const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+  // 防闪烁：每秒定时器只做「签名比对 + 耗时定向刷新」，DOM 仅在数据真正变化时重建，
+  // 避免全量 innerHTML 重建让所有条目每秒重播入场动画
+  const lastSigs = {};
+  const refreshSecs = (listId) => {
+    document.getElementById(listId).querySelectorAll('[data-since]').forEach((el) => {
+      el.textContent = fmtSecs(Number(el.getAttribute('data-since')));
+    });
+  };
+
   function renderSection(listId, countId, dotId, items, emptyText, rowFn) {
     const list = $(listId), count = $(countId), dot = $(dotId);
     if (count) count.textContent = items.length ? items.length + ' 项' : '';
     if (dot) dot.className = 'dot' + (items.length ? ' run' : '');
+    const sig = JSON.stringify(items);
+    if (lastSigs[listId] === sig) { refreshSecs(listId); return; }
+    lastSigs[listId] = sig;
     if (!items.length) { list.innerHTML = '<div class="empty">' + esc(emptyText) + '</div>'; return; }
     list.innerHTML = items.map(rowFn).join('');
   }
@@ -180,18 +192,22 @@
   function render() {
     if (snap.theme) document.body.classList.toggle('dark', snap.theme === 'dark');
     const total = snap.chats.length + snap.jobs.length + snap.subs.length;
-    $('overall').innerHTML = total
-      ? '<span class="dot run"></span><span class="state">' + total + ' 项任务进行中</span><span class="detail">' +
-        [snap.chats.length ? snap.chats.length + ' 会话' : '', snap.jobs.length ? snap.jobs.length + ' 后台命令' : '', snap.subs.length ? snap.subs.length + ' 子代理' : ''].filter(Boolean).join(' · ') + '</span>'
-      : '<span class="dot ok"></span><span class="state">空闲</span><span class="detail">当前没有进行中的任务</span>';
+    const ovSig = total + '|' + snap.chats.length + '|' + snap.jobs.length + '|' + snap.subs.length + '|' + snap.theme;
+    if (lastSigs._ov !== ovSig) {
+      lastSigs._ov = ovSig;
+      $('overall').innerHTML = total
+        ? '<span class="dot run"></span><span class="state">' + total + ' 项任务进行中</span><span class="detail">' +
+          [snap.chats.length ? snap.chats.length + ' 会话' : '', snap.jobs.length ? snap.jobs.length + ' 后台命令' : '', snap.subs.length ? snap.subs.length + ' 子代理' : ''].filter(Boolean).join(' · ') + '</span>'
+        : '<span class="dot ok"></span><span class="state">空闲</span><span class="detail">当前没有进行中的任务</span>';
+    }
     $('ts').textContent = new Date(snap.ts || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
 
     renderSection('chats', 'c-chats', 'd-chats', snap.chats, '没有运行中的会话回合', (it) =>
-      '<div class="item"><span class="badge b-run">运行中</span><span class="label">' + esc(it.label) + '</span><span class="secs">' + fmtSecs(it.since) + '</span></div>');
+      '<div class="item"><span class="badge b-run">运行中</span><span class="label">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
     renderSection('jobs', 'c-jobs', 'd-jobs', snap.jobs, '没有后台命令', (it) =>
-      '<div class="item" title="' + esc(it.label) + '"><span class="badge b-run">后台</span><span class="label mono">' + esc(it.label) + '</span><span class="secs">' + fmtSecs(it.since) + '</span></div>');
+      '<div class="item" title="' + esc(it.label) + '"><span class="badge b-run">后台</span><span class="label mono">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
     renderSection('subs', 'c-subs', 'd-subs', snap.subs, '没有派生的子代理', (it) =>
-      '<div class="item"><span class="badge b-run">委派</span><span class="label">' + esc(it.label) + '</span><span class="secs">' + fmtSecs(it.since) + '</span></div>');
+      '<div class="item"><span class="badge b-run">委派</span><span class="label">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
     renderSection('goals', 'c-goals', 'd-goals', snap.goals, '没有活跃计划', (g) =>
       '<div class="item" title="' + esc(g.text) + '"><span class="badge ' + (g.pending ? 'b-pending' : 'b-run') + '">' + (g.pending ? '待办 ' + g.pending : '进行中') + '</span><span class="label">' + esc(g.text) + '</span></div>');
   }
