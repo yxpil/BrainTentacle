@@ -836,6 +836,23 @@ const server = http.createServer((req, res) => {
         sse
       );
 
+    // 控制台面板场景：跑 >2s 长命令（超过 FRONT_WINDOW_MS 自动转后台）→
+    // 验证 shell-job started/done 事件、list_running_shells、get_shell_detail 实时日志
+    if (last.includes("E2E-CMD-BG") && rounds === 0)
+      return respond(
+        res,
+        '跑一个长命令：\n[{"tool":"shell","params":{"command":"sleep 3 && echo bg-done-ok"}}]',
+        sse
+      );
+
+    // 控制台取消场景：跑 10s 长命令，测试侧在后台期间 cancel_shell → 应收到 killed
+    if (last.includes("E2E-CMD-CANCEL") && rounds === 0)
+      return respond(
+        res,
+        '跑一个长命令：\n[{"tool":"shell","params":{"command":"sleep 10 && echo never-done"}}]',
+        sse
+      );
+
     // 无 index 的流式 tool_calls（部分 OpenAI 兼容网关形态）：两个完整调用、不带 index 字段，
     // 验证 BIT 按 id 分槽聚合（修复前全部并入槽 0 → name/args 交错成垃圾）
     if (last.includes("E2E-NOINDEX")) {
