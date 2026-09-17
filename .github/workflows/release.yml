@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要构建并上传资产的 tag（如 v0.6.29）"
+        description: "要构建并上传资产的 tag（如 v0.6.30）"
         required: true
-        default: "v0.6.29"
+        default: "v0.6.30"
   push:
     tags:
       - "v*"
@@ -29,7 +29,7 @@ jobs:
     steps:
       - id: tag
         run: echo "tag=${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
-      - run: gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG >/dev/null 2>&1 || gh release create "$TAG" --title "触手怪 $TAG（酸辣鱿鱼片 · Electron · Windows）" --generate-notes --repo "$GITHUB_REPOSITORY"
+      - run: gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG >/dev/null 2>&1 || gh release create "$TAG" --title "触手怪 $TAG（爆香鱿鱼 · Electron · Windows）" --generate-notes --repo "$GITHUB_REPOSITORY"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
