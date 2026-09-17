@@ -437,12 +437,15 @@ pub async fn dispatch(
         "set_security_settings" => {
             bit_core::commands_api::set_security_settings(
                 ctx,
-                a_bool(&args, "hidden_code_enabled")?,
-                a_bool(&args, "l2pass_enabled")?,
-                a_str(&args, "l2pass_provider_id")?,
-                a_bool(&args, "l2pass_cover_auto")?,
+                opt_bool(&args, "hidden_code_enabled"),
+                opt_bool(&args, "l2pass_enabled"),
+                opt_str(&args, "l2pass_provider_id"),
+                opt_bool(&args, "l2pass_cover_auto"),
             )
         }
+
+        "get_language" => bit_core::commands_api::get_language(ctx),
+        "set_language" => bit_core::commands_api::set_language(ctx, a_str(&args, "language")?),
 
         // ---------- 更新 ----------
         "update_download" => bit_core::commands_api::update_download(ctx).await,

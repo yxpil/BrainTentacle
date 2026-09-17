@@ -1984,36 +1984,73 @@ pub fn get_security_settings(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String
     }))
 }
 
-/// 安全设置保存。L2 开启时必须已选审核 provider
+/// 安全设置保存。L2 开启时必须已选审核 provider。
+/// 宽松语义：未传的参数保持原值（历史教训：硬必填导致旧调用方/远程端少传一个字段直接报
+/// "缺少参数: l2pass_enabled"，设置页整页保存失败）
 pub fn set_security_settings(
     ctx: &Arc<Ctx>,
-    hidden_code_enabled: bool,
-    l2pass_enabled: bool,
-    l2pass_provider_id: String,
-    l2pass_cover_auto: bool,
+    hidden_code_enabled: Option<bool>,
+    l2pass_enabled: Option<bool>,
+    l2pass_provider_id: Option<String>,
+    l2pass_cover_auto: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    if l2pass_enabled {
+    let (hce, l2, pid, ca) = {
+        let cfg = ctx.config.lock().unwrap();
+        (
+            hidden_code_enabled.unwrap_or(cfg.hidden_code_enabled),
+            l2pass_enabled.unwrap_or(cfg.l2pass_enabled),
+            l2pass_provider_id.unwrap_or_else(|| cfg.l2pass_provider_id.clone()),
+            l2pass_cover_auto.unwrap_or(cfg.l2pass_cover_auto),
+        )
+    };
+    if l2 {
         let known = ctx
             .ai_config
             .lock()
             .unwrap()
             .providers
             .iter()
-            .any(|p| p.id == l2pass_provider_id);
-        if l2pass_provider_id.is_empty() || !known {
+            .any(|p| p.id == pid);
+        if pid.is_empty() || !known {
             return Err("请先选择一个已配置的审核 provider".into());
         }
     }
     {
         let mut cfg = ctx.config.lock().unwrap();
-        cfg.hidden_code_enabled = hidden_code_enabled;
-        cfg.l2pass_enabled = l2pass_enabled;
-        cfg.l2pass_provider_id = l2pass_provider_id;
-        cfg.l2pass_cover_auto = l2pass_cover_auto;
+        cfg.hidden_code_enabled = hce;
+        cfg.l2pass_enabled = l2;
+        cfg.l2pass_provider_id = pid;
+        cfg.l2pass_cover_auto = ca;
         cfg.revision += 1;
     }
     ctx.save_config();
     Ok(json!({ "ok": true }))
+}
+
+// ---------- 界面语言（数据库统一标记）----------
+
+/// 读界面语言：config.language（"zh"|"en"，空值视作 "zh"）。
+/// 前端 i18n 与 Electron 托盘/任务面板统一从这里取，避免 localStorage 只在渲染层可见
+pub fn get_language(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    let lang = ctx.config.lock().unwrap().language.clone();
+    Ok(json!({ "language": if lang.is_empty() { "zh" } else { lang.as_str() } }))
+}
+
+/// 写界面语言（前端 setLang 时调用）。仅接受 "zh"/"en"，其他值忽略
+pub fn set_language(ctx: &Arc<Ctx>, language: String) -> Result<serde_json::Value, String> {
+    if language != "zh" && language != "en" {
+        return Err("language 仅支持 zh / en".into());
+    }
+    {
+        let mut cfg = ctx.config.lock().unwrap();
+        if cfg.language == language {
+            return Ok(json!({ "ok": true, "language": language }));
+        }
+        cfg.language = language.clone();
+        cfg.revision += 1;
+    }
+    ctx.save_config();
+    Ok(json!({ "ok": true, "language": language }))
 }
 
 // ---------- 更新 ----------

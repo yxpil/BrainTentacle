@@ -1,4 +1,5 @@
-// 轻量 i18n：模块级 store + useSyncExternalStore，localStorage 持久化
+// 轻量 i18n：模块级 store + useSyncExternalStore，localStorage 即时缓存 + bit.db 统一标记
+// 语言标记入库（config.language）：Electron 托盘/任务面板同读一源，切换即生效。
 // 用法：const { t, lang, setLang } = useLang();  t("nav.chat")
 import { useSyncExternalStore } from "react";
 
@@ -7,14 +8,49 @@ const listeners = new Set();
 
 let current = localStorage.getItem(KEY) || "zh";
 
+// html[lang] 是语言联动的观察源（preload MutationObserver → 主进程 → 托盘面板）
+function applyDom() {
+  try { document.documentElement.lang = current; } catch {}
+}
+applyDom();
+
+function pushLang(lang) {
+  // 数据库统一标记：best-effort，core 未就绪时静默（启动同步会补）
+  try {
+    const inv = window.__TAURI_INTERNALS__?.invoke;
+    if (inv) inv("set_language", { language: lang }).catch?.(() => {});
+  } catch {}
+}
+
 export function setLang(lang) {
   current = lang === "en" ? "en" : "zh";
   localStorage.setItem(KEY, current);
+  applyDom();
+  pushLang(current);
   listeners.forEach((l) => l());
 }
 
 export function toggleLang() {
   setLang(current === "zh" ? "en" : "zh");
+}
+
+/** 启动同步：以数据库为准（其他宿主/托盘改语言时保持一致）。best-effort，失败保持本地值 */
+export function syncLangFromDb() {
+  try {
+    const inv = window.__TAURI_INTERNALS__?.invoke;
+    if (!inv) return;
+    Promise.resolve(inv("get_language", {}))
+      .then((r) => {
+        const db = r?.language === "en" ? "en" : "zh";
+        if (db !== current) {
+          current = db;
+          localStorage.setItem(KEY, current);
+          applyDom();
+          listeners.forEach((l) => l());
+        }
+      })
+      .catch(() => {});
+  } catch {}
 }
 
 function subscribe(cb) {

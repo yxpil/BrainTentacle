@@ -131,45 +131,87 @@
 <body>
 <div id="root">
   <div class="titlebar">
-    <span class="t">任务面板</span>
+    <span class="t" data-i18n="title">任务面板</span>
     <span class="sp"></span>
-    <button class="wbtn close" id="btn-close" title="关闭">
+    <button class="wbtn close" id="btn-close" title="关闭" data-i18n-title="close">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </div>
   <div class="scroll">
     <div class="head">
-      <h1>任务状态</h1>
+      <h1 data-i18n="status">任务状态</h1>
       <span class="ts" id="ts"></span>
     </div>
     <div class="overall" id="overall"></div>
     <div class="section">
-      <div class="section-title"><span class="dot" id="d-chats"></span>运行中会话<span class="count" id="c-chats"></span></div>
+      <div class="section-title"><span class="dot" id="d-chats"></span><span data-i18n="chats">运行中会话</span><span class="count" id="c-chats"></span></div>
       <div class="items" id="chats"></div>
     </div>
     <div class="section">
-      <div class="section-title"><span class="dot" id="d-jobs"></span>后台命令<span class="count" id="c-jobs"></span></div>
+      <div class="section-title"><span class="dot" id="d-jobs"></span><span data-i18n="jobs">后台命令</span><span class="count" id="c-jobs"></span></div>
       <div class="items" id="jobs"></div>
     </div>
     <div class="section">
-      <div class="section-title"><span class="dot" id="d-subs"></span>子代理<span class="count" id="c-subs"></span></div>
+      <div class="section-title"><span class="dot" id="d-subs"></span><span data-i18n="subs">子代理</span><span class="count" id="c-subs"></span></div>
       <div class="items" id="subs"></div>
     </div>
     <div class="section">
-      <div class="section-title"><span class="dot" id="d-goals"></span>活跃计划<span class="count" id="c-goals"></span></div>
+      <div class="section-title"><span class="dot" id="d-goals"></span><span data-i18n="goals">活跃计划</span><span class="count" id="c-goals"></span></div>
       <div class="items" id="goals"></div>
     </div>
   </div>
   <div class="foot">
-    <button class="quit" id="btn-show">显示主界面</button>
+    <button class="quit" id="btn-show" data-i18n="show">显示主界面</button>
     <span class="gap"></span>
-    <button class="quit danger" id="btn-quit">退出应用</button>
-    <span class="hint">左键托盘图标 = 主界面 · 失焦自动收起</span>
+    <button class="quit danger" id="btn-quit" data-i18n="quit">退出应用</button>
+    <span class="hint" data-i18n="hint">左键托盘图标 = 主界面 · 失焦自动收起</span>
   </div>
 </div>
 <script>
   const { ipcRenderer } = require('electron');
-  let snap = { chats: [], jobs: [], subs: [], goals: [], theme: null };
+  let snap = { chats: [], jobs: [], subs: [], goals: [], theme: null, lang: 'zh' };
+
+  // ── 双语：语言标记随快照（bit.db 统一源，主进程透传）——面板自身不落库 ──
+  const STR = {
+    title: { zh: '任务面板', en: 'Task Panel' },
+    status: { zh: '任务状态', en: 'Task Status' },
+    chats: { zh: '运行中会话', en: 'Running chats' },
+    jobs: { zh: '后台命令', en: 'Background commands' },
+    subs: { zh: '子代理', en: 'Sub-agents' },
+    goals: { zh: '活跃计划', en: 'Active plans' },
+    show: { zh: '显示主界面', en: 'Show main window' },
+    quit: { zh: '退出应用', en: 'Quit app' },
+    hint: { zh: '左键托盘图标 = 主界面 · 失焦自动收起', en: 'Click tray icon = main window · auto-hide on blur' },
+    close: { zh: '关闭', en: 'Close' },
+    running: { zh: '运行中', en: 'Running' },
+    bg: { zh: '后台', en: 'BG' },
+    delegated: { zh: '委派', en: 'Delegated' },
+    delGoal: { zh: '删除此计划', en: 'Delete this plan' },
+    todo: { zh: '待办', en: 'Todos' },
+    inProg: { zh: '进行中', en: 'In progress' },
+    emptyChats: { zh: '没有运行中的会话回合', en: 'No running chat turns' },
+    emptyJobs: { zh: '没有后台命令', en: 'No background commands' },
+    emptySubs: { zh: '没有派生的子代理', en: 'No sub-agents' },
+    emptyGoals: { zh: '没有活跃计划', en: 'No active plans' },
+    nRunning: { zh: ' 项任务进行中', en: ' task(s) running' },
+    chatN: { zh: ' 会话', en: ' chats' },
+    bgN: { zh: ' 后台命令', en: ' bg commands' },
+    subN: { zh: ' 子代理', en: ' sub-agents' },
+    idle: { zh: '空闲', en: 'Idle' },
+    noTask: { zh: '当前没有进行中的任务', en: 'Nothing running right now' },
+    nItems: { zh: ' 项', en: '' },
+  };
+  const L = (k) => STR[k]?.[(snap.lang === 'en') ? 'en' : 'zh'] ?? k;
+  // 语言切换时刷新静态 DOM（data-i18n / data-i18n-title）并清签名强制重建列表
+  let lastLang = '';
+  function applyLang() {
+    if (lastLang === snap.lang) return;
+    lastLang = snap.lang;
+    document.documentElement.lang = snap.lang === 'en' ? 'en' : 'zh-CN';
+    document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = L(el.getAttribute('data-i18n')); });
+    document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = L(el.getAttribute('data-i18n-title')); });
+    Object.keys(lastSigs).forEach((k) => delete lastSigs[k]); // 强制列表按新语言重建
+  }
 
   const $ = (id) => document.getElementById(id);
   const fmtSecs = (since) => {
@@ -190,7 +232,7 @@
 
   function renderSection(listId, countId, dotId, items, emptyText, rowFn) {
     const list = $(listId), count = $(countId), dot = $(dotId);
-    if (count) count.textContent = items.length ? items.length + ' 项' : '';
+    if (count) count.textContent = items.length ? items.length + L('nItems') : '';
     if (dot) dot.className = 'dot' + (items.length ? ' run' : '');
     const sig = JSON.stringify(items);
     if (lastSigs[listId] === sig) { refreshSecs(listId); return; }
@@ -200,6 +242,7 @@
   }
 
   function render() {
+    applyLang();
     if (snap.theme) document.body.classList.toggle('dark', snap.theme === 'dark');
     // 背景色用主界面真实渲染色（外观定制跟随）——杜绝"面板一个色、主界面另一个色"
     if (snap.look) {
@@ -208,24 +251,24 @@
       document.getElementById('root').style.setProperty('--bg', bg);
     }
     const total = snap.chats.length + snap.jobs.length + snap.subs.length;
-    const ovSig = total + '|' + snap.chats.length + '|' + snap.jobs.length + '|' + snap.subs.length + '|' + snap.theme;
+    const ovSig = total + '|' + snap.chats.length + '|' + snap.jobs.length + '|' + snap.subs.length + '|' + snap.theme + '|' + snap.lang;
     if (lastSigs._ov !== ovSig) {
       lastSigs._ov = ovSig;
       $('overall').innerHTML = total
-        ? '<span class="dot run"></span><span class="state">' + total + ' 项任务进行中</span><span class="detail">' +
-          [snap.chats.length ? snap.chats.length + ' 会话' : '', snap.jobs.length ? snap.jobs.length + ' 后台命令' : '', snap.subs.length ? snap.subs.length + ' 子代理' : ''].filter(Boolean).join(' · ') + '</span>'
-        : '<span class="dot ok"></span><span class="state">空闲</span><span class="detail">当前没有进行中的任务</span>';
+        ? '<span class="dot run"></span><span class="state">' + total + L('nRunning') + '</span><span class="detail">' +
+          [snap.chats.length ? snap.chats.length + L('chatN') : '', snap.jobs.length ? snap.jobs.length + L('bgN') : '', snap.subs.length ? snap.subs.length + L('subN') : ''].filter(Boolean).join(' · ') + '</span>'
+        : '<span class="dot ok"></span><span class="state">' + L('idle') + '</span><span class="detail">' + L('noTask') + '</span>';
     }
-    $('ts').textContent = new Date(snap.ts || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
+    $('ts').textContent = new Date(snap.ts || Date.now()).toLocaleTimeString(snap.lang === 'en' ? 'en-US' : 'zh-CN', { hour12: false });
 
-    renderSection('chats', 'c-chats', 'd-chats', snap.chats, '没有运行中的会话回合', (it) =>
-      '<div class="item"><span class="badge b-run">运行中</span><span class="label">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
-    renderSection('jobs', 'c-jobs', 'd-jobs', snap.jobs, '没有后台命令', (it) =>
-      '<div class="item" title="' + esc(it.label) + '"><span class="badge b-run">后台</span><span class="label mono">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
-    renderSection('subs', 'c-subs', 'd-subs', snap.subs, '没有派生的子代理', (it) =>
-      '<div class="item"><span class="badge b-run">委派</span><span class="label">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
-    renderSection('goals', 'c-goals', 'd-goals', snap.goals, '没有活跃计划', (g) =>
-      '<div class="item" title="' + esc(g.text) + '"><span class="badge ' + (g.pending ? 'b-pending' : 'b-run') + '">' + (g.pending ? '待办 ' + g.pending : '进行中') + '</span><span class="label">' + esc(g.text) + '</span><button class="gdel" data-gid="' + esc(g.id) + '" title="删除此计划"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>');
+    renderSection('chats', 'c-chats', 'd-chats', snap.chats, L('emptyChats'), (it) =>
+      '<div class="item"><span class="badge b-run">' + L('running') + '</span><span class="label">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
+    renderSection('jobs', 'c-jobs', 'd-jobs', snap.jobs, L('emptyJobs'), (it) =>
+      '<div class="item" title="' + esc(it.label) + '"><span class="badge b-run">' + L('bg') + '</span><span class="label mono">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
+    renderSection('subs', 'c-subs', 'd-subs', snap.subs, L('emptySubs'), (it) =>
+      '<div class="item"><span class="badge b-run">' + L('delegated') + '</span><span class="label">' + esc(it.label) + '</span><span class="secs" data-since="' + Number(it.since) + '">' + fmtSecs(it.since) + '</span></div>');
+    renderSection('goals', 'c-goals', 'd-goals', snap.goals, L('emptyGoals'), (g) =>
+      '<div class="item" title="' + esc(g.text) + '"><span class="badge ' + (g.pending ? 'b-pending' : 'b-run') + '">' + (g.pending ? L('todo') + ' ' + g.pending : L('inProg')) + '</span><span class="label">' + esc(g.text) + '</span><button class="gdel" data-gid="' + esc(g.id) + '" title="' + L('delGoal') + '"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>');
   }
 
   $('btn-close').onclick = () => ipcRenderer.send('tray:hide');

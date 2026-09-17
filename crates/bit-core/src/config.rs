@@ -152,6 +152,10 @@ pub struct Config {
     /// Deny 即拦截；审核不可达时保持原自动放行语义（不回退人工，避免打断自动化）
     #[serde(default)]
     pub l2pass_cover_auto: bool,
+    /// 界面语言（"zh" | "en"）：存库统一读取——前端 i18n 与 Electron 托盘/任务面板
+    /// 共用同一标记（历史教训：语言只存 localStorage 时托盘面板读不到，双语失效）
+    #[serde(default)]
+    pub language: String,
     /// 远程对话限速：每 60 秒滑动窗口内允许的对话请求上限（/api/chat 与 /v1/chat/completions
     /// 按客户端 IP 分别计数；0=不限）
     #[serde(default = "default_chat_rpm_max")]
@@ -287,6 +291,7 @@ impl Default for Config {
             l2pass_enabled: false,
             l2pass_provider_id: String::new(),
             l2pass_cover_auto: false,
+            language: "zh".into(),
             device_registered_at: None,
             device_fp_hash: None,
             chat_rpm_max: default_chat_rpm_max(),

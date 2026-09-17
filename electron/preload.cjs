@@ -172,8 +172,12 @@ document.addEventListener('dblclick', (e) => {
   window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize', {});
 });
 
-// 主题联动：html.dark class 变化 → 通知主进程（托盘任务面板跟随主界面主题与真实背景色）
+// 主题/语言联动：html 的 class（dark）与 lang 属性变化 → 通知主进程（托盘任务面板跟随主界面）。
+// 历史教训：preload 执行时 documentElement 可能还是 null（DOM 未创建）——直接 observe 会
+// 静默失败且初始 send 也发不出，联动整体失效。必须等 DOM 就绪后再挂。
 try {
+  let themeReady = false;
+  let langReady = false;
   const notifyTheme = () => {
     // 提取主界面实际渲染色（--look-* 由外观定制写入，未定制时回退与 styles.css 相同的默认值），
     // 面板直接用同色，避免硬编码色板与主界面"一个黑一个白"
@@ -186,9 +190,28 @@ try {
     } catch { look = null; }
     ipcRenderer.send('bit:theme-changed', { dark: document.documentElement.classList.contains('dark'), look });
   };
-  notifyTheme();
-  new MutationObserver(notifyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-} catch { /* 主题联动失败不影响主流程 */ }
+  const notifyLang = () => {
+    const v = document.documentElement.lang === 'en' ? 'en' : 'zh';
+    ipcRenderer.send('bit:lang-changed', v);
+  };
+  const setupObservers = () => {
+    if (!document.documentElement) return false;
+    if (!themeReady) {
+      notifyTheme();
+      new MutationObserver(notifyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+      themeReady = true;
+    }
+    if (!langReady) {
+      notifyLang();
+      new MutationObserver(notifyLang).observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+      langReady = true;
+    }
+    return true;
+  };
+  if (!setupObservers()) {
+    document.addEventListener('DOMContentLoaded', setupObservers, { once: true });
+  }
+} catch { /* 主题/语言联动失败不影响主流程 */ }
 
 // 诊断口：控制台可查 shim 状态
 contextBridge; // 保持引用（避免 lint 误报未使用；实际导出走主世界直挂）

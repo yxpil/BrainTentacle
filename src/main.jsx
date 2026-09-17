@@ -3,7 +3,11 @@ import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App.jsx";
+import { syncLangFromDb } from "./i18n.js";
 import "./styles.css";
+
+// 启动同步：语言以数据库标记为准（前端与 Electron 托盘/任务面板同读一源）
+syncLangFromDb();
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

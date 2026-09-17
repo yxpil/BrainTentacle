@@ -74,7 +74,22 @@ const trayState = {
   goals: [],            // [{ text, pending }]  活跃计划（10s 轮询 list_goals）
   theme: null,          // 'dark' | 'light'  主界面主题联动（渲染层推送，未推送前跟随系统）
   look: null,           // { light, dark }  主界面真实背景色（外观定制可改，面板复用以保持同色）
+  lang: 'zh',           // 界面语言：数据库统一标记（config.language），任务面板据此双语
 };
+// 语言标记：启动从 bit.db 读（core 就绪后）+ 前端切换时实时推送，托盘面板同源双语
+ipcMain.on('bit:lang-changed', (_e, lang) => {
+  const v = lang === 'en' ? 'en' : 'zh';
+  if (trayState.lang !== v) { trayState.lang = v; traySchedulePush(); }
+});
+async function loadLang(retry) {
+  try {
+    const r = await bit.invoke('get_language');
+    const v = r?.language === 'en' ? 'en' : 'zh';
+    if (trayState.lang !== v) { trayState.lang = v; traySchedulePush(); }
+  } catch {
+    if (retry) setTimeout(() => loadLang(false), 8000); // core 未就绪：静默补一次
+  }
+}
 // 主界面主题 → 任务面板联动：preload 监听 html.dark class + 提取真实背景色 → 透传给面板
 // 解决"一个黑一个白"：面板不再硬编码色板，直接复用主界面的 --look-bg-color-light/dark
 ipcMain.on('bit:theme-changed', (_e, payload) => {
@@ -104,13 +119,15 @@ function traySchedulePush() {
   trayPushTimer = setTimeout(() => {
     trayPushTimer = null;
     const now = Date.now();
+    const en = trayState.lang === 'en';
     const snap = {
-      chats: [...trayState.chats.entries()].map(([k, v]) => ({ label: k === 'chat-stream' ? '会话回合' : `会话 ${k.replace(/^chat-stream-/, '')}`, since: v.since })),
+      chats: [...trayState.chats.entries()].map(([k, v]) => ({ label: k === 'chat-stream' ? (en ? 'Chat turn' : '会话回合') : `${en ? 'Chat' : '会话'} ${k.replace(/^chat-stream-/, '')}`, since: v.since })),
       jobs: [...trayState.bgJobs.entries()].map(([id, v]) => ({ id, label: v.command, since: v.since })),
-      subs: [...trayState.subagents.entries()].map(([id, v]) => ({ id, label: v.title || '子代理', since: v.since })),
+      subs: [...trayState.subagents.entries()].map(([id, v]) => ({ id, label: v.title || (en ? 'Sub-agent' : '子代理'), since: v.since })),
       goals: trayState.goals,
       theme: trayState.theme || (nativeTheme?.shouldUseDarkColors ? 'dark' : 'light'),
       look: trayState.look || { light: '#ffffff', dark: '#18181b' },
+      lang: trayState.lang,
       ts: now,
     };
     if (statusWin && !statusWin.isDestroyed()) {
@@ -661,6 +678,7 @@ app.whenReady().then(async () => {
   // 托盘常驻（M3）+ 启动时按配置注册全局热键（与 Tauri 版 setup 行为一致）
   createTray();
   startGoalsPolling(); // 活跃计划状态（托盘任务面板用）
+  loadLang(true); // 界面语言（bit.db 统一标记；前端切换另有实时推送，此处兜底）
   try {
     const hk = await bit.invoke('get_hotkey', {});
     await ipcInvokeSetHotkey(String(hk?.hotkey || ''));
