@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "../api.js";
 import PillSwitch from "../components/PillSwitch.jsx";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 import {
   IconPlus,
   IconTrash,
@@ -190,6 +191,14 @@ export default function ToolsPage({ onStats }) {
   };
 
   const remove = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDelete"),
+        danger: true,
+      }))
+    )
+      return;
     await api.removeTool(id);
     await reload();
     onStats?.();
@@ -235,6 +244,14 @@ export default function ToolsPage({ onStats }) {
   };
 
   const removeRuntime = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("tools.confirmRemoveRuntime"),
+        danger: true,
+      }))
+    )
+      return;
     await api.removeRuntime(id);
     await reload();
   };
@@ -285,6 +302,14 @@ export default function ToolsPage({ onStats }) {
   };
 
   const removeMcp = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("tools.confirmRemoveMcp"),
+        danger: true,
+      }))
+    )
+      return;
     await api.mcpRemove(id);
     await reload();
     onStats?.();

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { IconPlus, IconMemory, IconTrash } from "../components/Icons.jsx";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 import { listen } from "@tauri-apps/api/event";
 
 // 记忆页：计划目标 / 待办事项管理（可删除）+ 原始记忆（单条删除与多选批量删除）
@@ -70,6 +71,14 @@ export default function MemoryPage({ onStats }) {
     setSelected(allChecked ? new Set() : new Set(memories.map((m) => m.id)));
 
   const removeOne = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDelete"),
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     setError("");
     try {
@@ -85,6 +94,14 @@ export default function MemoryPage({ onStats }) {
 
   const removeSelected = async () => {
     if (!selected.size) return;
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDeleteSelected"),
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     setError("");
     try {
@@ -100,6 +117,14 @@ export default function MemoryPage({ onStats }) {
   };
 
   const removeGoal = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDelete"),
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     setError("");
     try {
@@ -114,6 +139,14 @@ export default function MemoryPage({ onStats }) {
   };
 
   const removeTodo = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDelete"),
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     setError("");
     try {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 import { IconAudit, IconRefresh, IconTrash } from "../components/Icons.jsx";
 
 // 审计日志：所有工具调用 / 注册 / HTTP 访问 / Autopilot 动作；点行弹层查看完整详情。
@@ -15,6 +16,32 @@ export default function AuditPage() {
 
   const reload = () => api.listAudit().then((r) => setEntries(r.entries || []));
   const loadDiag = () => api.getDiagnostics().then(setDiag).catch(() => {});
+
+  // 清空 / 删除审计记录：统一走确认弹窗
+  const clearAll = async () => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("audit.confirmClear"),
+        danger: true,
+      }))
+    )
+      return;
+    api.clearAudit().then(reload);
+  };
+
+  const removeOne = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDelete"),
+        danger: true,
+      }))
+    )
+      return;
+    api.deleteAuditEntry(id).then(reload);
+  };
+
   useEffect(() => {
     reload();
     loadDiag();
@@ -56,7 +83,7 @@ export default function AuditPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => api.clearAudit().then(reload)}
+            onClick={clearAll}
             className="pill pill-outline pill-hover"
           >
             <IconTrash size={14} />
@@ -258,7 +285,7 @@ export default function AuditPage() {
                     <button
                       onClick={(ev) => {
                         ev.stopPropagation();
-                        api.deleteAuditEntry(e.id).then(reload);
+                        removeOne(e.id);
                       }}
                       title={t("audit.delete")}
                       className="icon-btn shrink-0 hover:text-red-500"

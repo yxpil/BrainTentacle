@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 import PillSwitch from "../components/PillSwitch.jsx";
 import { IconShield, IconTrash, IconEye } from "../components/Icons.jsx";
 
@@ -79,7 +80,14 @@ export default function SecurityPage() {
   };
 
   const removeEntry = async (id) => {
-    if (!confirm(t("common.confirmDelete", "确定删除？此操作不可恢复。"))) return;
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDelete"),
+        danger: true,
+      }))
+    )
+      return;
     await api.removeHiddenCode(id).catch(() => {});
     api.getHiddenCodes().then((r) => setEntries(r || [])).catch(() => {});
   };

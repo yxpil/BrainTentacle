@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 import PillSwitch from "../components/PillSwitch.jsx";
 import { IconPlus, IconTrash, IconSettings, IconCheck, IconX } from "../components/Icons.jsx";
 
@@ -320,6 +321,14 @@ export default function AiSettingsPage({ onStats, stats }) {
   };
 
   const remove = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("ai.confirmRemove"),
+        danger: true,
+      }))
+    )
+      return;
     await api.removeProvider(id);
     if (form.id === id) setForm(EMPTY);
     await load();

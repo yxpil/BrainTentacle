@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../api.js";
 import { useLang, t } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 import {
   IconSend,
   IconTrash,
@@ -644,6 +645,14 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
   const deleteSession = async (id, e) => {
     e?.stopPropagation();
     if (busyMap[id]) return; // 执行中的会话不能删除，避免流式结果写入已删会话
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("chat.confirmDeleteSession"),
+        danger: true,
+      }))
+    )
+      return;
     const r = await api.deleteSession(id).catch(() => null);
     if (r) {
       await loadSessions();
@@ -760,6 +769,14 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
       flashHint(favIds.length ? t("chat.favOnly") : t("chat.skipBusy"));
       return;
     }
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("chat.confirmDeleteSessions", { n: ids.length }),
+        danger: true,
+      }))
+    )
+      return;
     const r = await api.deleteSessions(ids).catch(() => null);
     if (!r) return;
     await loadSessions();

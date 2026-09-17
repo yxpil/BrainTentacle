@@ -7,6 +7,7 @@ import { useTheme } from "./useTheme.js";
 import { useLang } from "./i18n.js";
 import logoUrl from "./assets/logo-64.png";
 import TitleBar from "./components/TitleBar.jsx";
+import ConfirmHost from "./components/ConfirmHost.jsx";
 import ChatPage from "./pages/ChatPage.jsx";
 import ToolsPage from "./pages/ToolsPage.jsx";
 import MemoryPage from "./pages/MemoryPage.jsx";
@@ -317,6 +318,8 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden text-neutral-900 dark:text-neutral-100">
       <TitleBar />
+      {/* 全局确认弹窗宿主：confirmDialog() 的统一渲染点（挂在根组件，全站共用） */}
+      <ConfirmHost />
 
       {/* 端口切换提示条：远程端口被占用已自动切换（可关闭，纯色不透明） */}
       {portSwitched && (

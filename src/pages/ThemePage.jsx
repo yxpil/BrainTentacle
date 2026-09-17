@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { useTheme, DEFAULT_LOOK } from "../useTheme.js";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 import PillSwitch from "../components/PillSwitch.jsx";
 import { IconImage, IconTrash, IconCheck } from "../components/Icons.jsx";
 
@@ -38,9 +39,9 @@ export default function ThemePage() {
   const onPickFile = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    // 限制 5MB
+    // 限制 5MB（原生 alert 换成应用内提示弹窗）
     if (f.size > 5 * 1024 * 1024) {
-      alert("图片不能超过 5MB");
+      confirmDialog({ title: t("theme.imageTooLarge"), alert: true });
       return;
     }
     const reader = new FileReader();

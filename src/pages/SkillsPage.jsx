@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { IconPlus, IconSkill, IconTrash } from "../components/Icons.jsx";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 
 // 技能（SKILL）：Autopilot 从总结记忆中自动提炼，也可手动沉淀；支持单条删除与多选批量删除
 export default function SkillsPage({ onStats }) {
@@ -50,6 +51,14 @@ export default function SkillsPage({ onStats }) {
     setSelected(allChecked ? new Set() : new Set(skills.map((s) => s.id)));
 
   const removeOne = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDelete"),
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     try {
       await api.deleteSkills([id]);
@@ -64,6 +73,14 @@ export default function SkillsPage({ onStats }) {
 
   const removeSelected = async () => {
     if (!selected.size) return;
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDeleteSelected"),
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     try {
       await api.deleteSkills([...selected]);

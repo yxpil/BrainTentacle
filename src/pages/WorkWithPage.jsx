@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "../api.js";
 import { IconPlayTri, IconStop, IconTrash, IconWorkWith, IconX } from "../components/Icons.jsx";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 
 const EMPTY_FORM = {
   id: "",
@@ -127,7 +128,14 @@ export default function WorkWithPage() {
   };
 
   const remove = async (e) => {
-    if (!window.confirm(t("ww.confirmRemove"))) return;
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("ww.confirmRemove"),
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     setErr("");
     try {
