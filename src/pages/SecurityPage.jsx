@@ -56,7 +56,8 @@ export default function SecurityPage() {
         next.l2pass_provider_id,
         next.l2pass_cover_auto,
       );
-      setSec(r);
+      // 合并而非整包覆盖：历史教训——后端只回 {ok} 时整包覆盖会把开关全部打挂
+      setSec((prev) => ({ ...prev, ...r }));
     } catch (e) {
       setErr(String(e));
     }

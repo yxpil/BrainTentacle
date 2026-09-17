@@ -3135,7 +3135,14 @@ pub fn set_security_settings(
         cfg.revision += 1;
     }
     ctx.save_config();
-    Ok(json!({ "ok": true }))
+    // 返回更新后的完整设置（与 napi 版一致：前端整包覆盖状态，只回 {ok} 会把开关全部打挂）
+    Ok(json!({
+        "ok": true,
+        "hidden_code_enabled": hidden_code_enabled,
+        "l2pass_enabled": l2pass_enabled,
+        "l2pass_provider_id": l2pass_provider_id,
+        "l2pass_cover_auto": l2pass_cover_auto,
+    }))
 }
 
 /// 自动更新检测结果

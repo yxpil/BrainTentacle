@@ -1987,6 +1987,9 @@ pub fn get_security_settings(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String
 /// 安全设置保存。L2 开启时必须已选审核 provider。
 /// 宽松语义：未传的参数保持原值（历史教训：硬必填导致旧调用方/远程端少传一个字段直接报
 /// "缺少参数: l2pass_enabled"，设置页整页保存失败）
+/// 校验范围收窄：只在本次触碰 L2（从关到开 / 换 provider）时把关——
+/// 否则 provider 被删后的残留态（l2_enabled=true 但 id 失效）会卡死脱敏开关等无关保存
+/// 返回更新后的完整设置（历史教训：曾返回 {ok:true}，前端整包覆盖状态后开关全部失灵）
 pub fn set_security_settings(
     ctx: &Arc<Ctx>,
     hidden_code_enabled: Option<bool>,
@@ -1994,16 +1997,22 @@ pub fn set_security_settings(
     l2pass_provider_id: Option<String>,
     l2pass_cover_auto: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    let (hce, l2, pid, ca) = {
+    let (hce, l2, pid, ca, need_check) = {
         let cfg = ctx.config.lock().unwrap();
+        let l2 = l2pass_enabled.unwrap_or(cfg.l2pass_enabled);
+        let pid = l2pass_provider_id.clone().unwrap_or_else(|| cfg.l2pass_provider_id.clone());
+        // 触碰判定：显式开了 L2，或显式换了 provider（残留态原样透传时不拦截）
+        let touch = l2pass_enabled.map(|v| v && !cfg.l2pass_enabled).unwrap_or(false)
+            || l2pass_provider_id.as_deref().map(|p| p != cfg.l2pass_provider_id).unwrap_or(false);
         (
             hidden_code_enabled.unwrap_or(cfg.hidden_code_enabled),
-            l2pass_enabled.unwrap_or(cfg.l2pass_enabled),
-            l2pass_provider_id.unwrap_or_else(|| cfg.l2pass_provider_id.clone()),
+            l2,
+            pid,
             l2pass_cover_auto.unwrap_or(cfg.l2pass_cover_auto),
+            touch,
         )
     };
-    if l2 {
+    if need_check && l2 {
         let known = ctx
             .ai_config
             .lock()
@@ -2019,12 +2028,18 @@ pub fn set_security_settings(
         let mut cfg = ctx.config.lock().unwrap();
         cfg.hidden_code_enabled = hce;
         cfg.l2pass_enabled = l2;
-        cfg.l2pass_provider_id = pid;
+        cfg.l2pass_provider_id = pid.clone();
         cfg.l2pass_cover_auto = ca;
         cfg.revision += 1;
     }
     ctx.save_config();
-    Ok(json!({ "ok": true }))
+    Ok(json!({
+        "ok": true,
+        "hidden_code_enabled": hce,
+        "l2pass_enabled": l2,
+        "l2pass_provider_id": pid,
+        "l2pass_cover_auto": ca,
+    }))
 }
 
 // ---------- 界面语言（数据库统一标记）----------
