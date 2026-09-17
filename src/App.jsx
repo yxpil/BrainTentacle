@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -224,17 +224,52 @@ export default function App() {
     refresh();
   }, [tab]);
 
+  // ── 粘液导航指示：唯一的实心圆片悬浮在侧栏里，切换导航时从旧位置"流"到新位置 ──
+  // 位置用 CSS 变量注入（--y0 旧位 / --y 新位），动画在 styles.css 的 nav-slime
+  const asideRef = useRef(null);
+  const navRefs = useRef({}); // 各导航按钮 DOM，用于测量位置
+  const blobRef = useRef(null);
+  const blobPrevY = useRef(null);
+  const syncBlob = (animate) => {
+    const el = blobRef.current;
+    const item = navRefs.current[tab];
+    const aside = asideRef.current;
+    if (!el || !item || !aside) return;
+    const y = item.getBoundingClientRect().top - aside.getBoundingClientRect().top;
+    const y0 = blobPrevY.current;
+    blobPrevY.current = y;
+    el.style.setProperty("--y0", `${y0 ?? y}px`);
+    el.style.setProperty("--y", `${y}px`);
+    if (animate && y0 != null && Math.abs(y0 - y) > 0.5) {
+      el.classList.remove("slime");
+      void el.offsetWidth; // 强制 reflow 重启动画
+      el.classList.add("slime");
+    }
+  };
+  useLayoutEffect(() => {
+    syncBlob(true); // tab / 侧栏按钮增减都会改变导航项位置，重播流动
+  }, [tab, chatSidebar]);
+  useEffect(() => {
+    const onResize = () => syncBlob(false); // 窗口缩放：静默校正，不播动画
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   // 图标导航项：圆形小圆片（悬停显示名称），把宽度留给内容区
+  // 选中态的实心圆片由共享的 nav-blob 提供（点击时从旧位置流过来），按钮本身只负责图标颜色
   const NavItem = ({ k }) => {
     const { label, icon: Icon } = PAGES[k];
     const active = tab === k;
     return (
       <button
+        ref={(el) => {
+          navRefs.current[k] = el;
+        }}
         onClick={() => setTab(k)}
         title={t(label)}
-        className={`mx-auto flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200 hover:scale-105 active:scale-95 ${
+        className={`relative mx-auto flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200 hover:scale-105 active:scale-95 ${
           active
-            ? "accent-solid shadow-sm"
+            ? "text-[var(--accent-fg)]"
             : "text-neutral-500 hover:bg-neutral-900/5 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-white/5 dark:hover:text-white"
         }`}
       >
@@ -268,12 +303,12 @@ export default function App() {
     </button>
   );
 
-  // 栏底圆形小按钮（主题 / 语言 / 关于）
+  // 栏底圆形小按钮（主题 / 语言 / 关于）：与上方导航项同款 36px 圆形小圆片
   const RailBtn = ({ onClick, title, children }) => (
     <button
       onClick={onClick}
       title={title}
-      className="flex w-full items-center justify-center rounded-xl py-2 text-neutral-500 transition-colors hover:bg-neutral-900/5 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-white/5 dark:hover:text-white"
+      className="mx-auto flex h-9 w-9 items-center justify-center rounded-full text-neutral-500 transition-all duration-200 hover:scale-105 active:scale-95 hover:bg-neutral-900/5 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-white/5 dark:hover:text-white"
     >
       {children}
     </button>
@@ -302,7 +337,9 @@ export default function App() {
 
       <div className="flex min-h-0 flex-1">
         {/* 图标侧栏：无分隔线，与窗口背景融为一体 */}
-        <aside className="flex w-12 shrink-0 flex-col items-center gap-1 px-1.5 py-2">
+        <aside ref={asideRef} className="relative flex w-12 shrink-0 flex-col items-center gap-1 px-1.5 py-2">
+          {/* 粘液导航指示圆片：选中态的唯一实心圆片，点击导航时流动到新位置 */}
+          <div ref={blobRef} aria-hidden="true" className="nav-blob accent-solid rounded-full" />
           {/* 导航：对话主功能置顶，其余分组 */}
           <nav className="flex w-full flex-1 flex-col gap-0.5 pt-1">
             <NavItem k={PRIMARY} />

@@ -413,7 +413,7 @@ export default function ToolsPage({ onStats }) {
             );
           })}
           {runtimes.length === 0 && (
-            <p className="py-4 text-center text-sm text-neutral-400">
+            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
               {t("tools.noRuntimes")}
             </p>
           )}
@@ -476,7 +476,7 @@ export default function ToolsPage({ onStats }) {
           </div>
         )}
         {mcpFound && mcpFound.length === 0 && (
-          <p className="mb-3 px-2 text-xs text-neutral-400">{t("tools.mcpNone")}</p>
+          <p className="mb-3 rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("tools.mcpNone")}</p>
         )}
 
         {/* 已接入列表：圆片开关（暂停/继续）+ 重新导入 + 移除 */}
@@ -516,7 +516,7 @@ export default function ToolsPage({ onStats }) {
             );
           })}
           {mcpServers.length === 0 && (
-            <p className="py-4 text-center text-sm text-neutral-400">{t("tools.mcpEmpty")}</p>
+            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("tools.mcpEmpty")}</p>
           )}
         </div>
       </section>
@@ -592,7 +592,7 @@ export default function ToolsPage({ onStats }) {
             </div>
           ))}
           {plugins.length === 0 && (
-            <p className="py-4 text-center text-sm text-neutral-400">还没有插件：把插件包放进上面的目录后点「重扫插件」</p>
+            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">还没有插件：把插件包放进上面的目录后点「重扫插件」</p>
           )}
         </div>
       </section>
@@ -622,7 +622,7 @@ export default function ToolsPage({ onStats }) {
         </div>
 
         <textarea
-          className="h-44 w-full rounded-2xl border border-neutral-200 bg-neutral-50 p-3 font-mono text-xs outline-none focus:border-neutral-900 dark:border-neutral-800 dark:bg-neutral-900 dark:focus:border-neutral-200"
+          className="field h-44 !rounded-2xl p-3 font-mono text-xs"
           value={code}
           onChange={(e) => setCode(e.target.value)}
           spellCheck={false}
@@ -659,7 +659,7 @@ export default function ToolsPage({ onStats }) {
               </span>
             </div>
             <textarea
-              className="h-28 w-full rounded-2xl border border-neutral-200 bg-neutral-50 p-3 font-mono text-xs outline-none dark:border-neutral-800 dark:bg-neutral-900"
+              className="field h-28 !rounded-2xl p-3 font-mono text-xs"
               readOnly
               value={result.loading ? "…" : JSON.stringify(result.data, null, 2)}
             />
@@ -753,7 +753,7 @@ export default function ToolsPage({ onStats }) {
             );
           })}
           {tools.length === 0 && (
-            <p className="py-6 text-center text-sm text-neutral-400">{t("tools.empty")}</p>
+            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("tools.empty")}</p>
           )}
         </div>
       </section>

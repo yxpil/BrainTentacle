@@ -17,6 +17,16 @@
     --ok: #16a34a;
     --run: #0284c7;
     --warn: #ea580c;
+    /* ↓ 与主界面 styles.css 完全同源的设计令牌：强调色 / 圆角 / 动效时长 / 缓动 */
+    --accent: #171717;
+    --accent-fg: #ffffff;
+    --radius-soft: 1rem;   /* 卡片级圆角，同主界面 rounded-2xl */
+    --radius-item: 0.75rem; /* 条目级圆角 */
+    --dur-fast: 150ms;
+    --dur: 220ms;
+    --dur-slow: 320ms;
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-pill: cubic-bezier(0.4, 0, 0.2, 1);
   }
   body.dark {
     --bg: #18181b;
@@ -28,10 +38,21 @@
     --ok: #4ade80;
     --run: #38bdf8;
     --warn: #fb923c;
+    --accent: #f5f5f5;
+    --accent-fg: #171717;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; background: transparent; }
-  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; font-size: 13px; color: var(--text); }
+  body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; font-size: 13px; color: var(--text); }
+
+  /* ── 与主界面统一的按钮微交互基线：同一组过渡属性 / 时长 / 缓动 + 按压回弹 ── */
+  button {
+    transition-property: color, background-color, border-color, box-shadow, transform, opacity, filter;
+    transition-duration: var(--dur-fast);
+    transition-timing-function: var(--ease-pill);
+  }
+  button:not(:disabled):active { transform: scale(0.96); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* 窗口圆角容器（与主窗口同方案：透明窗体 + CSS 圆角 + 垫实色底） */
   #root {
     height: 100%;
@@ -59,7 +80,6 @@
     display: flex; align-items: center; justify-content: center;
     width: 24px; height: 24px; border-radius: 999px;
     color: var(--text2); background: transparent; border: none; cursor: pointer;
-    transition: background-color 0.15s, color 0.15s;
   }
   .wbtn:hover { background: var(--btn-hover, rgba(0,0,0,0.06)); color: var(--text); }
   body.dark .wbtn:hover { background: rgba(255,255,255,0.1); }
@@ -71,12 +91,13 @@
   .head .ts { margin-left: auto; font-size: 11px; color: var(--text3); font-variant-numeric: tabular-nums; }
 
   .overall {
-    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-soft);
     padding: 12px 14px; margin-bottom: 14px;
     display: flex; align-items: center; gap: 10px;
+    animation: rise var(--dur) var(--ease-spring) both;
   }
   .overall .state { font-weight: 600; }
-  .overall .detail { margin-left: auto; color: var(--text2); font-size: 12px; }
+  .overall .detail { margin-left: auto; color: var(--text2); font-size: 12px; transition: color var(--dur-fast) var(--ease-pill); }
 
   .section { margin-bottom: 14px; }
   .section-title {
@@ -84,33 +105,58 @@
     font-size: 11px; font-weight: 600; color: var(--text2);
     letter-spacing: 0.6px; padding: 0 4px 6px;
   }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text3); flex-shrink: 0; }
-  .dot.run { background: var(--run); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text3); flex-shrink: 0; transition: background-color var(--dur-fast) var(--ease-pill); }
+  .dot.run { background: var(--run); animation: pulse 2s var(--ease-pill) infinite; }
   .dot.ok { background: var(--ok); }
+  /* 运行中圆点呼吸光圈：状态一眼可辨，又不喧宾夺主 */
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--run) 35%, transparent); }
+    60% { box-shadow: 0 0 0 4px transparent; }
+  }
   .count { margin-left: auto; color: var(--text3); font-weight: 400; }
   .items { display: flex; flex-direction: column; gap: 6px; }
   .item {
-    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-item);
     padding: 9px 12px; display: flex; align-items: center; gap: 10px;
-    animation: rise 0.18s ease-out;
+    animation: rise var(--dur) var(--ease-spring) both;
+    transition: border-color var(--dur-fast) var(--ease-pill), box-shadow var(--dur-fast) var(--ease-pill), transform var(--dur-fast) var(--ease-pill);
   }
-  @keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+  /* 条目逐个入场（40ms 级联），列表重建时有层次感 */
+  .item:nth-child(2) { animation-delay: 40ms; }
+  .item:nth-child(3) { animation-delay: 80ms; }
+  .item:nth-child(4) { animation-delay: 120ms; }
+  .item:nth-child(n+5) { animation-delay: 160ms; }
+  @keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+  .item:hover {
+    border-color: color-mix(in srgb, var(--text) 16%, var(--border));
+    box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.14);
+    transform: translateY(-1px);
+  }
   .item .label { flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
   .item .label.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
   .item .secs { color: var(--text2); font-size: 11px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
-  .item .badge { flex-shrink: 0; font-size: 10px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text2); }
+  .item .badge {
+    flex-shrink: 0; font-size: 10px; padding: 2px 7px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--text2);
+    transition: color var(--dur-fast) var(--ease-pill), border-color var(--dur-fast) var(--ease-pill);
+  }
   .badge.b-run { color: var(--run); border-color: color-mix(in srgb, var(--run) 35%, transparent); }
   .badge.b-pending { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
-  /* 计划条目删除按钮：默认低调，hover 条目时浮现，hover 按钮变红（危险操作） */
+  /* 计划条目删除按钮：默认低调，hover 条目时浮现并轻转，hover 按钮变红（危险操作） */
   .gdel {
     flex-shrink: 0; display: flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; border-radius: 999px;
     color: var(--text3); background: transparent; border: none; cursor: pointer;
-    opacity: 0; transition: opacity 0.12s, background-color 0.15s, color 0.15s;
+    opacity: 0; transform: rotate(-45deg);
   }
-  .item:hover .gdel { opacity: 1; }
+  .item:hover .gdel { opacity: 1; transform: rotate(0deg); }
   .gdel:hover { background: rgba(220,38,38,0.1); color: #dc2626; }
-  .empty { border: 1px dashed var(--border); border-radius: 12px; padding: 12px; text-align: center; color: var(--text3); font-size: 12px; }
+  .empty {
+    border: 1px dashed var(--border); border-radius: var(--radius-item); padding: 12px;
+    text-align: center; color: var(--text3); font-size: 12px;
+    transition: color var(--dur-fast) var(--ease-pill), border-color var(--dur-fast) var(--ease-pill);
+  }
+  .empty:hover { color: var(--text2); border-color: color-mix(in srgb, var(--text2) 40%, var(--border)); }
 
   .foot {
     flex-shrink: 0; padding: 8px 14px 10px;
@@ -119,7 +165,7 @@
   }
   .quit {
     font-size: 11px; color: var(--text3); background: none; border: none; cursor: pointer;
-    padding: 3px 8px; border-radius: 8px; transition: color 0.15s, background-color 0.15s;
+    padding: 3px 8px; border-radius: 8px;
   }
   .quit:hover { color: var(--text); background: rgba(0,0,0,0.06); }
   body.dark .quit:hover { background: rgba(255,255,255,0.1); }
@@ -142,6 +188,10 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-button { display: none; }
   ::-webkit-scrollbar-corner { background: transparent; }
+
+  /* 窗口是 hide/show 复用的：每次显示重播一次入场动画（面板从小到大弹出，同主界面弹层手感） */
+  #root.pop { animation: pop var(--dur-slow) var(--ease-spring); }
+  @keyframes pop { from { opacity: 0; transform: scale(0.96) translateY(6px); } to { opacity: 1; transform: none; } }
 
   /* ── hover 紧凑模式（托盘悬浮预览 ?mode=hover）：去标题栏/大标题/按钮/计划子代理区，只读预览 ── */
   body.hover .titlebar,
@@ -310,6 +360,14 @@
     if (btn?.dataset?.gid) ipcRenderer.send('tray:remove-goal', btn.dataset.gid);
   });
   ipcRenderer.on('tray:status', (_e, s) => { snap = s || snap; render(); });
+  // 每次窗口显示（含悬浮预览弹出）重播入场动画
+  const rootEl = document.getElementById('root');
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    rootEl.classList.remove('pop');
+    void rootEl.offsetWidth; // 强制 reflow 重启动画
+    rootEl.classList.add('pop');
+  });
   setInterval(render, 1000); // 秒级刷新耗时
   render();
 </script>

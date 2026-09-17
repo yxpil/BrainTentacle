@@ -35,10 +35,33 @@
   :root {
     --accent: #171717;
     --accent-fg: #ffffff;
+    /* Motion 令牌：全站动画时长/缓动统一从这里取值 */
+    --dur-fast: 150ms;
+    --dur: 220ms;
+    --dur-slow: 320ms;
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .dark {
     --accent: #f5f5f5;
     --accent-fg: #171717;
+  }
+  /* 统一按钮微交互：所有按钮共享同一套过渡属性/时长/缓动（工具类的
+     transition-* / duration-* 特异性更高，可按需覆盖） */
+  button,
+  [role="button"] {
+    transition-property: color, background-color, border-color, box-shadow,
+      transform, opacity, filter;
+    transition-duration: var(--dur-fast);
+    transition-timing-function: var(--ease-pill);
+  }
+  /* 按压回弹：统一轻微缩小作为按下反馈 */
+  button:not(:disabled):active {
+    transform: scale(0.96);
+  }
+  /* 键盘焦点环统一走主题强调色（鼠标点击不触发，仅 Tab 导航可见） */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
   body {
     @apply antialiased;
@@ -97,6 +120,7 @@
     border: 2px solid transparent;
     background-clip: padding-box;
     min-height: 32px;
+    transition: background-color var(--dur-fast) ease;
   }
   .dark ::-webkit-scrollbar-thumb {
     @apply bg-neutral-700;
@@ -131,12 +155,50 @@
   }
   .pill:hover {
     filter: brightness(1.1);
+    box-shadow: var(--shadow-pill-hover);
   }
   /* 强调色实心面（导航选中 / 发送按钮 / 会话选中 / 开关选中） */
   .accent-solid {
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-fg);
+  }
+  /* 左侧导航「粘液」指示圆片：唯一的实心圆片悬浮在 aside 里，
+     切换导航时从旧位置流动到新位置（--y0 旧位 / --y 新位），
+     途中纵向拉长、落地压扁再回弹（squash & stretch 果冻手感） */
+  .nav-blob {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 2.25rem; /* 与 NavItem 的 h-9 w-9 同尺寸 36px */
+    height: 2.25rem;
+    margin-left: -1.125rem; /* 水平居中 */
+    transform: translateY(var(--y, 0));
+    pointer-events: none;
+    will-change: transform;
+    box-shadow: var(--shadow-pill);
+    transition: transform var(--dur) var(--ease-spring);
+  }
+  .nav-blob.slime {
+    animation: nav-slime 460ms var(--ease-spring);
+    transition: none;
+  }
+  @keyframes nav-slime {
+    0% {
+      transform: translateY(var(--y0, var(--y, 0))) scale(1);
+    }
+    /* 途中：沿运动方向轻微拉长（缩放圆形=椭圆，保持圆滑不出棱角） */
+    40% {
+      transform: translateY(calc((var(--y0, var(--y, 0)) + var(--y, 0)) / 2))
+        scaleY(1.14) scaleX(0.92);
+    }
+    /* 落地：轻微压扁回弹 */
+    72% {
+      transform: translateY(var(--y, 0)) scaleY(0.93) scaleX(1.06);
+    }
+    100% {
+      transform: translateY(var(--y, 0)) scale(1);
+    }
   }
   /* 描边按钮 */
   .pill-outline {
@@ -160,6 +222,11 @@
   .card {
     @apply rounded-3xl border border-neutral-200 bg-neutral-100 p-5;
     box-shadow: var(--shadow-card);
+    /* 明暗/强调色切换时平滑过渡，避免生硬跳变 */
+    transition:
+      background-color var(--dur) ease,
+      border-color var(--dur) ease,
+      box-shadow var(--dur) ease;
   }
   .dark .card {
     @apply border-neutral-800 bg-neutral-900;
@@ -182,10 +249,14 @@
     @apply border-neutral-700 bg-neutral-950 text-neutral-100
       focus:border-neutral-200 placeholder:text-neutral-500;
   }
+  /* 聚焦光晕：跟随主题强调色，与描边高亮叠加 */
+  .field:focus {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
   /* 圆形图标按钮（列表操作 / 标题栏） */
   .icon-btn {
     @apply flex h-9 w-9 items-center justify-center rounded-full
-      bg-neutral-100 text-neutral-600 transition-colors
+      bg-neutral-100 text-neutral-600 transition-all
       hover:bg-neutral-200 hover:text-neutral-900;
   }
   .dark .icon-btn {
@@ -262,6 +333,78 @@ html.dark.has-transparency .icon-btn {
 }
 .anim-rise {
   animation: bit-rise 0.28s var(--ease-pill) both;
+}
+
+/* ========== 统一 Micro-motion 体系 ========== */
+@keyframes bit-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes bit-pop {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes bit-page {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes bit-nav-pop {
+  0% {
+    transform: scale(0.72);
+  }
+  60% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* 弹窗统一入场：所有 fixed 遮罩淡入，直接子级卡片浮入缩放 */
+div.fixed.inset-0 {
+  animation: bit-fade var(--dur-fast) ease both;
+}
+div.fixed.inset-0 > .card {
+  animation: bit-pop var(--dur-slow) var(--ease-pill) both;
+}
+/* 非 .card 容器的弹窗内容手动挂这个类 */
+.anim-pop {
+  animation: bit-pop var(--dur-slow) var(--ease-pill) both;
+}
+/* 页面切换：内容区淡入上浮（由 App 在激活页挂载） */
+.page-in {
+  animation: bit-page 0.26s var(--ease-pill) both;
+}
+/* 导航选中：弹性放大回弹 */
+.nav-pop {
+  animation: bit-nav-pop 0.3s var(--ease-spring) both;
+}
+
+/* 系统开启"减弱动态效果"时全部动画退化为瞬时 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ========== 背景（纯色 + 可选图片 + 透明度遮罩） ========== */

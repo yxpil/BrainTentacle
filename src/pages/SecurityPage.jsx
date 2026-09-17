@@ -128,7 +128,7 @@ export default function SecurityPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
-      <h2 className="flex items-center gap-2 text-xl font-semibold">
+      <h2 className="flex items-center gap-2 text-lg font-semibold">
         <IconShield size={20} />
         {t("nav.security", "安全")}
       </h2>
@@ -156,7 +156,7 @@ export default function SecurityPage() {
 
         {/* 新条目 */}
         <div
-          className={`space-y-3 rounded-xl border border-neutral-200 p-3 dark:border-neutral-700 ${
+          className={`space-y-3 rounded-2xl border border-neutral-200 p-3 dark:border-neutral-700 ${
             !sec.hidden_code_enabled ? "opacity-40" : ""
           }`}
         >
@@ -169,7 +169,7 @@ export default function SecurityPage() {
                 // 自定义类型即正则模式：匹配到的每段文本都生成占位符
                 setAsPattern(k === "custom");
               }}
-              className="rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600"
+              className="field w-auto"
             >
               <option value="phone">{t("sec.hc.kind.phone", "手机号")}</option>
               <option value="email">{t("sec.hc.kind.email", "邮箱")}</option>
@@ -187,7 +187,7 @@ export default function SecurityPage() {
                     : t("sec.hc.patternHint", "值留空并勾选「按类型掩码」可掩掉所有匹配项")
                   : t("sec.hc.value", "值")
               }
-              className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600"
+              className="field min-w-0 flex-1"
             />
             {!asPattern && (
               <input
@@ -195,20 +195,20 @@ export default function SecurityPage() {
                 onChange={(e) => setAlias(e.target.value)}
                 placeholder={t("sec.hc.aliasPlaceholder", "别名（可选），如 李四")}
                 title={t("sec.hc.aliasHint", "AI 看到的是别名而非占位符；本机执行工具时自动换回真实值")}
-                className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600"
+                className="field min-w-0 flex-1"
               />
             )}
             <button
               disabled={busy}
               onClick={addEntry}
-              className="rounded-lg bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40 dark:bg-white dark:text-black"
+              className="pill"
             >
               {t("sec.hc.add", "添加条目")}
             </button>
           </div>
           {kind !== "custom" && (
             <label className="flex cursor-pointer items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
-              <input type="checkbox" checked={asPattern} onChange={(e) => setAsPattern(e.target.checked)} />
+              <input type="checkbox" className="size-4 accent-neutral-800" checked={asPattern} onChange={(e) => setAsPattern(e.target.checked)} />
               {t("sec.hc.asPattern", "按类型掩码全部匹配")}
               <span className="text-neutral-400 dark:text-neutral-500">
                 （{t("sec.hc.patternHint", "值留空并勾选「按类型掩码」可掩掉所有匹配项（如全部手机号）；自定义正则请把表达式填在值里并勾选。")}）
@@ -228,14 +228,14 @@ export default function SecurityPage() {
         {/* 条目列表 */}
         <div className="space-y-2">
           {entries.length === 0 && (
-            <div className="text-xs text-neutral-400">{t("sec.hc.empty", "暂无条目")}</div>
+            <div className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("sec.hc.empty", "暂无条目")}</div>
           )}
           {entries.map((e) => (
             <div
               key={e.id}
-              className="flex items-center gap-2 rounded-xl border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-700"
+              className="flex items-center gap-2 rounded-2xl border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-700"
             >
-              <span className="shrink-0 rounded-md bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">
+              <span className="chip shrink-0">
                 {kindLabel(e)}
               </span>
               <span className="min-w-0 flex-1 truncate font-mono text-xs">
@@ -251,7 +251,7 @@ export default function SecurityPage() {
               {e.kind !== "pattern" && e.value && (
                 <button
                   onClick={() => setRevealed((r) => ({ ...r, [e.id]: !r[e.id] }))}
-                  className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
+                  className="icon-btn shrink-0"
                   title={revealed[e.id] ? t("common.hide", "隐藏") : t("common.show", "显示")}
                 >
                   <IconEye size={15} />
@@ -260,7 +260,7 @@ export default function SecurityPage() {
               <PillSwitch checked={e.enabled} onChange={(v) => toggleEntry(e.id, v)} />
               <button
                 onClick={() => removeEntry(e.id)}
-                className="text-neutral-400 hover:text-red-500"
+                className="icon-btn shrink-0 hover:bg-red-50 hover:text-red-500"
                 title={t("common.delete", "删除")}
               >
                 <IconTrash size={15} />
@@ -270,19 +270,19 @@ export default function SecurityPage() {
         </div>
 
         {/* 扫描探测 */}
-        <div className="space-y-2 rounded-xl border border-dashed border-neutral-300 p-3 dark:border-neutral-600">
+        <div className="space-y-2 rounded-2xl border border-dashed border-neutral-300 p-3 dark:border-neutral-600">
           <div className="text-sm font-medium">{t("sec.hc.scan", "扫描探测")}</div>
           <textarea
             value={scanText}
             onChange={(e) => setScanText(e.target.value)}
             placeholder={t("sec.hc.scanText", "粘贴文本以探测敏感信息（不自动保存）")}
             rows={3}
-            className="w-full resize-y rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600"
+            className="field !rounded-2xl resize-y"
           />
           <div className="flex items-center gap-3">
             <button
               onClick={scan}
-              className="rounded-lg border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:border-neutral-600 dark:hover:bg-neutral-800"
+              className="pill-outline pill-hover"
             >
               {t("sec.hc.scan", "扫描探测")}
             </button>
@@ -298,9 +298,9 @@ export default function SecurityPage() {
               {candidates.map((c, i) => (
                 <div
                   key={i}
-                  className="flex items-center gap-2 rounded-lg bg-neutral-50 px-2 py-1.5 text-xs dark:bg-neutral-800/60"
+                  className="flex items-center gap-2 rounded-2xl bg-neutral-50 px-2 py-1.5 text-xs dark:bg-neutral-800/60"
                 >
-                  <span className="shrink-0 rounded bg-neutral-200 px-1.5 py-0.5 dark:bg-neutral-700">
+                  <span className="chip shrink-0">
                     {kindName(c.label)}
                   </span>
                   <span className="min-w-0 flex-1 truncate font-mono">
@@ -308,7 +308,7 @@ export default function SecurityPage() {
                   </span>
                   <button
                     onClick={() => addCandidate(c)}
-                    className="shrink-0 rounded-lg bg-neutral-900 px-2 py-1 text-white dark:bg-white dark:text-black"
+                    className="pill pill-hover shrink-0 text-xs"
                   >
                     {t("common.add", "添加")}
                   </button>
@@ -341,7 +341,7 @@ export default function SecurityPage() {
             value={sec.l2pass_provider_id}
             onChange={(e) => saveSec({ l2pass_provider_id: e.target.value })}
             disabled={!sec.l2pass_enabled}
-            className="min-w-48 flex-1 rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100"
+            className="field min-w-48 flex-1"
           >
             <option value="">{t("sec.l2.providerNone", "请选择审核 provider")}</option>
             {providers.map((p) => (

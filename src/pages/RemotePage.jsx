@@ -228,14 +228,14 @@ export default function RemotePage({ onStats }) {
               setEnabled((v) => !v);
               setTestState(null);
             }}
-            className={`relative h-7 w-14 rounded-full border transition-colors ${
+            className={`relative h-7 w-14 rounded-full border transition-colors duration-200 ${
               enabled
                 ? "accent-solid"
                 : "border-neutral-300 bg-neutral-200 dark:border-neutral-700 dark:bg-neutral-800"
             }`}
           >
             <span
-              className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow transition-all ${
+              className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow transition-all duration-200 ${
                 enabled ? "left-8" : "left-1"
               }`}
             />
@@ -282,14 +282,14 @@ export default function RemotePage({ onStats }) {
             {/* 密码启用小圆片开关 */}
             <button
               onClick={() => setPwdEnabled((v) => !v)}
-              className={`relative h-7 w-14 shrink-0 rounded-full border transition-colors ${
+              className={`relative h-7 w-14 shrink-0 rounded-full border transition-colors duration-200 ${
                 pwdEnabled
                   ? "accent-solid"
                   : "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-800"
               }`}
             >
               <span
-                className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow transition-all ${
+                className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow transition-all duration-200 ${
                   pwdEnabled ? "left-8 border border-neutral-300" : "left-1 bg-neutral-400"
                 }`}
               />
@@ -473,7 +473,7 @@ export default function RemotePage({ onStats }) {
 
             {qrErr && <p className="px-2 text-[11px] text-red-600">{qrErr}</p>}
 
-            <p className="rounded-xl bg-neutral-100 px-3 py-2 text-[11px] leading-relaxed text-neutral-500 dark:bg-neutral-800/60 dark:text-neutral-400">
+            <p className="rounded-2xl bg-neutral-100 px-3 py-2 text-[11px] leading-relaxed text-neutral-500 dark:bg-neutral-800/60 dark:text-neutral-400">
               {t("remote.qrPrivacy")}
             </p>
           </div>
@@ -485,7 +485,7 @@ export default function RemotePage({ onStats }) {
         <p className="mb-3 text-xs text-neutral-500">
           {t("remote.openaiDesc")}
         </p>
-        <p className="mb-3 rounded-xl bg-neutral-100 px-3 py-2 text-xs text-neutral-500 dark:bg-neutral-900">
+        <p className="mb-3 rounded-2xl bg-neutral-100 px-3 py-2 text-xs text-neutral-500 dark:bg-neutral-900">
           {t("remote.mcpNote")}
         </p>
         <div className="mb-2 flex gap-2">

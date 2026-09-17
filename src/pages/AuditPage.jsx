@@ -210,7 +210,7 @@ export default function AuditPage() {
                   {(diag.crashes || []).length === 0 ? (
                     <p className="text-neutral-400">{t("diag.noCrashes")}</p>
                   ) : (
-                    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-xl bg-neutral-100 p-3 font-mono leading-relaxed dark:bg-neutral-800/60">
+                    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-2xl bg-neutral-100 p-3 font-mono leading-relaxed dark:bg-neutral-800/60">
                       {diag.crashes
                         .map(
                           (c) =>
@@ -261,7 +261,7 @@ export default function AuditPage() {
                         api.deleteAuditEntry(e.id).then(reload);
                       }}
                       title={t("audit.delete")}
-                      className="text-neutral-300 transition-colors hover:text-red-500"
+                      className="icon-btn shrink-0 hover:text-red-500"
                     >
                       <IconTrash size={13} />
                     </button>
@@ -272,7 +272,7 @@ export default function AuditPage() {
           </tbody>
         </table>
         {shown.length === 0 && (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-neutral-400">
+          <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
             <IconAudit size={16} />
             {t("audit.empty")}
           </div>
@@ -287,7 +287,7 @@ export default function AuditPage() {
         >
           <div
             onClick={(ev) => ev.stopPropagation()}
-            className="card max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-5"
+            className="card max-h-[80vh] w-full max-w-2xl overflow-y-auto"
           >
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold">
@@ -313,7 +313,7 @@ export default function AuditPage() {
                 <span className="ml-1.5">{detail.ok ? t("toolcard.success") : t("toolcard.fail")}</span>
               </div>
             </div>
-            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-neutral-100 p-3 font-mono text-[11px] leading-relaxed dark:bg-neutral-800">
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-neutral-100 p-3 font-mono text-[11px] leading-relaxed dark:bg-neutral-800">
               {JSON.stringify(detail.detail, null, 2)}
             </pre>
           </div>

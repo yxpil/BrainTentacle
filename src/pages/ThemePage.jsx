@@ -56,8 +56,8 @@ export default function ThemePage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
-      <h2 className="text-xl font-semibold">{t("theme.title", "外观主题")}</h2>
-      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+      <h2 className="text-lg font-semibold">{t("theme.title", "外观主题")}</h2>
+      <p className="text-xs text-neutral-500">
         {t("theme.desc", "自定义背景、透明度、圆角和边框。所有改动即时生效并自动保存。")}
       </p>
 
@@ -186,7 +186,7 @@ export default function ThemePage() {
           </div>
 
           {look.bgImage ? (
-            <div className="relative h-40 w-full overflow-hidden rounded-xl border border-neutral-200 dark:border-neutral-800">
+            <div className="relative h-40 w-full overflow-hidden rounded-2xl border border-neutral-200 dark:border-neutral-800">
               <img src={look.bgImage} alt="" className="h-full w-full object-cover" />
               <div className="absolute bottom-2 right-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] text-white">
                 {t("theme.imageApplied", "已应用")}
@@ -195,7 +195,7 @@ export default function ThemePage() {
           ) : (
             <button
               onClick={() => fileRef.current?.click()}
-              className="flex h-32 w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-neutral-300 text-neutral-500 transition-colors hover:border-neutral-500 hover:text-neutral-700 dark:border-neutral-700 dark:hover:border-neutral-400 dark:hover:text-neutral-200"
+              className="flex h-32 w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-neutral-300 text-neutral-500 transition-colors hover:border-neutral-500 hover:text-neutral-700 dark:border-neutral-700 dark:hover:border-neutral-400 dark:hover:text-neutral-200"
             >
               <IconImage size={20} />
               <span>{t("theme.uploadImage", "点击上传背景图片")}</span>
@@ -338,7 +338,7 @@ function ColorInput({ value, onChange, presets }) {
           <button
             key={c}
             onClick={() => onChange(c)}
-            className={`h-6 w-6 rounded-md border transition-transform hover:scale-110 ${
+            className={`h-6 w-6 rounded-md border transition-transform duration-200 hover:scale-110 ${
               value.toLowerCase() === c.toLowerCase()
                 ? "border-[var(--accent)] ring-2 ring-[var(--accent)]/30"
                 : "border-neutral-200 dark:border-neutral-700"

@@ -254,6 +254,12 @@ function hideHoverWindow() {
   }
 }
 
+// 置顶到最高层（screen-saver 级）：保证压住系统 tooltip 空壳等一切 topmost 弹层
+function raiseHover() {
+  if (!hoverWin || hoverWin.isDestroyed()) return;
+  try { hoverWin.setAlwaysOnTop(true, 'screen-saver'); hoverWin.moveTop(); } catch {}
+}
+
 function showHoverWindow() {
   if (!tray) return;
   if (statusWin && !statusWin.isDestroyed() && statusWin.isVisible()) return; // 大面板开着就不弹小窗
@@ -262,11 +268,14 @@ function showHoverWindow() {
   const tb = tray.getBounds();
   const wa = screen.getDisplayNearestPoint({ x: tb.x, y: tb.y }).workArea;
   const x = Math.round(Math.min(Math.max(tb.x + tb.width / 2 - W / 2, wa.x), wa.x + wa.width - W));
-  let y = Math.round(tb.y - H - 8);
+  // 下沿压进任务栏顶部条带：盖住系统托盘自带的空 tooltip 空壳（setToolTip('') 后 Win11 仍会弹空框）。
+  // 压入深度按图标高度取 60%（12-28px），只盖图标上方的 tooltip 区，图标本身保持可点击
+  const SINK = Math.max(12, Math.min(Math.round(tb.height * 0.6), 28));
+  let y = Math.round(tb.y - H + SINK);
   if (y < wa.y) y = wa.y;
   if (hoverWin && !hoverWin.isDestroyed()) {
     // 复用已创建的小窗：重新定位到当前托盘位置（托盘图标可能移动）后显示
-    try { hoverWin.setBounds({ x, y, width: W, height: H }); hoverWin.show(); traySchedulePush(); startHoverWatch(); } catch {}
+    try { hoverWin.setBounds({ x, y, width: W, height: H }); hoverWin.show(); raiseHover(); traySchedulePush(); startHoverWatch(); } catch {}
     return;
   }
   hoverWin = new BrowserWindow({
@@ -298,7 +307,7 @@ function showHoverWindow() {
       const inTray = p.x >= b.x - 6 && p.x <= b.x + b.width + 6 && p.y >= b.y - 6 && p.y <= b.y + b.height + 6;
       if (!inTray) return;
     } catch {}
-    try { hoverWin.show(); traySchedulePush(); startHoverWatch(); } catch {}
+    try { hoverWin.show(); raiseHover(); traySchedulePush(); startHoverWatch(); } catch {}
   });
 }
 

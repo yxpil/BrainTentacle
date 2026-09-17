@@ -392,7 +392,7 @@ export default function AiSettingsPage({ onStats, stats }) {
       {/* 提供方列表 */}
       <div className="flex flex-col gap-2">
         {providers.length === 0 && (
-          <div className="card flex items-center justify-center gap-2 py-8 text-sm text-neutral-400">
+          <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
             <IconSettings size={16} />
             {t("ai.emptyProviders")}
           </div>
@@ -431,15 +431,13 @@ export default function AiSettingsPage({ onStats, stats }) {
             <button
               onClick={() => startEdit(p)}
               title={t("common.edit")}
-              className="rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            >
+              className="icon-btn shrink-0">
               <IconSettings size={15} />
             </button>
             <button
               onClick={() => remove(p.id)}
               title={t("common.delete")}
-              className="rounded-full p-2 text-neutral-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40"
-            >
+              className="icon-btn shrink-0 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40">
               <IconTrash size={15} />
             </button>
           </div>
@@ -471,7 +469,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                 key={v || "default"}
                 type="button"
                 onClick={() => saveParams({ ...params, reasoning_effort: v })}
-                className={`flex-1 rounded-full px-3 py-2 text-xs font-medium transition-all ${
+                className={`flex-1 rounded-full px-3 py-2 text-xs font-medium transition-colors duration-200 ${
                   params.reasoning_effort === v
                     ? "accent-solid"
                     : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
@@ -491,7 +489,7 @@ export default function AiSettingsPage({ onStats, stats }) {
               <button
                 type="button"
                 onClick={() => params.temperature !== null && saveParams({ ...params, temperature: null })}
-                className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors duration-200 ${
                   params.temperature === null
                     ? "accent-solid"
                     : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
@@ -502,7 +500,7 @@ export default function AiSettingsPage({ onStats, stats }) {
               <button
                 type="button"
                 onClick={() => (params.temperature === null ? saveParams({ ...params, temperature: 0.7 }) : saveParams({ ...params, temperature: Math.min(2, Math.max(0, params.temperature)) }))}
-                className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors duration-200 ${
                   params.temperature !== null
                     ? "accent-solid"
                     : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
@@ -521,7 +519,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                 step="0.1"
                 value={params.temperature}
                 onChange={(e) => saveParams({ ...params, temperature: parseFloat(e.target.value) }, true)}
-                className="flex-1"
+                className="flex-1 accent-[var(--accent)]"
               />
               <span className="w-10 text-right text-xs tabular-nums">{params.temperature.toFixed(1)}</span>
             </div>
@@ -717,7 +715,7 @@ export default function AiSettingsPage({ onStats, stats }) {
             )}
           </div>
           <textarea
-            className="field !rounded-lg min-h-[130px] resize-y font-mono text-xs leading-relaxed disabled:cursor-not-allowed disabled:opacity-50"
+            className="field !rounded-2xl min-h-[130px] resize-y font-mono text-xs leading-relaxed disabled:cursor-not-allowed disabled:opacity-50"
             value={wordsText}
             onChange={(e) => {
               setWordsText(e.target.value);
@@ -761,7 +759,7 @@ export default function AiSettingsPage({ onStats, stats }) {
             <p className="text-xs text-neutral-500">危险操作需要你确认</p>
           </div>
           <select
-            className="field !rounded-lg w-auto"
+            className="field w-auto"
             value={behavior.tool_approval}
             onChange={(e) => saveBehavior({ ...behavior, tool_approval: e.target.value })}
           >
@@ -790,7 +788,7 @@ export default function AiSettingsPage({ onStats, stats }) {
           )}
         </div>
         <textarea
-          className="field !rounded-lg min-h-[200px] resize-y font-mono text-xs leading-relaxed"
+          className="field !rounded-2xl min-h-[200px] resize-y font-mono text-xs leading-relaxed"
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
           placeholder="留空 = 使用内置模板。输入则完全覆盖，例如：&#10;你是我的专属编程助手。&#10;回答代码要完整可编译，先列出思路再给出实现。"
@@ -881,7 +879,7 @@ export default function AiSettingsPage({ onStats, stats }) {
           )}
         </div>
         <textarea
-          className="field !rounded-lg min-h-[100px] resize-y font-mono text-xs leading-relaxed"
+          className="field !rounded-2xl min-h-[100px] resize-y font-mono text-xs leading-relaxed"
           value={customPrompt}
           onChange={(e) => setCustomPrompt(e.target.value)}
           placeholder={`例如：\n你是一位严谨的 Rust 系统编程专家，回答时优先给出可编译的代码。\n你偏爱极简主义设计，讨厌冗余抽象。`}
@@ -939,7 +937,7 @@ export default function AiSettingsPage({ onStats, stats }) {
             value={hotkey}
             onChange={(e) => setHotkey(e.target.value)}
             placeholder="Alt+Shift+B"
-            className="w-40 rounded-full border border-neutral-200 bg-transparent px-3 py-1.5 text-center font-mono text-xs outline-none focus:border-neutral-400 dark:border-neutral-700"
+            className="field w-40 text-center font-mono text-xs"
           />
           {hotkey && (
             <button
@@ -1004,7 +1002,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                 key={preset.name}
                 type="button"
                 onClick={() => pickPreset(preset)}
-                className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors duration-200 ${
                   form.model === preset.model && form.base_url === preset.base
                     ? "accent-solid"
                     : "border-neutral-200 text-neutral-500 hover:border-neutral-400 hover:text-neutral-900 dark:border-neutral-700 dark:hover:border-neutral-500 dark:hover:text-white"
@@ -1024,7 +1022,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                 key={proto.id}
                 type="button"
                 onClick={() => pickProtocol(proto.id)}
-                className={`flex-1 rounded-full px-3 py-2 text-xs font-medium transition-all ${
+                className={`flex-1 rounded-full px-3 py-2 text-xs font-medium transition-colors duration-200 ${
                   form.protocol === proto.id
                     ? "accent-solid"
                     : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
@@ -1093,7 +1091,7 @@ export default function AiSettingsPage({ onStats, stats }) {
             <p className="mt-1 px-2 text-[11px] text-emerald-600 dark:text-emerald-400">{baseHint}</p>
           )}
           {Array.isArray(remoteModels) && remoteModels.length > 0 && (
-            <div className="mt-2 max-h-40 overflow-y-auto rounded-xl border border-neutral-200/80 dark:border-neutral-800">
+            <div className="mt-2 max-h-40 overflow-y-auto rounded-2xl border border-neutral-200/80 dark:border-neutral-800">
               {remoteModels.map((m) => {
                 const id = typeof m === "string" ? m : m.id;
                 const len = typeof m === "object" && m ? m.context_length : null;
@@ -1103,7 +1101,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                     key={id}
                     type="button"
                     onClick={() => setForm((f) => ({ ...f, model: id }))}
-                    className={`block w-full px-3 py-1.5 text-left font-mono text-[11px] transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
+                    className={`block w-full px-3 py-1.5 text-left font-mono text-[11px] transition-colors duration-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
                       form.model === id ? "text-neutral-900 dark:text-white" : "text-neutral-500"
                     }`}
                   >

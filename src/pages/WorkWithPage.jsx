@@ -156,7 +156,7 @@ export default function WorkWithPage() {
       {err && (
         <div className="card flex items-center gap-2 border-red-200 py-3 text-sm text-red-600">
           {err}
-          <button className="ml-auto h-6 w-6 rounded-full hover:bg-red-50" onClick={() => setErr("")}>
+          <button className="icon-btn ml-auto h-6 w-6 hover:bg-red-50" onClick={() => setErr("")}>
             <IconX size={13} className="mx-auto" />
           </button>
         </div>
@@ -184,7 +184,7 @@ export default function WorkWithPage() {
             <input className="field" placeholder={t("ww.cwdPlaceholder")} value={form.cwd}
               onChange={(e) => setForm({ ...form, cwd: e.target.value })} />
           </div>
-          <textarea className="min-h-[60px] w-full resize-y rounded-2xl border border-neutral-200 bg-neutral-50 p-3 text-sm outline-none focus:border-neutral-900 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100 dark:focus:border-neutral-200"
+          <textarea className="field !rounded-2xl min-h-[60px] resize-y"
             rows={2} placeholder={t("ww.envPlaceholder")}
             value={form.env} onChange={(e) => setForm({ ...form, env: e.target.value })} />
           <div className="flex items-center gap-4">
@@ -201,7 +201,7 @@ export default function WorkWithPage() {
           </div>
           <p className="text-xs text-neutral-400">{t("ww.autoHint")}</p>
           <div className="flex justify-end gap-2">
-            <button type="button" className="pill" onClick={() => setForm(null)}>{t("ww.cancel")}</button>
+            <button type="button" className="pill-outline pill-hover" onClick={() => setForm(null)}>{t("ww.cancel")}</button>
             <button className="pill pill-hover" disabled={busy || !form.name.trim() || !form.program.trim()}>
               {t("ww.save")}
             </button>
@@ -234,24 +234,24 @@ export default function WorkWithPage() {
                 <div className="flex shrink-0 items-center gap-1">
                   {running ? (
                     <button title={t("ww.stop")} disabled={busy}
-                      className="h-8 w-8 rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-red-600"
+                      className="icon-btn hover:bg-neutral-100 hover:text-red-600"
                       onClick={() => toggleRun(e)}>
                       <IconStop size={14} className="mx-auto" />
                     </button>
                   ) : (
                     <button title={t("ww.start")} disabled={busy}
-                      className="h-8 w-8 rounded-full text-neutral-500 transition-colors hover:bg-green-50 hover:text-green-600"
+                      className="icon-btn hover:bg-green-50 hover:text-green-600"
                       onClick={() => toggleRun(e)}>
                       <IconPlayTri size={14} className="mx-auto" />
                     </button>
                   )}
                   <button title={t("ww.edit")} disabled={busy || running}
-                    className="h-8 w-8 rounded-full text-sm text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40"
+                    className="icon-btn text-sm disabled:opacity-40"
                     onClick={() => startEdit(e)}>
                     ✎
                   </button>
                   <button title={t("common.delete")} disabled={busy}
-                    className="h-8 w-8 rounded-full text-neutral-300 transition-colors hover:bg-red-50 hover:text-red-600"
+                    className="icon-btn hover:bg-red-50 hover:text-red-600"
                     onClick={() => remove(e)}>
                     <IconTrash size={15} className="mx-auto" />
                   </button>
@@ -261,12 +261,12 @@ export default function WorkWithPage() {
                 <div className="mt-3">
                   <div className="mb-1 flex items-center gap-2 text-xs text-neutral-400">
                     {t("ww.logs")}
-                    <button className="ml-auto h-6 w-6 rounded-full hover:bg-neutral-100" onClick={() => setLogId("")}>
+                    <button className="icon-btn ml-auto h-6 w-6 hover:bg-neutral-100" onClick={() => setLogId("")}>
                       <IconX size={12} className="mx-auto" />
                     </button>
                   </div>
                   <pre ref={logBox}
-                    className="max-h-56 overflow-y-auto rounded-xl bg-neutral-100 p-3 text-xs leading-5 whitespace-pre-wrap break-all dark:bg-neutral-800 dark:text-neutral-200">
+                    className="max-h-56 overflow-y-auto rounded-2xl bg-neutral-100 p-3 text-xs leading-5 whitespace-pre-wrap break-all dark:bg-neutral-800 dark:text-neutral-200">
                     {logs.length === 0
                       ? <span className="text-neutral-400">{t("ww.noLogs")}</span>
                       : logs.map((l, i) => (
@@ -281,7 +281,7 @@ export default function WorkWithPage() {
           );
         })}
         {entries.length === 0 && !form && (
-          <div className="card flex items-center justify-center gap-2 py-10 text-sm text-neutral-400">
+          <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
             <IconWorkWith size={16} />
             {t("ww.empty")}
           </div>

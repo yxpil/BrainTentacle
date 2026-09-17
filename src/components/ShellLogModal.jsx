@@ -114,7 +114,7 @@ export default function ShellLogModal({ job, onClose, onStop }) {
               {t("chat.shellLog")} · <code className="text-xs">{job.job_id}</code>
             </h3>
             {closed && (
-              <span className="shrink-0 rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300">
+              <span className="chip shrink-0">
                 {t("chat.shellLogClosed")}
               </span>
             )}
@@ -123,14 +123,14 @@ export default function ShellLogModal({ job, onClose, onStop }) {
             {!closed && (
               <button
                 onClick={onStop}
-                className="rounded-md px-2 py-1 text-xs text-red-500 hover:bg-red-500/10"
+                className="rounded-full px-2.5 py-1 text-xs text-red-500 transition-colors hover:bg-red-500/10"
                 title={t("chat.shellLogStop")}
               >
                 <IconStop size={11} className="mr-1 inline" />
                 {t("chat.shellLogStop")}
               </button>
             )}
-            <button onClick={onClose} title={t("common.close")} className="rounded p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700">
+            <button onClick={onClose} title={t("common.close")} className="icon-btn h-7 w-7 shrink-0">
               <IconX size={14} />
             </button>
           </div>
@@ -141,7 +141,7 @@ export default function ShellLogModal({ job, onClose, onStop }) {
         <div
           ref={scrollerRef}
           onScroll={handleScroll}
-          className="min-h-0 flex-1 overflow-auto rounded-xl bg-neutral-950 p-3 font-mono text-[11px] leading-relaxed text-neutral-100"
+          className="min-h-0 flex-1 overflow-auto rounded-2xl bg-neutral-950 p-3 font-mono text-[11px] leading-relaxed text-neutral-100"
         >
           {err ? (
             <p className="text-red-400">{err}</p>

@@ -1112,7 +1112,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     <div className="relative flex h-full gap-2">
       {/* 拖拽文件 / 文件夹提示遮罩 */}
       {dragOver && (
-        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-neutral-400 bg-neutral-500/10 dark:border-neutral-500">
+        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-neutral-400 bg-neutral-500/10 dark:border-neutral-500">
           <div className="card px-6 py-4 text-sm font-medium">{t("chat.dropHint")}</div>
         </div>
       )}
@@ -1158,7 +1158,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
 
         <div className="flex-1 space-y-0.5 overflow-y-auto">
           {sessions.length === 0 && (
-            <div className="px-2 py-4 text-center text-xs text-neutral-400">{t("chat.noSessions")}</div>
+            <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-neutral-400">{t("chat.noSessions")}</div>
           )}
           {sessions.map((s) => {
             const active = s.id === activeId;
@@ -1288,7 +1288,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                 {colorFor === s.id && (
                   <div
                     onMouseDown={(e) => e.stopPropagation()}
-                    className="mt-0.5 rounded-xl border border-neutral-200 bg-white p-2 shadow-sm dark:border-neutral-700 dark:bg-neutral-900"
+                    className="mt-0.5 rounded-2xl border border-neutral-200 bg-white p-2 shadow-sm dark:border-neutral-700 dark:bg-neutral-900"
                   >
                     <div className="mb-1.5 flex items-center justify-between">
                       <span className="text-[10px] font-medium text-neutral-500 dark:text-neutral-300">
@@ -1306,7 +1306,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                         <button
                           onClick={() => setColorFor(null)}
                           title={t("common.close")}
-                          className="text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
+                          className="icon-btn h-6 w-6 shrink-0"
                         >
                           <IconX size={11} />
                         </button>
@@ -1318,7 +1318,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                           key={c}
                           onClick={() => setTagColor(s.id, c)}
                           title={c}
-                          className={`h-[18px] w-[18px] rounded-full transition-transform hover:scale-110 ${
+                          className={`h-[18px] w-[18px] rounded-full ${
                             s.color === c ? "ring-2 ring-neutral-900/40 ring-offset-1 dark:ring-white/50" : ""
                           }`}
                           style={{ background: c }}
@@ -1584,14 +1584,14 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                 {t("chat.approvalTitle")}
                 <span className="font-mono">{a.tool}</span>
               </div>
-              <pre className="mb-2 max-h-32 overflow-auto rounded-xl bg-neutral-100 p-2 text-[11px] dark:bg-neutral-900">
+              <pre className="mb-2 max-h-32 overflow-auto rounded-2xl bg-neutral-100 p-2 text-[11px] dark:bg-neutral-900">
                 {JSON.stringify(a.params, null, 2)}
               </pre>
               <div className="flex gap-2">
                 <button onClick={() => answerApproval(a.id, true)} className="pill pill-hover">
                   {t("chat.approve")}
                 </button>
-                <button onClick={() => answerApproval(a.id, false)} className="pill pill-outline text-red-500">
+                <button onClick={() => answerApproval(a.id, false)} className="pill-outline pill-hover text-red-500">
                   {t("chat.reject")}
                 </button>
               </div>
@@ -1702,7 +1702,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
               <button
                 onClick={() => setUrlOpen(false)}
                 title={t("common.close")}
-                className="shrink-0 rounded-full p-1.5 hover:bg-neutral-900/5 dark:hover:bg-white/10"
+                className="icon-btn h-7 w-7 shrink-0"
               >
                 <IconX size={14} />
               </button>
@@ -1713,7 +1713,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
 
           {/* 子代理状态条：宿主派出的子代理实时进度（点击查看子会话全过程） */}
           {subList.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs dark:border-neutral-800 dark:bg-neutral-900">
+            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs dark:border-neutral-800 dark:bg-neutral-900">
               <IconQueue size={14} className="shrink-0 text-neutral-500" />
               {subList.map((s) => {
                 const done = s.phase === "done";
@@ -1865,7 +1865,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                     )}
                   </div>
                   {planVisibleTodos.length === 0 && planVisibleGoals.length === 0 ? (
-                    <p className="py-4 text-center text-xs text-neutral-400">(暂无目标与待办)</p>
+                    <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-neutral-400">(暂无目标与待办)</p>
                   ) : (
                     planGroups.map((grp, gi) => {
                       const goalDone = grp.goal && grp.goal.status === "achieved";
@@ -1959,7 +1959,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                     <div>
                       <p className="mb-0.5 text-neutral-500">{t("chat.delegateAutoGoals")}</p>
                       {delegateGoals.length === 0 ? (
-                        <p className="text-neutral-400">{t("chat.delegateAutoEmpty")}</p>
+                        <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-neutral-400">{t("chat.delegateAutoEmpty")}</p>
                       ) : (
                         <ul className="space-y-0.5">
                           {delegateGoals.map((g) => {
@@ -1982,7 +1982,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                     <div>
                       <p className="mb-0.5 text-neutral-500">{t("chat.delegateAutoRunning")}</p>
                       {subList.length === 0 ? (
-                        <p className="text-neutral-400">{t("chat.delegateAutoEmpty")}</p>
+                        <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-neutral-400">{t("chat.delegateAutoEmpty")}</p>
                       ) : (
                         <ul className="space-y-0.5">
                           {subList.map((s) => {
@@ -2076,7 +2076,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                     {t("chat.bgJobsHint")}
                   </p>
                   {shellJobs.jobs.length === 0 ? (
-                    <p className="py-4 text-center text-xs text-neutral-400">{t("chat.bgJobsEmpty")}</p>
+                    <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-neutral-400">{t("chat.bgJobsEmpty")}</p>
                   ) : (
                     <ul className="space-y-1">
                       {shellJobs.jobs.map((j) => {
@@ -2185,7 +2185,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                   <span>
                     {t("chat.previewTokens")} ~{preview.est_tokens}
                   </span>
-                  <button onClick={() => setPreviewOpen(false)} title={t("common.close")}>
+                  <button onClick={() => setPreviewOpen(false)} title={t("common.close")} className="icon-btn h-7 w-7 shrink-0">
                     <IconX size={14} />
                   </button>
                 </div>
@@ -2193,7 +2193,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
                 <div>
                   <p className="mb-1 text-xs font-semibold text-neutral-500">{t("chat.previewSystem")}</p>
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-neutral-100 p-2.5 text-[11px] leading-relaxed dark:bg-neutral-900">
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-2xl bg-neutral-100 p-2.5 text-[11px] leading-relaxed dark:bg-neutral-900">
                     {preview.system}
                   </pre>
                 </div>
@@ -2203,7 +2203,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                     {preview.messages.slice(1).map((m) => (
                       <div
                         key={m.index}
-                        className="rounded-xl bg-neutral-100 px-2.5 py-1.5 text-[11px] dark:bg-neutral-900"
+                        className="rounded-2xl bg-neutral-100 px-2.5 py-1.5 text-[11px] dark:bg-neutral-900"
                       >
                         <span className="mr-2 font-mono font-semibold">{m.role}</span>
                         <span className="text-neutral-500">

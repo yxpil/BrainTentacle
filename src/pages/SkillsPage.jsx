@@ -143,7 +143,7 @@ export default function SkillsPage({ onStats }) {
             </div>
             <button
               title={t("common.delete")}
-              className="mt-0.5 h-7 w-7 shrink-0 rounded-full text-neutral-300 transition-colors hover:bg-red-50 hover:text-red-600"
+              className="icon-btn mt-0.5 shrink-0 hover:bg-red-50 hover:text-red-600"
               disabled={busy}
               onClick={() => removeOne(s.id)}
             >
@@ -152,7 +152,7 @@ export default function SkillsPage({ onStats }) {
           </div>
         ))}
         {skills.length === 0 && (
-          <div className="card flex items-center justify-center gap-2 py-10 text-sm text-neutral-400">
+          <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
             <IconSkill size={16} />
             {t("skills.empty")}
           </div>

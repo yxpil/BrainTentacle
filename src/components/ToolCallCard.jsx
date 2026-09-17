@@ -22,7 +22,7 @@ function Block({ label, children, tone = "" }) {
     <div>
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">{label}</div>
       <pre
-        className={`max-h-56 overflow-auto rounded-lg p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all ${tone || "bg-white/70 text-neutral-700 dark:bg-black/40 dark:text-neutral-300"}`}
+        className={`max-h-56 overflow-auto rounded-2xl p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all ${tone || "bg-white/70 text-neutral-700 dark:bg-black/40 dark:text-neutral-300"}`}
       >
         {children}
       </pre>

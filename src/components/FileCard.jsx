@@ -42,13 +42,13 @@ export default function FileCard({ path, bytes, note }) {
         </div>
         <button
           onClick={() => open(false)}
-          className="accent-solid rounded-full px-3 py-1 text-xs font-medium transition-colors"
+          className="pill pill-hover"
         >
           {t("filecard.open")}
         </button>
         <button
           onClick={() => open(true)}
-          className="rounded-full border border-neutral-300 px-3 py-1 text-xs font-medium text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-neutral-900 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white"
+          className="pill-outline pill-hover"
         >
           {t("filecard.reveal")}
         </button>
