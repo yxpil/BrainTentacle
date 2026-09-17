@@ -127,11 +127,28 @@
   .foot .gap { width: 10px; }
   .foot .hint { margin-left: auto; font-size: 10px; color: var(--text3); }
 
-  /* ── hover 紧凑模式（托盘悬浮预览 ?mode=hover）：去标题栏/按钮/计划子代理区，只读预览 ── */
+  /* ── 滚动条：与主界面同款悬浮小胶囊（8px、圆角、透明轨道、无上下箭头） ── */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb {
+    background: #d4d4d8; /* neutral-300，与主界面亮色一致 */
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+    min-height: 32px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+  body.dark ::-webkit-scrollbar-thumb { background: #3f3f46; }
+  body.dark ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  /* ── hover 紧凑模式（托盘悬浮预览 ?mode=hover）：去标题栏/大标题/按钮/计划子代理区，只读预览 ── */
   body.hover .titlebar,
   body.hover .foot,
   body.hover .sec-goals,
-  body.hover .sec-subs { display: none; }
+  body.hover .sec-subs,
+  body.hover .head h1 { display: none; }
   body.hover .scroll { padding-top: 12px; }
   body.hover .head { padding-bottom: 8px; }
   body.hover .overall { margin-bottom: 10px; padding: 10px 12px; }
