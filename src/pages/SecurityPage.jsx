@@ -341,7 +341,7 @@ export default function SecurityPage() {
             value={sec.l2pass_provider_id}
             onChange={(e) => saveSec({ l2pass_provider_id: e.target.value })}
             disabled={!sec.l2pass_enabled}
-            className="min-w-48 flex-1 rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600"
+            className="min-w-48 flex-1 rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100"
           >
             <option value="">{t("sec.l2.providerNone", "请选择审核 provider")}</option>
             {providers.map((p) => (

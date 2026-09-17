@@ -80,6 +80,12 @@
     background-color: var(--look-bg-color-dark, #18181b);
     color-scheme: dark;
   }
+  /* 原生 select 弹层选项：Windows Chromium 深色主题下会画白底白字，显式覆盖 */
+  .dark option,
+  .dark optgroup {
+    background-color: #26262b;
+    color: #e5e5e5;
+  }
   /* 滚动条：悬浮小胶囊。thumb 用透明边框内缩（background-clip: padding-box），
      上下端不贴轨道两端、左右不贴容器边缘，圆角容器里也不会顶出圆角 */
   ::-webkit-scrollbar {
