@@ -1317,6 +1317,38 @@ pub async fn mcp_import(ctx: &Arc<Ctx>, id: String) -> Result<serde_json::Value,
     Ok(json!({ "imported": imported, "skipped": skipped, "total": tools.len() }))
 }
 
+/// ── WorkWith 本地服务托管 ──
+
+/// 条目列表 + 运行态
+pub fn list_workwith(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    Ok(crate::workwith::list(ctx))
+}
+
+/// 条目保存（新增或更新）
+pub fn save_workwith(ctx: &Arc<Ctx>, entry: serde_json::Value) -> Result<serde_json::Value, String> {
+    crate::workwith::save(ctx, entry)
+}
+
+/// 条目删除（运行中先停止并解绑 MCP）
+pub async fn remove_workwith(ctx: &Arc<Ctx>, id: String) -> Result<serde_json::Value, String> {
+    crate::workwith::remove(ctx, &id).await
+}
+
+/// 手动启动
+pub async fn start_workwith(ctx: &Arc<Ctx>, id: String) -> Result<serde_json::Value, String> {
+    crate::workwith::start(ctx, &id).await
+}
+
+/// 手动停止
+pub async fn stop_workwith(ctx: &Arc<Ctx>, id: String) -> Result<serde_json::Value, String> {
+    crate::workwith::stop(ctx, &id).await
+}
+
+/// 实时日志（tail = 只取尾部 N 行）
+pub fn workwith_logs(id: String, tail: Option<u64>) -> Result<serde_json::Value, String> {
+    Ok(crate::workwith::logs_of(&id, tail.map(|n| n as usize)))
+}
+
 /// 手动压缩会话：用 AI 把全部历史总结为一条摘要（system 消息），释放上下文空间。
 /// 摘要写入会话后返回新消息列表；压缩不影响会话本身，可继续对话。
 pub async fn compress_session(ctx: &Arc<Ctx>, session_id: String) -> Result<serde_json::Value, String> {

@@ -225,6 +225,16 @@ export const IconServer = (p) => (
   </I>
 );
 
+// WorkWith：本地服务托管（服务器 + 播放三角）
+export const IconWorkWith = (p) => (
+  <I {...p}>
+    <rect x="3" y="4" width="18" height="7" rx="2" />
+    <rect x="3" y="13" width="18" height="7" rx="2" />
+    <polygon points="10,5.8 14,7.5 10,9.2" fill="currentColor" stroke="none" />
+    <polygon points="10,14.8 14,16.5 10,18.2" fill="currentColor" stroke="none" />
+  </I>
+);
+
 export const IconTerminal = (p) => (
   <I {...p}>
     <rect x="3" y="4" width="18" height="16" rx="2" />

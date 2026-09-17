@@ -5,11 +5,11 @@
 // M1-c 壳层重接：核心逻辑已下沉 bit-core（crates/bit-core），壳层 re-export 保持
 // crate::X 路径不变；本地只留 commands（#[tauri::command] 薄包装）/ tray / emitter（TauriEmitter）。
 pub use bit_core::{
-    agent, ai, audit, autopilot, config, console_codec, crash, delegation, desktop_ctl, engine,
-    extract, goal, guardian, hidden_code, http_api, l2pass, mcp, memory, netinfo, osprotect, paths,
-    perms, plugins, registry, relay, repetition, runtime, sandbox, script, script_runtime,
-    securefile, security, session, shellbg, state, store, syntax, task, toolenv, trace, tui,
-    update, worker,
+    agent, ai, audit, autopilot, commands_api, config, console_codec, crash, delegation,
+    desktop_ctl, engine, extract, goal, guardian, hidden_code, http_api, l2pass, mcp, memory,
+    netinfo, osprotect, paths, perms, plugins, registry, relay, repetition, runtime, sandbox,
+    script, script_runtime, securefile, security, session, shellbg, state, store, syntax, task,
+    toolenv, trace, tui, update, worker, workwith,
 };
 mod commands;
 // TUI 用的控制台附加/代码页还原（bit-core 实现，本壳 GUI 子系统启动时需要）
@@ -539,6 +539,12 @@ fn main() {
             commands::mcp_toggle,
             commands::mcp_remove,
             commands::mcp_import,
+            commands::list_workwith,
+            commands::save_workwith,
+            commands::remove_workwith,
+            commands::start_workwith,
+            commands::stop_workwith,
+            commands::workwith_logs,
             commands::chat_interrupt,
             commands::tool_approve,
             commands::set_tool_approval,

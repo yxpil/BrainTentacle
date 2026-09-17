@@ -143,6 +143,14 @@ export const api = {
   mcpRemove: (id) => invoke("mcp_remove", { id }),
   mcpImport: (id) => invoke("mcp_import", { id }),
 
+  // ── WorkWith 本地服务托管 ──
+  listWorkwith: () => invoke("list_workwith"),
+  saveWorkwith: (entry) => invoke("save_workwith", { entry }),
+  removeWorkwith: (id) => invoke("remove_workwith", { id }),
+  startWorkwith: (id) => invoke("start_workwith", { id }),
+  stopWorkwith: (id) => invoke("stop_workwith", { id }),
+  workwithLogs: (id, tail) => invoke("workwith_logs", { id, tail: tail ?? null }),
+
   // ── 中断 / 工具审批 / 上下文预览 ──
   chatInterrupt: (session_id) => invoke("chat_interrupt", { sessionId: session_id || "" }),
   toolApprove: (id, allow) => invoke("tool_approve", { id, allow }),

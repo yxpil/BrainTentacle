@@ -1964,6 +1964,49 @@ pub async fn mcp_import(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_
     Ok(json!({ "imported": imported, "skipped": skipped, "total": tools.len() }))
 }
 
+/// ── WorkWith 本地服务托管（薄包装，逻辑在 bit-core::workwith）──
+
+/// 条目列表 + 运行态
+#[tauri::command]
+pub fn list_workwith(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::list_workwith(&ctx)
+}
+
+/// 条目保存（新增或更新）
+#[tauri::command]
+pub fn save_workwith(state: State<'_, Arc<Ctx>>, entry: serde_json::Value) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::save_workwith(&ctx, entry)
+}
+
+/// 条目删除（运行中先停止并解绑 MCP）
+#[tauri::command]
+pub async fn remove_workwith(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::remove_workwith(&ctx, id).await
+}
+
+/// 手动启动
+#[tauri::command]
+pub async fn start_workwith(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::start_workwith(&ctx, id).await
+}
+
+/// 手动停止
+#[tauri::command]
+pub async fn stop_workwith(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::stop_workwith(&ctx, id).await
+}
+
+/// 实时日志（tail = 只取尾部 N 行）
+#[tauri::command]
+pub fn workwith_logs(id: String, tail: Option<u64>) -> Result<serde_json::Value, String> {
+    crate::commands_api::workwith_logs(id, tail)
+}
+
 /// 手动压缩会话：用 AI 把全部历史总结为一条摘要（system 消息），释放上下文空间。
 /// 摘要写入会话后返回新消息列表；压缩不影响会话本身，可继续对话。
 #[tauri::command]

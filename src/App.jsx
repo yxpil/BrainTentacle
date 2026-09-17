@@ -16,6 +16,7 @@ import SecurityPage from "./pages/SecurityPage.jsx";
 import RemotePage from "./pages/RemotePage.jsx";
 import AiSettingsPage from "./pages/AiSettingsPage.jsx";
 import ThemePage from "./pages/ThemePage.jsx";
+import WorkWithPage from "./pages/WorkWithPage.jsx";
 import {
   IconChat,
   IconTool,
@@ -30,6 +31,7 @@ import {
   IconPlus,
   IconShirt,
   IconShield,
+  IconWorkWith,
   IconCheck,
   IconChevronLeft,
 } from "./components/Icons.jsx";
@@ -39,6 +41,7 @@ import {
 const PAGES = {
   chat: { label: "nav.chat", icon: IconChat, page: ChatPage },
   tools: { label: "nav.tools", icon: IconTool, page: ToolsPage },
+  workwith: { label: "nav.workwith", icon: IconWorkWith, page: WorkWithPage },
   memory: { label: "nav.memory", icon: IconMemory, page: MemoryPage },
   skills: { label: "nav.skills", icon: IconSkill, page: SkillsPage },
   audit: { label: "nav.audit", icon: IconAudit, page: AuditPage },
@@ -51,7 +54,7 @@ const PAGES = {
 // 主功能：对话（AI 助手本体）单独置顶
 const PRIMARY = "chat";
 // 次级功能：分组列在下方
-const SECONDARY = ["tools", "memory", "skills", "audit", "security", "remote", "ai", "theme"];
+const SECONDARY = ["tools", "workwith", "memory", "skills", "audit", "security", "remote", "ai", "theme"];
 
 // 体积/速度友好格式化：B / KB / MB / GB
 const fmtBytes = (b) => {

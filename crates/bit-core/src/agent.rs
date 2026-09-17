@@ -783,6 +783,14 @@ pub async fn chat_turn(
         session_id.to_string()
     };
     let _turn = acquire_turn(ctx, &target)?;
+    // WorkWith 会话联动：新会话首回合（历史为空）时拉起联动条目（幂等；fire-and-forget 不阻塞回合）
+    let first_turn = {
+        let store = ctx.sessions.lock().unwrap();
+        store.sessions.iter().find(|s| s.id == target).map(|s| s.messages.is_empty()).unwrap_or(true)
+    };
+    if first_turn {
+        crate::workwith::ensure_auto_started(ctx);
+    }
     // 1) 追加用户消息到目标会话
     {
         let mut store = ctx.sessions.lock().unwrap();
@@ -1200,6 +1208,14 @@ pub async fn chat_turn_stream(
         session_id.to_string()
     };
     let _turn = acquire_turn(ctx, &target)?;
+    // WorkWith 会话联动：新会话首回合（历史为空）时拉起联动条目（幂等；fire-and-forget 不阻塞回合）
+    let first_turn = {
+        let store = ctx.sessions.lock().unwrap();
+        store.sessions.iter().find(|s| s.id == target).map(|s| s.messages.is_empty()).unwrap_or(true)
+    };
+    if first_turn {
+        crate::workwith::ensure_auto_started(ctx);
+    }
     // 1) 追加用户消息
     {
         let mut store = ctx.sessions.lock().unwrap();

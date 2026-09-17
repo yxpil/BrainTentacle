@@ -364,6 +364,14 @@ pub async fn dispatch(
         "mcp_remove" => bit_core::commands_api::mcp_remove(ctx, a_str(&args, "id")?).await,
         "mcp_import" => bit_core::commands_api::mcp_import(ctx, a_str(&args, "id")?).await,
 
+        // ---------- WorkWith 本地服务托管 ----------
+        "list_workwith" => bit_core::commands_api::list_workwith(ctx),
+        "save_workwith" => bit_core::commands_api::save_workwith(ctx, a_val(&args, "entry")),
+        "remove_workwith" => bit_core::commands_api::remove_workwith(ctx, a_str(&args, "id")?).await,
+        "start_workwith" => bit_core::commands_api::start_workwith(ctx, a_str(&args, "id")?).await,
+        "stop_workwith" => bit_core::commands_api::stop_workwith(ctx, a_str(&args, "id")?).await,
+        "workwith_logs" => bit_core::commands_api::workwith_logs(a_str(&args, "id")?, opt_u64(&args, "tail")),
+
         // ---------- 会话 ----------
         "compress_session" => bit_core::commands_api::compress_session(ctx, a_str(&args, "session_id")?).await,
         "list_sessions" => bit_core::commands_api::list_sessions(ctx),
