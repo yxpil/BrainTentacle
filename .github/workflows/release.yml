@@ -10,7 +10,7 @@ on:
       tag:
         description: "要构建并上传资产的 tag（如 v0.6.33）"
         required: true
-        default: "v0.6.34"
+        default: "v0.6.35"
       include_macos:
         description: "是否同时构建 macOS 包"
         type: boolean
