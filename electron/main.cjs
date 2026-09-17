@@ -65,6 +65,9 @@ let bit = null; // bit.node 导出：hostStart / invoke / onUiEvent
 let win = null;
 let tray = null;
 let statusWin = null; // 任务面板窗口（托盘打开的网页）
+let hoverWin = null;  // 托盘悬浮预览小窗（同一 tray-status.html 的 hover 紧凑模式）
+let hoverShowTimer = null; // mouse-move 防抖：快速划过不弹
+let hoverPollTimer = null; // 光标轮询：离开托盘图标与预览窗即收起
 
 // ── 托盘任务状态（从 core 事件流推导，纯内存；推送给任务面板网页） ──
 const trayState = {
@@ -147,6 +150,9 @@ function traySchedulePush() {
     if (statusWin && !statusWin.isDestroyed()) {
       try { statusWin.webContents.send('tray:status', snap); } catch {}
     }
+    if (hoverWin && !hoverWin.isDestroyed() && hoverWin.isVisible()) {
+      try { hoverWin.webContents.send('tray:status', snap); } catch {}
+    }
   }, 200); // 合并密集 delta 期间的重复推送
 }
 function trayTrackEvent(e) {
@@ -216,9 +222,93 @@ function createTray() {
     return;
   }
   tray.setToolTip('触手怪 Tentacle');
-  // 右键托盘 = 直接弹出任务面板网页（无原生菜单）；左键 = 主界面
-  tray.on('right-click', () => showStatusWindow(true));
-  tray.on('click', showWindow); // Windows 单击托盘图标
+  // 右键托盘 = 直接弹出任务面板网页（无原生菜单）；左键 = 主界面；悬浮 = 小窗预览
+  tray.on('right-click', () => { hideHoverWindow(); showStatusWindow(true); });
+  tray.on('click', () => { hideHoverWindow(); showWindow(); }); // Windows 单击托盘图标
+  // Windows 支持托盘 mouse-move：悬浮 500ms 防抖后弹出小窗预览当前任务
+  tray.on('mouse-move', onTrayMouseMove);
+}
+
+// ── 托盘悬浮预览小窗（同一网页的 hover 紧凑模式：只读总览 + 会话 + 后台命令） ──
+function onTrayMouseMove() {
+  if (hoverWin && !hoverWin.isDestroyed() && hoverWin.isVisible()) return; // 已显示：轮询负责收起
+  if (hoverShowTimer) return;
+  hoverShowTimer = setTimeout(() => {
+    hoverShowTimer = null;
+    showHoverWindow();
+  }, 500);
+}
+
+function hideHoverWindow() {
+  if (hoverShowTimer) { clearTimeout(hoverShowTimer); hoverShowTimer = null; }
+  if (hoverPollTimer) { clearInterval(hoverPollTimer); hoverPollTimer = null; }
+  if (hoverWin && !hoverWin.isDestroyed()) {
+    try { hoverWin.hide(); } catch {}
+  }
+}
+
+function showHoverWindow() {
+  if (!tray) return;
+  if (statusWin && !statusWin.isDestroyed() && statusWin.isVisible()) return; // 大面板开着就不弹小窗
+  const { screen } = require('electron');
+  const W = 320, H = 250;
+  const tb = tray.getBounds();
+  const wa = screen.getDisplayNearestPoint({ x: tb.x, y: tb.y }).workArea;
+  const x = Math.round(Math.min(Math.max(tb.x + tb.width / 2 - W / 2, wa.x), wa.x + wa.width - W));
+  let y = Math.round(tb.y - H - 8);
+  if (y < wa.y) y = wa.y;
+  if (hoverWin && !hoverWin.isDestroyed()) {
+    // 复用已创建的小窗：重新定位到当前托盘位置（托盘图标可能移动）后显示
+    try { hoverWin.setBounds({ x, y, width: W, height: H }); hoverWin.show(); traySchedulePush(); startHoverWatch(); } catch {}
+    return;
+  }
+  hoverWin = new BrowserWindow({
+    width: W, height: H, x, y,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    skipTaskbar: true,
+    show: false,
+    resizable: false,
+    focusable: false, // 纯预览不抢焦点（主界面/输入框保持焦点不闪）
+    backgroundColor: '#00000000',
+    icon: ICON,
+    webPreferences: {
+      contextIsolation: false,
+      nodeIntegration: true,
+      spellcheck: false,
+    },
+  });
+  hoverWin.setMenuBarVisibility(false);
+  hoverWin.loadFile(path.join(__dirname, 'tray-status.html'), { search: 'mode=hover' });
+  hoverWin.on('closed', () => { hoverWin = null; });
+  hoverWin.once('ready-to-show', () => {
+    // 显示前再确认鼠标仍在托盘上（防抖期间可能已移走）
+    try {
+      const p = screen.getCursorScreenPoint();
+      const b = tray.getBounds();
+      const inTray = p.x >= b.x - 6 && p.x <= b.x + b.width + 6 && p.y >= b.y - 6 && p.y <= b.y + b.height + 6;
+      if (!inTray) return;
+    } catch {}
+    try { hoverWin.show(); traySchedulePush(); startHoverWatch(); } catch {}
+  });
+}
+
+// 光标轮询：不在托盘图标区域也不在预览窗区域 → 收起（Windows 无托盘 mouse-leave 事件）
+function startHoverWatch() {
+  if (hoverPollTimer) return;
+  hoverPollTimer = setInterval(() => {
+    try {
+      const { screen } = require('electron');
+      if (!hoverWin || hoverWin.isDestroyed() || !hoverWin.isVisible() || !tray) { hideHoverWindow(); return; }
+      const p = screen.getCursorScreenPoint();
+      const tb = tray.getBounds();
+      const inTray = p.x >= tb.x - 6 && p.x <= tb.x + tb.width + 6 && p.y >= tb.y - 6 && p.y <= tb.y + tb.height + 6;
+      const hb = hoverWin.getBounds();
+      const inHover = p.x >= hb.x && p.x <= hb.x + hb.width && p.y >= hb.y && p.y <= hb.y + hb.height;
+      if (!inTray && !inHover) hideHoverWindow();
+    } catch { hideHoverWindow(); }
+  }, 300);
 }
 
 // ── 任务面板网页（右键托盘弹出，风格与主界面一致） ──

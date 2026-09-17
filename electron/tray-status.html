@@ -126,6 +126,15 @@
   .quit.danger:hover { color: #dc2626; background: rgba(220,38,38,0.08); }
   .foot .gap { width: 10px; }
   .foot .hint { margin-left: auto; font-size: 10px; color: var(--text3); }
+
+  /* ── hover 紧凑模式（托盘悬浮预览 ?mode=hover）：去标题栏/按钮/计划子代理区，只读预览 ── */
+  body.hover .titlebar,
+  body.hover .foot,
+  body.hover .sec-goals,
+  body.hover .sec-subs { display: none; }
+  body.hover .scroll { padding-top: 12px; }
+  body.hover .head { padding-bottom: 8px; }
+  body.hover .overall { margin-bottom: 10px; padding: 10px 12px; }
 </style>
 </head>
 <body>
@@ -143,19 +152,19 @@
       <span class="ts" id="ts"></span>
     </div>
     <div class="overall" id="overall"></div>
-    <div class="section">
+    <div class="section sec-chats">
       <div class="section-title"><span class="dot" id="d-chats"></span><span data-i18n="chats">运行中会话</span><span class="count" id="c-chats"></span></div>
       <div class="items" id="chats"></div>
     </div>
-    <div class="section">
+    <div class="section sec-jobs">
       <div class="section-title"><span class="dot" id="d-jobs"></span><span data-i18n="jobs">后台命令</span><span class="count" id="c-jobs"></span></div>
       <div class="items" id="jobs"></div>
     </div>
-    <div class="section">
+    <div class="section sec-subs">
       <div class="section-title"><span class="dot" id="d-subs"></span><span data-i18n="subs">子代理</span><span class="count" id="c-subs"></span></div>
       <div class="items" id="subs"></div>
     </div>
-    <div class="section">
+    <div class="section sec-goals">
       <div class="section-title"><span class="dot" id="d-goals"></span><span data-i18n="goals">活跃计划</span><span class="count" id="c-goals"></span></div>
       <div class="items" id="goals"></div>
     </div>
@@ -169,6 +178,10 @@
 </div>
 <script>
   const { ipcRenderer } = require('electron');
+  // 托盘悬浮预览模式（?mode=hover）：紧凑布局，只读总览 + 会话 + 后台命令
+  try {
+    if (new URLSearchParams(location.search).get('mode') === 'hover') document.body.classList.add('hover');
+  } catch {}
   let snap = { chats: [], jobs: [], subs: [], goals: [], theme: null, lang: 'zh' };
 
   // ── 双语：语言标记随快照（bit.db 统一源，主进程透传）——面板自身不落库 ──
