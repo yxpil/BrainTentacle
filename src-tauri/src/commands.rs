@@ -3130,7 +3130,7 @@ pub fn set_security_settings(
         let mut cfg = ctx.config.lock().unwrap();
         cfg.hidden_code_enabled = hidden_code_enabled;
         cfg.l2pass_enabled = l2pass_enabled;
-        cfg.l2pass_provider_id = l2pass_provider_id;
+        cfg.l2pass_provider_id = l2pass_provider_id.clone();
         cfg.l2pass_cover_auto = l2pass_cover_auto;
         cfg.revision += 1;
     }
@@ -3140,7 +3140,7 @@ pub fn set_security_settings(
         "ok": true,
         "hidden_code_enabled": hidden_code_enabled,
         "l2pass_enabled": l2pass_enabled,
-        "l2pass_provider_id": l2pass_provider_id,
+        "l2pass_provider_id": l2pass_provider_id.clone(),
         "l2pass_cover_auto": l2pass_cover_auto,
     }))
 }
