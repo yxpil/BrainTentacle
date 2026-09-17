@@ -66,7 +66,7 @@ let win = null;
 let tray = null;
 let statusWin = null; // 任务面板窗口（托盘打开的网页）
 let hoverWin = null;  // 托盘悬浮预览小窗（同一 tray-status.html 的 hover 紧凑模式）
-let hoverShowTimer = null; // mouse-move 防抖：快速划过不弹
+let hoverShowTimer = null; // hover 防抖：快速划过不弹
 let hoverPollTimer = null; // 光标轮询：离开托盘图标与预览窗即收起
 
 // ── 托盘任务状态（从 core 事件流推导，纯内存；推送给任务面板网页） ──
@@ -228,11 +228,11 @@ function createTray() {
     console.warn('[BIT] 托盘创建失败（不影响主流程）:', e.message);
     return;
   }
-  tray.setToolTip('触手怪 Tentacle');
+  tray.setToolTip(''); // 不显示系统 tooltip（悬浮预览小窗本身就是反馈，避免文字重叠）
   // 右键托盘 = 直接弹出任务面板网页（无原生菜单）；左键 = 主界面；悬浮 = 小窗预览
   tray.on('right-click', () => { hideHoverWindow(); showStatusWindow(true); });
   tray.on('click', () => { hideHoverWindow(); showWindow(); }); // Windows 单击托盘图标
-  // Windows 支持托盘 mouse-move：悬浮 500ms 防抖后弹出小窗预览当前任务
+  // Windows 托盘 mouse-move：悬浮 500ms 防抖后弹出小窗预览当前任务
   tray.on('mouse-move', onTrayMouseMove);
 }
 
@@ -277,6 +277,7 @@ function showHoverWindow() {
     skipTaskbar: true,
     show: false,
     resizable: false,
+    alwaysOnTop: true, // 悬浮预览必须置顶，否则压在当前焦点应用下面看不见
     focusable: false, // 纯预览不抢焦点（主界面/输入框保持焦点不闪）
     backgroundColor: '#00000000',
     icon: ICON,
