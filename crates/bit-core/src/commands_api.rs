@@ -2053,6 +2053,32 @@ pub fn set_language(ctx: &Arc<Ctx>, language: String) -> Result<serde_json::Valu
     Ok(json!({ "ok": true, "language": language }))
 }
 
+// ---------- 界面主题（数据库统一标记）----------
+
+/// 读界面主题：config.theme（"light"|"dark"|"auto"，空值视作 "light"）。
+/// 前端 useTheme 与 Electron 托盘/任务面板统一从这里取，避免 localStorage 只在渲染层可见
+pub fn get_theme(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    let theme = ctx.config.lock().unwrap().theme.clone();
+    Ok(json!({ "theme": if theme.is_empty() { "light" } else { theme.as_str() } }))
+}
+
+/// 写界面主题（前端 setMode 时调用）。仅接受 "light"/"dark"/"auto"
+pub fn set_theme(ctx: &Arc<Ctx>, theme: String) -> Result<serde_json::Value, String> {
+    if theme != "light" && theme != "dark" && theme != "auto" {
+        return Err("theme 仅支持 light / dark / auto".into());
+    }
+    {
+        let mut cfg = ctx.config.lock().unwrap();
+        if cfg.theme == theme {
+            return Ok(json!({ "ok": true, "theme": theme }));
+        }
+        cfg.theme = theme.clone();
+        cfg.revision += 1;
+    }
+    ctx.save_config();
+    Ok(json!({ "ok": true, "theme": theme }))
+}
+
 // ---------- 更新 ----------
 
 /// 手动触发下载当前平台更新包（启动后台任务会自动下；此处供 pill/远程 API 主动调用）

@@ -446,6 +446,8 @@ pub async fn dispatch(
 
         "get_language" => bit_core::commands_api::get_language(ctx),
         "set_language" => bit_core::commands_api::set_language(ctx, a_str(&args, "language")?),
+        "get_theme" => bit_core::commands_api::get_theme(ctx),
+        "set_theme" => bit_core::commands_api::set_theme(ctx, a_str(&args, "theme")?),
 
         // ---------- 更新 ----------
         "update_download" => bit_core::commands_api::update_download(ctx).await,

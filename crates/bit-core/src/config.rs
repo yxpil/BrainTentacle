@@ -156,6 +156,10 @@ pub struct Config {
     /// 共用同一标记（历史教训：语言只存 localStorage 时托盘面板读不到，双语失效）
     #[serde(default)]
     pub language: String,
+    /// 界面主题（"light" | "dark" | "auto"）：存库统一读取——前端 useTheme 与 Electron
+    /// 托盘/任务面板共用同一标记（与 language 同因：只存 localStorage 时面板读不到）
+    #[serde(default)]
+    pub theme: String,
     /// 远程对话限速：每 60 秒滑动窗口内允许的对话请求上限（/api/chat 与 /v1/chat/completions
     /// 按客户端 IP 分别计数；0=不限）
     #[serde(default = "default_chat_rpm_max")]
@@ -292,6 +296,7 @@ impl Default for Config {
             l2pass_provider_id: String::new(),
             l2pass_cover_auto: false,
             language: "zh".into(),
+            theme: "light".into(),
             device_registered_at: None,
             device_fp_hash: None,
             chat_rpm_max: default_chat_rpm_max(),

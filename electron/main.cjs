@@ -90,6 +90,20 @@ async function loadLang(retry) {
     if (retry) setTimeout(() => loadLang(false), 8000); // core 未就绪：静默补一次
   }
 }
+// 主题标记：启动从 bit.db 读（config.theme，"auto" 按系统色解析）——面板首帧即正确，
+// 之后前端切主题经 bit:theme-changed 实时推送覆盖
+async function loadTheme(retry) {
+  try {
+    const r = await bit.invoke('get_theme');
+    const mode = r?.theme === 'dark' || r?.theme === 'auto' ? r.theme : 'light';
+    const t = mode === 'auto'
+      ? (nativeTheme?.shouldUseDarkColors ? 'dark' : 'light')
+      : mode;
+    if (trayState.theme !== t) { trayState.theme = t; traySchedulePush(); }
+  } catch {
+    if (retry) setTimeout(() => loadTheme(false), 8000);
+  }
+}
 // 主界面主题 → 任务面板联动：preload 监听 html.dark class + 提取真实背景色 → 透传给面板
 // 解决"一个黑一个白"：面板不再硬编码色板，直接复用主界面的 --look-bg-color-light/dark
 ipcMain.on('bit:theme-changed', (_e, payload) => {
@@ -679,6 +693,7 @@ app.whenReady().then(async () => {
   createTray();
   startGoalsPolling(); // 活跃计划状态（托盘任务面板用）
   loadLang(true); // 界面语言（bit.db 统一标记；前端切换另有实时推送，此处兜底）
+  loadTheme(true); // 界面主题（bit.db 统一标记；前端切换另有实时推送，此处首帧兜底）
   try {
     const hk = await bit.invoke('get_hotkey', {});
     await ipcInvokeSetHotkey(String(hk?.hotkey || ''));

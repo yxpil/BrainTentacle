@@ -96,7 +96,15 @@ const DEFAULT_LOOK = {
   shadowOn: true,
 };
 
-/** 主题：light / dark / auto + 自定义强调色（--accent），均持久化到 localStorage */
+/** 主题：light / dark / auto + 自定义强调色（--accent）。
+ * 主题标记存 bit.db（config.theme）统一读取——托盘/任务面板共用（localStorage 仅作首帧缓存） */
+function pushTheme(mode) {
+  try {
+    const inv = window.__TAURI_INTERNALS__?.invoke;
+    if (inv) inv("set_theme", { theme: mode }).catch?.(() => {});
+  } catch { /* best-effort */ }
+}
+
 export function useTheme() {
   const [mode, setMode] = useState(() => localStorage.getItem(KEY) || "light");
   const [isDark, setIsDark] = useState(() => apply(localStorage.getItem(KEY) || "light"));
@@ -112,6 +120,7 @@ export function useTheme() {
 
   useEffect(() => {
     localStorage.setItem(KEY, mode);
+    pushTheme(mode);
     setIsDark(apply(mode));
     if (mode !== "auto") return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -119,6 +128,24 @@ export function useTheme() {
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, [mode]);
+
+  // 启动同步：以数据库为准（其他宿主改主题时保持一致）。best-effort，仅在值不同时切换
+  useEffect(() => {
+    let alive = true;
+    try {
+      const inv = window.__TAURI_INTERNALS__?.invoke;
+      if (inv) {
+        inv("get_theme", {})
+          .then((r) => {
+            const t = r?.theme === "dark" || r?.theme === "auto" ? r.theme : "light";
+            if (alive && t !== mode) setMode(t);
+          })
+          .catch?.(() => {});
+      }
+    } catch { /* ignore */ }
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 强调色变化立即生效（首次启动也恢复上次选择）
   useEffect(() => {
