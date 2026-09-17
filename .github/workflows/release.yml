@@ -11,7 +11,7 @@ on:
       tag:
         description: "要构建并上传资产的 tag（如 v0.6.30）"
         required: true
-        default: "v0.6.30"
+        default: "v0.6.31"
   push:
     tags:
       - "v*"
