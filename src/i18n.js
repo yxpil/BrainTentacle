@@ -10,7 +10,7 @@ let current = localStorage.getItem(KEY) || "zh";
 
 // html[lang] 是语言联动的观察源（preload MutationObserver → 主进程 → 托盘面板）
 function applyDom() {
-  try { document.documentElement.lang = current; } catch {}
+  try { document.documentElement.lang = current; } catch { /* 非 DOM 环境兜底 */ }
 }
 applyDom();
 
@@ -19,7 +19,7 @@ function pushLang(lang) {
   try {
     const inv = window.__TAURI_INTERNALS__?.invoke;
     if (inv) inv("set_language", { language: lang }).catch?.(() => {});
-  } catch {}
+  } catch { /* best-effort：窗口上下文不可用时静默 */ }
 }
 
 export function setLang(lang) {
@@ -50,7 +50,7 @@ export function syncLangFromDb() {
         }
       })
       .catch(() => {});
-  } catch {}
+  } catch { /* best-effort：调用通道不可用时静默 */ }
 }
 
 function subscribe(cb) {

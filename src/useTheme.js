@@ -144,8 +144,8 @@ export function useTheme() {
       }
     } catch { /* ignore */ }
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // 仅挂载时同步一次（闭包里的 mode 为首帧值；值相同时 setMode 不触发写库，无循环风险）
 
   // 强调色变化立即生效（首次启动也恢复上次选择）
   useEffect(() => {
