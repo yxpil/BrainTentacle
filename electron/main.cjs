@@ -162,21 +162,28 @@ function trayTrackEvent(e) {
   if (evt === 'chat-stream' || evt.startsWith('chat-stream-')) {
     if (p.type === 'final' || p.type === 'error') {
       if (trayState.chats.has(evt)) { trayState.chats.delete(evt); dirty = true; }
+      setTrayLamp(p.type === 'error' ? 'error' : 'ok'); // 指示灯：回合结束 → 绿（成功）/红（受阻）
     } else if (p.type && !trayState.chats.has(evt)) {
       trayState.chats.set(evt, { since: Date.now() }); dirty = true;
+      setTrayLamp('running');
     }
   } else if (evt === 'shell-job') {
     if (p.phase === 'started' || p.phase === 'background') {
       trayState.bgJobs.set(p.job_id, { command: p.command || '', session_id: p.session_id || '', since: Date.now() });
       dirty = true;
+      setTrayLamp('running');
     } else if (p.phase && trayState.bgJobs.has(p.job_id)) {
       trayState.bgJobs.delete(p.job_id); dirty = true;
+      // 指示灯：正常退出（code 0）→ 绿；非零/被终止 → 红
+      setTrayLamp(p.phase === 'done' && p.code === 0 ? 'ok' : 'error');
     }
   } else if (evt === 'subagent-lifecycle') {
     if (p.phase === 'spawn') {
       trayState.subagents.set(p.session_id, { title: p.title || '', since: Date.now() }); dirty = true;
+      setTrayLamp('running');
     } else if ((p.phase === 'done' || p.phase === 'error') && trayState.subagents.has(p.session_id)) {
       trayState.subagents.delete(p.session_id); dirty = true;
+      setTrayLamp(p.phase === 'error' ? 'error' : 'ok');
     }
   }
   if (dirty) traySchedulePush();
@@ -309,6 +316,65 @@ function startHoverWatch() {
       if (!inTray && !inHover) hideHoverWindow();
     } catch { hideHoverWindow(); }
   }, 300);
+}
+
+// ── 托盘状态指示灯：应用图标右下角叠加状态圆点 ──
+// 白=空闲（启动后无任务）· 黄=任务进行中 · 绿=最近任务成功 · 红=任务受阻
+// 运行时合成：隐藏窗口 canvas 画底图 + 圆点 → PNG dataURL → nativeImage（无新增资源文件）
+const lampIcons = { idle: null, running: null, ok: null, error: null };
+let trayLamp = 'idle'; // 当前指示灯状态（最后事件的推导结果）
+
+async function makeStatusIcons() {
+  let bw = null;
+  try {
+    const { nativeImage } = require('electron');
+    // 底图转 PNG dataURL：data: 页面里 img 加载 file:// ico 会被 Chromium 拦截，
+    // dataURL 无此限制；ico 解析交给 nativeImage
+    const basePng = nativeImage.createFromPath(ICON).toDataURL();
+    const html = `<!doctype html><canvas id="c" width="64" height="64"></canvas><script>
+      const draw = (color) => new Promise((res) => {
+        const img = new Image();
+        img.onload = () => {
+          const cv = document.getElementById('c');
+          const ctx = cv.getContext('2d');
+          ctx.clearRect(0, 0, 64, 64);
+          ctx.drawImage(img, 0, 0, 64, 64);
+          ctx.beginPath(); ctx.arc(48, 48, 11, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fill();
+          ctx.beginPath(); ctx.arc(48, 48, 8, 0, Math.PI * 2);
+          ctx.fillStyle = color; ctx.fill();
+          res(cv.toDataURL('image/png'));
+        };
+        img.onerror = () => res('');
+        img.src = ${JSON.stringify(basePng)};
+      });
+      window.__lampReady = Promise.all([draw('#ffffff'), draw('#eab308'), draw('#16a34a'), draw('#dc2626')])
+        .then((r) => { window.__lampResult = { idle: r[0], running: r[1], ok: r[2], error: r[3] }; });
+    <\/script>`;
+    bw = new BrowserWindow({ show: false, width: 1, height: 1, webPreferences: { offscreen: true } });
+    await bw.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    const out = await bw.webContents.executeJavaScript('window.__lampReady.then(() => window.__lampResult ?? null)');
+    if (!out || typeof out !== 'object') { console.warn('[BIT] 托盘指示灯合成失败：未取得绘制结果（保持原图标）'); return; }
+    let any = false;
+    for (const k of Object.keys(lampIcons)) {
+      if (out[k]) { lampIcons[k] = nativeImage.createFromDataURL(out[k]); any = true; }
+    }
+    if (any) { console.info('[BIT] 托盘指示灯图标合成完成'); updateTrayIcon(); }
+  } catch (e) { console.warn('[BIT] 托盘指示灯合成失败（保持原图标）:', e?.message || e); }
+  finally { try { bw?.destroy(); } catch {} }
+}
+
+function updateTrayIcon() {
+  if (!tray) return;
+  const img = lampIcons[trayLamp];
+  if (img) { try { tray.setImage(img); } catch {} }
+}
+
+// 事件流 → 指示灯：开始即黄，正常结束绿，出错红；无任何事件保持白
+function setTrayLamp(lamp) {
+  if (trayLamp === lamp) return;
+  trayLamp = lamp;
+  updateTrayIcon();
 }
 
 // ── 任务面板网页（右键托盘弹出，风格与主界面一致） ──
@@ -781,6 +847,7 @@ app.whenReady().then(async () => {
 
   // 托盘常驻（M3）+ 启动时按配置注册全局热键（与 Tauri 版 setup 行为一致）
   createTray();
+  makeStatusIcons(); // 异步合成托盘状态指示灯图标（失败保持原图标，不影响主流程）
   startGoalsPolling(); // 活跃计划状态（托盘任务面板用）
   loadLang(true); // 界面语言（bit.db 统一标记；前端切换另有实时推送，此处兜底）
   loadTheme(true); // 界面主题（bit.db 统一标记；前端切换另有实时推送，此处首帧兜底）
