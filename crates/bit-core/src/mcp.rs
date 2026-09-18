@@ -319,22 +319,9 @@ pub async fn list_tools(server: &McpServer) -> Result<Vec<McpTool>, String> {
     Ok(tools)
 }
 
-/// 调用服务器上的工具，返回拼接后的文本结果
-pub async fn call_tool(
-    server: &McpServer,
-    tool: &str,
-    args: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let http = client()?;
-    let (result, _) = rpc(
-        &http,
-        &server.url,
-        Some(&server.session),
-        "tools/call",
-        serde_json::json!({ "name": tool, "arguments": args }),
-    )
-    .await?;
-    // result.content: [{type:"text", text:"..."}]，拼接全部文本
+/// tools/call 原始 result → 统一输出：拼接全部 text 内容为 {text, raw}；
+/// isError 时报错；无文本时原样返回（http / stdio 共用）
+fn join_text_result(result: &serde_json::Value) -> Result<serde_json::Value, String> {
     let mut text = String::new();
     if let Some(items) = result.get("content").and_then(|v| v.as_array()) {
         for item in items {
@@ -356,9 +343,27 @@ pub async fn call_tool(
         return Err(if text.is_empty() { "MCP tool returned an error".to_string() } else { text });
     }
     if text.is_empty() {
-        return Ok(result);
+        return Ok(result.clone());
     }
     Ok(serde_json::json!({ "text": text, "raw": result }))
+}
+
+/// 调用服务器上的工具，返回拼接后的文本结果（http 传输）
+pub async fn call_tool(
+    server: &McpServer,
+    tool: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let http = client()?;
+    let (result, _) = rpc(
+        &http,
+        &server.url,
+        Some(&server.session),
+        "tools/call",
+        serde_json::json!({ "name": tool, "arguments": args }),
+    )
+    .await?;
+    join_text_result(&result)
 }
 
 /// 全局：查找已接入服务器
@@ -409,13 +414,12 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
             self.pending.lock().unwrap().insert(id, tx);
             let line = serde_json::to_vec(&req)
                 .map_err(|e| format!("序列化请求失败: {e}"))?;
-            {
-                let mut tx_guard = self.tx.lock().unwrap();
-                tx_guard
-                    .send(line)
-                    .await
-                    .map_err(|e| format!("写入子进程 stdin 失败: {e}"))?;
-            }
+            // Sender 是 Arc 句柄，克隆廉价；锁只保护克隆动作，不跨 await 持有
+            // （std MutexGuard 跨 await 会让整个 future 变成 !Send，污染所有调用方）
+            let tx = self.tx.lock().unwrap().clone();
+            tx.send(line)
+                .await
+                .map_err(|e| format!("写入子进程 stdin 失败: {e}"))?;
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 rx,
@@ -434,7 +438,9 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
                 "params": params,
             });
             if let Ok(line) = serde_json::to_vec(&req) {
-                if let Ok(mut tx) = self.tx.lock() {
+                // 同 call：克隆发送端后立即放锁，await 时不持有 std MutexGuard
+                let tx = self.tx.lock().ok().map(|g| g.clone());
+                if let Some(tx) = tx {
                     let _ = tx.send(line).await;
                 }
             }
@@ -627,6 +633,48 @@ pub fn unregister_stdio(registry: &McpProcessRegistry, id: &str) {
     }
 }
 
+/// 确保某 stdio server 的子进程已拉起：注册表里有直接复用；没有则 spawn + initialize。
+/// 懒恢复：应用重启后首次调用 / 导入时自动重连，壳层无需改启动流程
+pub async fn ensure_stdio(
+    ctx: &Arc<crate::state::Ctx>,
+    server: &McpServer,
+) -> Result<ArcStdioSession, String> {
+    if let Some(sess) = ctx.mcp_stdio.lock().unwrap().get(&server.id).cloned() {
+        return Ok(sess);
+    }
+    let (session, _, _, _) = register_stdio(
+        &ctx.mcp_stdio,
+        server.id.clone(),
+        server.command.clone(),
+        server.args.clone(),
+        server.env.clone(),
+    )
+    .await?;
+    Ok(session)
+}
+
+/// 统一工具调用入口：stdio 先 ensure 拉起进程再调用；http 走现有 call_tool
+pub async fn exec_tool(
+    ctx: &Arc<crate::state::Ctx>,
+    server: &McpServer,
+    tool: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    match server.transport {
+        McpTransport::Http => call_tool(server, tool, args).await,
+        McpTransport::Stdio => {
+            let sess = ensure_stdio(ctx, server).await?;
+            let raw = sess
+                .call(
+                    "tools/call",
+                    serde_json::json!({ "name": tool, "arguments": args }),
+                )
+                .await?;
+            join_text_result(&raw)
+        }
+    }
+}
+
 /// 统一入口：list_tools 根据传输方式分发
 pub async fn list_tools_dispatch(
     server: &McpServer,
@@ -709,30 +757,10 @@ pub async fn call_tool_dispatch(
         }
     };
 
-    // http 路径已经在 call_tool 里做了 text 拼接；stdio 走的是原始 result，这里统一处理
+    // http 路径已经在 call_tool 里做了 text 拼接；stdio 走的是原始 result，这里统一拼接
     match server.transport {
         McpTransport::Http => Ok(result),
-        McpTransport::Stdio => {
-            let mut text = String::new();
-            if let Some(items) = result.get("content").and_then(|v| v.as_array()) {
-                for item in items {
-                    if item.get("type").and_then(|v| v.as_str()) == Some("text") {
-                        if let Some(t) = item.get("text").and_then(|v| v.as_str()) {
-                            if !text.is_empty() { text.push('\n'); }
-                            text.push_str(t);
-                        }
-                    }
-                }
-            }
-            let is_error = result
-                .get("isError")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if is_error {
-                return Err(if text.is_empty() { "MCP tool returned an error".to_string() } else { text });
-            }
-            if text.is_empty() { Ok(result) } else { Ok(serde_json::json!({ "text": text, "raw": result })) }
-        }
+        McpTransport::Stdio => join_text_result(&result),
     }
 }
 

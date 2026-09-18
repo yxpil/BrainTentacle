@@ -1892,76 +1892,38 @@ pub async fn mcp_list(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, S
     Ok(json!({ "servers": list }))
 }
 
-/// 暂停 / 继续某个 MCP 服务器（暂停后其全部工具拒绝调用）
+/// stdio 接入：spawn 本地命令并 initialize 握手，成功则保存（薄包装，逻辑在 bit-core::commands_api）
+#[tauri::command]
+pub async fn mcp_add_stdio(
+    state: State<'_, Arc<Ctx>>,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::mcp_add_stdio(&ctx, name, command, args, env).await
+}
+
+/// 暂停 / 继续某个 MCP 服务器（暂停后其全部工具拒绝调用；薄包装，stdio 拉起/杀进程在 core）
 #[tauri::command]
 pub async fn mcp_toggle(state: State<'_, Arc<Ctx>>, id: String, enabled: bool) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
-    let name = {
-        let mut list = ctx.mcp.lock().unwrap();
-        let s = list.iter_mut().find(|s| s.id == id).ok_or("MCP 服务器不存在")?;
-        s.enabled = enabled;
-        s.name.clone()
-    };
-    ctx.save_mcp();
-    crate::audit::record(&ctx, "local-app", if enabled { "mcp.enable" } else { "mcp.disable" }, &name, json!({ "enabled": enabled }), true);
-    Ok(json!({ "id": id, "enabled": enabled }))
+    crate::commands_api::mcp_toggle(&ctx, id, enabled).await
 }
 
-/// 移除接入（其导入的工具同步移除）
+/// 移除接入（其导入的工具同步移除；薄包装，stdio 子进程清理在 core）
 #[tauri::command]
 pub async fn mcp_remove(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
-    let removed = {
-        let mut list = ctx.mcp.lock().unwrap();
-        let before = list.len();
-        list.retain(|s| s.id != id);
-        list.len() != before
-    };
-    if !removed {
-        return Err("MCP 服务器不存在".into());
-    }
-    // 同步移除该服务器导入的工具
-    {
-        let mut tools = ctx.tools.lock().unwrap();
-        tools.retain(|t| match &t.kind {
-            crate::registry::ToolKind::Mcp { server_id, .. } => server_id != &id,
-            _ => true,
-        });
-    }
-    ctx.save_mcp();
-    ctx.save_tools();
-    crate::audit::record(&ctx, "local-app", "mcp.remove", &id, json!({}), true);
-    Ok(json!({ "removed": id }))
+    crate::commands_api::mcp_remove(&ctx, id).await
 }
 
-/// 重新拉取某服务器的工具清单并导入注册中心（同名跳过）
+/// 重新拉取某服务器的工具清单并导入注册中心（同名跳过；薄包装，stdio 懒拉起在 core）
 #[tauri::command]
 pub async fn mcp_import(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
-    let server = crate::mcp::find(&ctx, &id).ok_or("MCP 服务器不存在")?;
-    let tools = crate::mcp::list_tools(&server).await?;
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-    for t in &tools {
-        let ok = crate::registry::register(
-            &ctx,
-            &t.name,
-            &format!("{}（MCP · {}）", t.description, server.name),
-            if t.input_schema.is_null() || !t.input_schema.is_object() {
-                json!({"type": "object", "properties": {}, "additionalProperties": true})
-            } else {
-                t.input_schema.clone()
-            },
-            crate::registry::ToolKind::Mcp { server_id: id.clone(), tool: t.name.clone() },
-            "mcp",
-        );
-        match ok {
-            Ok(_) => imported += 1,
-            Err(_) => skipped += 1,
-        }
-    }
-    crate::audit::record(&ctx, "local-app", "mcp.import", &server.name, json!({ "imported": imported, "skipped": skipped }), true);
-    Ok(json!({ "imported": imported, "skipped": skipped, "total": tools.len() }))
+    crate::commands_api::mcp_import(&ctx, id).await
 }
 
 /// ── WorkWith 本地服务托管（薄包装，逻辑在 bit-core::workwith）──

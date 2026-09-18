@@ -138,6 +138,8 @@ export const api = {
   // ── MCP（Model Context Protocol）接入 ──
   mcpDiscover: (host, start, end) => invoke("mcp_discover", { host, start, end }),
   mcpConnect: (url) => invoke("mcp_connect", { url }),
+  // stdio 接入：spawn 本地命令并 initialize 握手（如 python -m mcp_server_fetch）
+  mcpAddStdio: (name, command, args, env) => invoke("mcp_add_stdio", { name, command, args, env }),
   mcpList: () => invoke("mcp_list"),
   mcpToggle: (id, enabled) => invoke("mcp_toggle", { id, enabled }),
   mcpRemove: (id) => invoke("mcp_remove", { id }),

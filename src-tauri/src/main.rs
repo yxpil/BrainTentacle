@@ -535,6 +535,7 @@ fn main() {
             commands::compress_session,
             commands::mcp_discover,
             commands::mcp_connect,
+            commands::mcp_add_stdio,
             commands::mcp_list,
             commands::mcp_toggle,
             commands::mcp_remove,

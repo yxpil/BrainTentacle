@@ -100,6 +100,19 @@ fn opt_str_vec(args: &serde_json::Value, key: &str) -> Option<Vec<String>> {
         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
 }
 
+/// 字符串映射参数（mcp_add_stdio 的 env）：非字符串值跳过，缺省空表
+fn a_str_map(args: &serde_json::Value, key: &str) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    if let Some(o) = arg(args, key).and_then(|v| v.as_object()) {
+        for (k, v) in o {
+            if let Some(s) = v.as_str() {
+                m.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    m
+}
+
 /// 单一入口：与 Tauri 壳 invoke 同语义 —— 白名单外一律拒绝
 pub async fn dispatch(
     ctx: &Arc<Ctx>,
@@ -359,6 +372,16 @@ pub async fn dispatch(
             .await
         }
         "mcp_connect" => bit_core::commands_api::mcp_connect(ctx, a_str(&args, "url")?).await,
+        "mcp_add_stdio" => {
+            bit_core::commands_api::mcp_add_stdio(
+                ctx,
+                opt_str(&args, "name").unwrap_or_default(),
+                a_str(&args, "command")?,
+                opt_str_vec(&args, "args").unwrap_or_default(),
+                a_str_map(&args, "env"),
+            )
+            .await
+        }
         "mcp_list" => bit_core::commands_api::mcp_list(ctx).await,
         "mcp_toggle" => bit_core::commands_api::mcp_toggle(ctx, a_str(&args, "id")?, a_bool(&args, "enabled")?).await,
         "mcp_remove" => bit_core::commands_api::mcp_remove(ctx, a_str(&args, "id")?).await,

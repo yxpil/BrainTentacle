@@ -742,7 +742,8 @@ pub async fn invoke(
                     server.name
                 ));
             }
-            crate::mcp::call_tool(&server, tool, params.clone()).await
+            // 统一入口：stdio 自动拉起子进程（懒恢复），http 走原有 call_tool
+            crate::mcp::exec_tool(ctx, &server, tool, params.clone()).await
         }
         ToolKind::Script { code } => {
             // 在阻塞线程池中执行 Rhai 沙盒脚本，整体限时 30 秒

@@ -14,7 +14,62 @@ import {
   IconCode,
   IconRefresh,
   IconGlobe,
+  IconX,
 } from "../components/Icons.jsx";
+
+// stdio JSON 配置 textarea 的 placeholder：Cherry Studio 风格示例（代码示例不做翻译）
+const STDIO_JSON_EXAMPLE = `// 示例：
+// {
+//   "mcpServers": {
+//     "example-server": {
+//       "command": "npx",
+//       "args": ["-y", "mcp-server-example"]
+//     }
+//   }
+// }`;
+
+// 去掉 JSON 文本中的 // 注释（跳过字符串字面量内部，避免误伤 URL 等）
+const stripJsonComments = (text) => {
+  let out = "";
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      out += ch;
+      if (ch === "\\") {
+        out += text[i + 1] ?? "";
+        i++;
+      } else if (ch === '"') {
+        inStr = false;
+      }
+    } else if (ch === '"') {
+      inStr = true;
+      out += ch;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+};
+
+// 兼容三种输入：mcpServers 包裹 / 单 server 对象 {command,args} / 裸映射 {名字: {command,...}}
+const entriesFromStdioJson = (parsed) => {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (parsed.mcpServers && typeof parsed.mcpServers === "object" && !Array.isArray(parsed.mcpServers)) {
+    return Object.entries(parsed.mcpServers);
+  }
+  if (typeof parsed.command === "string") {
+    return [[typeof parsed.name === "string" ? parsed.name : "", parsed]];
+  }
+  const vals = Object.values(parsed);
+  if (vals.length > 0 && vals.every((v) => v && typeof v === "object" && !Array.isArray(v))) {
+    return Object.entries(parsed);
+  }
+  return null;
+};
 
 // 语言默认脚手架：读 stdin 的 JSON，把结果写 stdout
 const SCAFFOLD = {
@@ -101,6 +156,15 @@ export default function ToolsPage({ onStats }) {
   const [mcpUrl, setMcpUrl] = useState("");
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpMsg, setMcpMsg] = useState("");
+  // stdio 接入弹窗：本地命令子进程（如 python -m mcp_server_fetch）
+  const [showStdioModal, setShowStdioModal] = useState(false);
+  const [stdioMode, setStdioMode] = useState("json"); // json | form
+  const [stdioName, setStdioName] = useState("");
+  const [stdioCmd, setStdioCmd] = useState("");
+  const [stdioArgs, setStdioArgs] = useState("");
+  const [stdioEnv, setStdioEnv] = useState("");
+  const [stdioJson, setStdioJson] = useState("");
+  const [stdioErrs, setStdioErrs] = useState([]); // 弹窗内失败项：{ name, err }
   // 工具质量统计：tool_id → { recent_rate, recent_n, fail, last_err, avg_ms }
   const [stats, setStats] = useState({});
   const [plugins, setPlugins] = useState([]);
@@ -330,6 +394,114 @@ export default function ToolsPage({ onStats }) {
     }
   };
 
+  // stdio 接入弹窗：打开 / 关闭（Esc 与点遮罩同走 closeStdioModal）
+  const openStdioModal = () => {
+    setStdioErrs([]);
+    setStdioMode("json");
+    setShowStdioModal(true);
+  };
+  const closeStdioModal = () => {
+    if (mcpBusy) return;
+    setShowStdioModal(false);
+    setStdioErrs([]);
+  };
+  useEffect(() => {
+    if (!showStdioModal) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") closeStdioModal();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showStdioModal, mcpBusy]);
+
+  // 表单模式提交：spawn 本地命令 + 握手保存 + 导入工具清单；失败留在弹窗内展示
+  const submitStdioForm = async () => {
+    if (!stdioCmd.trim()) {
+      setStdioErrs([{ name: "-", err: t("tools.mcpStdioNeedCommand") }]);
+      return;
+    }
+    setMcpBusy(true);
+    setStdioErrs([]);
+    try {
+      const args = stdioArgs.split("\n").map((l) => l.trim()).filter(Boolean);
+      const env = {};
+      stdioEnv.split("\n").map((l) => l.trim()).filter(Boolean).forEach((l) => {
+        const i = l.indexOf("=");
+        if (i > 0) env[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+      });
+      const r = await api.mcpAddStdio(stdioName.trim(), stdioCmd.trim(), args, env);
+      const imp = await api.mcpImport(r.id);
+      setMcpMsg(`${r.server.name}: ${t("tools.mcpImported")} ${imp.imported} · ${t("tools.mcpSkipped")} ${imp.skipped}`);
+      setStdioName("");
+      setStdioCmd("");
+      setStdioArgs("");
+      setStdioEnv("");
+      setShowStdioModal(false);
+      await reload();
+      onStats?.();
+    } catch (e) {
+      setStdioErrs([{ name: stdioCmd.trim(), err: String(e) }]);
+    } finally {
+      setMcpBusy(false);
+    }
+  };
+
+  // JSON 模式提交：兼容 mcpServers 包裹 / 单对象 / 裸映射；部分失败列出失败项，成功的照常导入
+  const submitStdioJson = async () => {
+    setMcpBusy(true);
+    setStdioErrs([]);
+    try {
+      let parsed;
+      try {
+        parsed = JSON.parse(stripJsonComments(stdioJson));
+      } catch {
+        setStdioErrs([{ name: "JSON", err: t("tools.mcpStdioBadJson") }]);
+        return;
+      }
+      const entries = entriesFromStdioJson(parsed);
+      if (!entries || entries.length === 0) {
+        setStdioErrs([{ name: "JSON", err: t("tools.mcpStdioBadJson") }]);
+        return;
+      }
+      const oks = [];
+      const errs = [];
+      for (const [key, s] of entries) {
+        const label = String(key || s?.command || "server");
+        if (!s || typeof s.command !== "string" || !s.command.trim()) {
+          errs.push({ name: label, err: t("tools.mcpStdioNeedCommand") });
+          continue;
+        }
+        const env = {};
+        if (s.env && typeof s.env === "object") {
+          for (const [k, v] of Object.entries(s.env)) {
+            if (typeof v === "string") env[k] = v;
+            else if (typeof v === "number" || typeof v === "boolean") env[k] = String(v);
+          }
+        }
+        try {
+          const r = await api.mcpAddStdio(String(key || ""), s.command.trim(), Array.isArray(s.args) ? s.args.map(String) : [], env);
+          const imp = await api.mcpImport(r.id);
+          oks.push(`${r.server.name}: ${t("tools.mcpImported")} ${imp.imported || 0} · ${t("tools.mcpSkipped")} ${imp.skipped || 0}`);
+        } catch (e) {
+          errs.push({ name: label, err: String(e) });
+        }
+      }
+      if (oks.length > 0) {
+        setMcpMsg(oks.join(" · "));
+        await reload();
+        onStats?.();
+      }
+      if (errs.length > 0) {
+        setStdioErrs(errs); // 保留弹窗展示失败项
+      } else {
+        setStdioJson("");
+        setShowStdioModal(false);
+      }
+    } finally {
+      setMcpBusy(false);
+    }
+  };
+
   const kindTag = (kind) => {
     switch (kind?.kind) {
       case "builtin":
@@ -475,6 +647,14 @@ export default function ToolsPage({ onStats }) {
           />
         </div>
 
+        {/* stdio 接入：弹窗式手动配置（JSON / 表单双模式） */}
+        <div className="mb-3 flex justify-end">
+          <button onClick={openStdioModal} className="pill pill-outline pill-hover" disabled={mcpBusy}>
+            <IconPlus size={14} />
+            {t("tools.mcpStdioAdd")}
+          </button>
+        </div>
+
         {mcpMsg && <p className="mb-2 px-2 text-xs text-neutral-500 dark:text-neutral-400">{mcpMsg}</p>}
 
         {/* 扫描结果 */}
@@ -520,10 +700,12 @@ export default function ToolsPage({ onStats }) {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold">{s.name}</span>
-                      <span className="chip">MCP</span>
+                      <span className="chip">{s.transport === "stdio" ? "stdio" : "MCP"}</span>
                       <span className="chip">{toolCount} {t("tools.mcpTools")}</span>
                     </div>
-                    <p className="truncate font-mono text-xs text-neutral-500 dark:text-neutral-400">{s.url}</p>
+                    <p className="truncate font-mono text-xs text-neutral-500 dark:text-neutral-400">
+                      {s.transport === "stdio" ? [s.command, ...(s.args || [])].join(" ") : s.url}
+                    </p>
                   </div>
                 </div>
                 <button onClick={() => reimportMcp(s)} className="icon-btn shrink-0" title={t("tools.mcpImport")} disabled={mcpBusy}>
@@ -782,6 +964,90 @@ export default function ToolsPage({ onStats }) {
           )}
         </div>
       </section>
+
+      {/* ── stdio 手动配置弹窗：JSON / 表单双模式，Esc 或点遮罩关闭 ── */}
+      {showStdioModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={closeStdioModal}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="card flex max-h-[85vh] flex-col overflow-hidden shadow-[inset_0_2px_14px_rgba(0,0,0,0.08)] dark:shadow-[inset_0_2px_14px_rgba(0,0,0,0.45)]"
+            style={{ width: "min(90vw, 720px)" }}
+          >
+            {/* 头部：标题 + 模式切换 + 关闭 */}
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold">{t("tools.mcpStdioConfigure")}</h3>
+              <div className="mx-auto flex items-center gap-0.5 rounded-full bg-neutral-100 p-0.5 dark:bg-neutral-900">
+                {[
+                  ["json", t("tools.mcpStdioRaw")],
+                  ["form", t("tools.mcpStdioForm")],
+                ].map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    onClick={() => setStdioMode(mode)}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors duration-200 ${
+                      stdioMode === mode ? "accent-solid" : "text-neutral-500 hover:text-neutral-900 dark:hover:text-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button onClick={closeStdioModal} className="icon-btn shrink-0" title={t("common.close")} disabled={mcpBusy}>
+                <IconX size={14} />
+              </button>
+            </div>
+
+            {/* 主体：JSON 大输入框 或 表单字段 */}
+            <div className="mt-3 flex-1 overflow-y-auto">
+              {stdioMode === "json" ? (
+                <textarea
+                  className="field !rounded-2xl min-h-[300px] w-full resize-y font-mono text-xs"
+                  value={stdioJson}
+                  onChange={(e) => setStdioJson(e.target.value)}
+                  placeholder={STDIO_JSON_EXAMPLE}
+                  spellCheck={false}
+                />
+              ) : (
+                <div className="grid grid-cols-4 gap-2">
+                  <input className="field" placeholder={t("tools.mcpStdioName")} value={stdioName} onChange={(e) => setStdioName(e.target.value)} />
+                  <input className="field col-span-3 font-mono" placeholder={t("tools.mcpStdioCommand")} value={stdioCmd} onChange={(e) => setStdioCmd(e.target.value)} />
+                  <textarea className="field col-span-2 font-mono" rows={4} placeholder={t("tools.mcpStdioArgs")} value={stdioArgs} onChange={(e) => setStdioArgs(e.target.value)} />
+                  <textarea className="field col-span-2 font-mono" rows={4} placeholder={t("tools.mcpStdioEnv")} value={stdioEnv} onChange={(e) => setStdioEnv(e.target.value)} />
+                </div>
+              )}
+              {stdioErrs.length > 0 && (
+                <div className="mt-2 flex flex-col gap-1">
+                  {stdioErrs.map((f, i) => (
+                    <p key={i} className="text-xs text-red-500 dark:text-red-400">
+                      <span className="font-semibold">{f.name}</span> · {f.err}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 底部：风险提示 + 取消/确认 */}
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <p className="flex min-w-0 items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                {t("tools.mcpStdioRisk")}
+              </p>
+              <div className="flex shrink-0 gap-2">
+                <button onClick={closeStdioModal} className="pill pill-outline pill-hover" disabled={mcpBusy}>
+                  {t("tools.mcpStdioCancel")}
+                </button>
+                <button
+                  onClick={stdioMode === "json" ? submitStdioJson : submitStdioForm}
+                  className="pill pill-hover"
+                  disabled={mcpBusy}
+                >
+                  {t("tools.mcpStdioConfirm")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1251,8 +1251,90 @@ pub async fn mcp_list(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
     Ok(json!({ "servers": list }))
 }
 
+/// stdio 接入：spawn 本地命令并 initialize 握手（如 python -m mcp_server_fetch），
+/// 成功则保存；同 command+args 已存在则替换旧条目并杀掉旧进程
+pub async fn mcp_add_stdio(
+    ctx: &Arc<Ctx>,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+) -> Result<serde_json::Value, String> {
+    let command = command.trim().to_string();
+    if command.is_empty() {
+        return Err("请填写启动命令".into());
+    }
+    // 同 command+args 的旧 stdio 条目（替换目标），握手成功后再移除
+    let old_id = {
+        let list = ctx.mcp.lock().unwrap();
+        list.iter()
+            .find(|s| {
+                s.transport == crate::mcp::McpTransport::Stdio
+                    && s.command == command
+                    && s.args == args
+            })
+            .map(|s| s.id.clone())
+    };
+    let id = format!("mcp-{}", uuid::Uuid::new_v4().simple());
+    // spawn + initialize 握手：失败直接报错（不动已有状态），前端展示
+    let (session, srv_name, version, protocol) =
+        crate::mcp::stdio_session::spawn_and_initialize(id.clone(), command.clone(), args.clone(), env.clone())
+            .await?;
+    // 名称：用户填的 > serverInfo.name > command 文件名
+    let mut name = if name.trim().is_empty() { srv_name } else { name.trim().to_string() };
+    if name.is_empty() {
+        name = std::path::Path::new(&command)
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .unwrap_or(&command)
+            .to_string();
+    }
+    let server = crate::mcp::McpServer {
+        id: id.clone(),
+        name: name.clone(),
+        url: String::new(),
+        transport: crate::mcp::McpTransport::Stdio,
+        command,
+        args,
+        env,
+        version,
+        protocol,
+        session: String::new(),
+        enabled: true,
+        connected_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    };
+    // 替换旧条目：杀旧进程、删旧条目及其导入的工具（避免同名挡住重新导入）
+    if let Some(old) = &old_id {
+        crate::mcp::unregister_stdio(&ctx.mcp_stdio, old);
+        ctx.mcp.lock().unwrap().retain(|s| s.id != *old);
+        {
+            let mut tools = ctx.tools.lock().unwrap();
+            tools.retain(|t| match &t.kind {
+                crate::registry::ToolKind::Mcp { server_id, .. } => server_id != old,
+                _ => true,
+            });
+        }
+        ctx.save_tools();
+    }
+    ctx.mcp.lock().unwrap().push(server.clone());
+    ctx.save_mcp();
+    // 握手成功的会话直接入注册表（模仿 register_stdio 的插入方式，避免二次 spawn）
+    ctx.mcp_stdio.lock().unwrap().insert(id.clone(), session);
+    crate::audit::record(ctx, "local-app", "mcp.add_stdio", &name, json!({ "command": server.command, "args": server.args }), true);
+    Ok(json!({ "server": server, "id": id }))
+}
+
 /// 暂停 / 继续某个 MCP 服务器（暂停后其全部工具拒绝调用）
 pub async fn mcp_toggle(ctx: &Arc<Ctx>, id: String, enabled: bool) -> Result<serde_json::Value, String> {
+    // stdio 传输：继续时先拉起进程（失败保持暂停状态并报错）；暂停时杀掉子进程
+    let server = crate::mcp::find(ctx, &id).ok_or("MCP 服务器不存在")?;
+    if server.transport == crate::mcp::McpTransport::Stdio {
+        if enabled {
+            crate::mcp::ensure_stdio(ctx, &server).await?;
+        } else {
+            crate::mcp::unregister_stdio(&ctx.mcp_stdio, &id);
+        }
+    }
     let name = {
         let mut list = ctx.mcp.lock().unwrap();
         let s = list.iter_mut().find(|s| s.id == id).ok_or("MCP 服务器不存在")?;
@@ -1266,6 +1348,8 @@ pub async fn mcp_toggle(ctx: &Arc<Ctx>, id: String, enabled: bool) -> Result<ser
 
 /// 移除接入（其导入的工具同步移除）
 pub async fn mcp_remove(ctx: &Arc<Ctx>, id: String) -> Result<serde_json::Value, String> {
+    // stdio 传输：先杀掉子进程（http 无注册表条目，no-op）
+    crate::mcp::unregister_stdio(&ctx.mcp_stdio, &id);
     let removed = {
         let mut list = ctx.mcp.lock().unwrap();
         let before = list.len();
@@ -1292,7 +1376,13 @@ pub async fn mcp_remove(ctx: &Arc<Ctx>, id: String) -> Result<serde_json::Value,
 /// 重新拉取某服务器的工具清单并导入注册中心（同名跳过）
 pub async fn mcp_import(ctx: &Arc<Ctx>, id: String) -> Result<serde_json::Value, String> {
     let server = crate::mcp::find(ctx, &id).ok_or("MCP 服务器不存在")?;
-    let tools = crate::mcp::list_tools(&server).await?;
+    // stdio：先确保子进程已拉起（重启后懒恢复）再走 dispatch；http 原样
+    let tools = if server.transport == crate::mcp::McpTransport::Stdio {
+        crate::mcp::ensure_stdio(ctx, &server).await?;
+        crate::mcp::list_tools_dispatch(&server, Some(&ctx.mcp_stdio)).await?
+    } else {
+        crate::mcp::list_tools(&server).await?
+    };
     let mut imported = 0usize;
     let mut skipped = 0usize;
     for t in &tools {
