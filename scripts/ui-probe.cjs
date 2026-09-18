@@ -54,7 +54,12 @@ function evaluate(ws, expr) {
     : path.join(ROOT, 'node_modules', '.bin', 'electron');
   const child = spawn(electron, [`--remote-debugging-port=${PORT}`, path.join(ROOT, 'electron', 'main.cjs')], {
     cwd: ROOT,
-    env: { ...process.env, BIT_ELECTRON_DIST: '1', BIT_DATA_DIR: path.join(require('os').tmpdir(), `bit-ui-probe-${process.pid}`) },
+    env: {
+      ...process.env,
+      BIT_ELECTRON_DIST: '1',
+      // BIT_PROBE_DATA_DIR 可指定固定目录：跨重启验证 bit.db 持久化
+      BIT_DATA_DIR: process.env.BIT_PROBE_DATA_DIR || path.join(require('os').tmpdir(), `bit-ui-probe-${process.pid}`),
+    },
     stdio: 'ignore',
   });
   try {

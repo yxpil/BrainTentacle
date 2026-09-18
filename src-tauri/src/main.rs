@@ -456,6 +456,8 @@ fn main() {
             commands::is_headless,
             commands::ui_mounted,
             commands::check_updates,
+            commands::get_auto_update,
+            commands::set_auto_update,
             commands::update_download,
             commands::update_apply,
             commands::open_external,

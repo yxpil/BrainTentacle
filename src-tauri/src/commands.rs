@@ -3221,6 +3221,21 @@ pub async fn update_download(state: State<'_, Arc<Ctx>>) -> Result<serde_json::V
     Ok(status)
 }
 
+/// 自动更新开关状态（更新详情弹窗展示「不再更新/继续更新」用）
+#[tauri::command]
+pub fn get_auto_update(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::get_auto_update(&ctx(state))
+}
+
+/// 写自动更新开关（false = 启动不检测不静默下载，手动检查不受影响），立即持久化 bit.db
+#[tauri::command]
+pub fn set_auto_update(
+    state: State<'_, Arc<Ctx>>,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_auto_update(&ctx(state), enabled)
+}
+
 /// 应用已下载的更新：换装并重启（托盘退出时由 quit 处理器静默换装，不重启）
 #[tauri::command]
 pub async fn update_apply(app: tauri::AppHandle, state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {

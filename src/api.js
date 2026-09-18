@@ -175,6 +175,8 @@ export const api = {
   toggleAutopilot: () => invoke("toggle_autopilot"),
   // ── 版本更新：检查 / 后台下载（进度走 update-progress 事件）/ 换装重启 ──
   checkUpdates: () => invoke("check_updates"),
+  getAutoUpdate: () => invoke("get_auto_update"),
+  setAutoUpdate: (enabled) => invoke("set_auto_update", { enabled }),
   updateDownload: () => invoke("update_download"),
   updateApply: () => invoke("update_apply"),
   getToolStats: () => invoke("get_tool_stats"),

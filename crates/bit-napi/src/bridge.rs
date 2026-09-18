@@ -132,6 +132,8 @@ pub async fn dispatch(
         "check_updates" => bit_core::api::check_updates(ctx)
             .await
             .and_then(|u| serde_json::to_value(u).map_err(|e| e.to_string())),
+        "get_auto_update" => bit_core::commands_api::get_auto_update(ctx),
+        "set_auto_update" => bit_core::commands_api::set_auto_update(ctx, opt_bool(&args, "enabled").unwrap_or(false)),
         "quit_app" => Ok(bit_core::api::quit_app(ctx)),
         // Electron 启动链（Tauri setup 等价物）：守护布防/toolhomes/插件/HTTP/autopilot/自动更新
         "bootstrap_services" => Ok(bit_core::api::bootstrap_services(ctx)),

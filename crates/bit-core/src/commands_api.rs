@@ -2218,6 +2218,25 @@ pub fn set_theme(ctx: &Arc<Ctx>, theme: String) -> Result<serde_json::Value, Str
 
 // ---------- 更新 ----------
 
+/// 自动更新开关状态（更新详情弹窗展示「不再更新/继续更新」用）
+pub fn get_auto_update(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    Ok(json!({ "enabled": ctx.config.lock().unwrap().auto_update }))
+}
+
+/// 写自动更新开关：false = 启动不检测不静默下载（手动检查更新不受影响），立即持久化 bit.db
+pub fn set_auto_update(ctx: &Arc<Ctx>, enabled: bool) -> Result<serde_json::Value, String> {
+    {
+        let mut cfg = ctx.config.lock().unwrap();
+        if cfg.auto_update == enabled {
+            return Ok(json!({ "ok": true, "enabled": enabled }));
+        }
+        cfg.auto_update = enabled;
+        cfg.revision += 1;
+    }
+    ctx.save_config();
+    Ok(json!({ "ok": true, "enabled": enabled }))
+}
+
 /// 手动触发下载当前平台更新包（启动后台任务会自动下；此处供 pill/远程 API 主动调用）
 pub async fn update_download(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
     let status = crate::update::download_update(ctx).await?;

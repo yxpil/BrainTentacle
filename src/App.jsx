@@ -96,6 +96,32 @@ export default function App() {
   const [checking, setChecking] = useState(false);
   const [updErr, setUpdErr] = useState("");
   const [dl, setDl] = useState(null); // { downloaded, total, speed }
+  // 自动更新开关（bit.db 持久化）：false = 启动不检测不静默下载，手动检查不受影响
+  const [autoUpd, setAutoUpd] = useState(true);
+  const [autoUpdBusy, setAutoUpdBusy] = useState(false);
+
+  // 「关于」弹窗打开时读取当前开关状态
+  useEffect(() => {
+    if (!showAbout) return;
+    api
+      .getAutoUpdate()
+      .then((r) => setAutoUpd(!!r?.enabled))
+      .catch(() => {});
+  }, [showAbout]);
+
+  // 「不再更新 / 继续更新」：写 bit.db 并即时生效（下次启动起 auto_update_task 按此静默）
+  const doToggleAutoUpdate = async () => {
+    setAutoUpdBusy(true);
+    try {
+      const next = !autoUpd;
+      const r = await api.setAutoUpdate(next);
+      setAutoUpd(!!r?.enabled);
+    } catch {
+      // 静默失败：按钮状态不翻转，用户可重试
+    } finally {
+      setAutoUpdBusy(false);
+    }
+  };
 
   // 弹窗打开期间订阅后端广播：update-progress 推进进度条 / update-state(downloaded) 收尾
   useEffect(() => {
@@ -550,6 +576,20 @@ export default function App() {
                   )}
                 </div>
               )}
+
+              {/* 自动更新开关：面板底部常驻（未检查更新也能关），bit.db 持久化，手动检查不受影响 */}
+              <div className="flex items-center justify-between gap-2 border-t border-neutral-200/70 pt-2 dark:border-neutral-800/70">
+                <p className="text-[10px] leading-snug text-neutral-400">
+                  {autoUpd ? t("app.autoUpdOn") : t("app.autoUpdOff")}
+                </p>
+                <button
+                  onClick={doToggleAutoUpdate}
+                  disabled={autoUpdBusy}
+                  className="pill pill-outline shrink-0 !px-3 !py-1 !text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {autoUpd ? t("app.stopUpdates") : t("app.resumeUpdates")}
+                </button>
+              </div>
             </div>
 
             {/* 安卓版：二维码 + 打开下载页（二维码黑码白底，扫码可靠性优先于主题） */}

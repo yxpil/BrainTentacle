@@ -180,6 +180,10 @@ pub struct Config {
     /// 高权限模式意图：开启后以管理员/root 身份重启（实际是否提权以运行时探测为准）
     #[serde(default)]
     pub elevated: bool,
+    /// 自动更新开关：关闭后启动时不检测/不静默下载新版本（更新详情里的「不再更新」按钮写入）；
+    /// 手动「检查更新」不受影响
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
 }
 
 /// 目标自动推进的安全上限：同一目标最多自动续跑轮数（防空转无限烧 token）
@@ -304,6 +308,7 @@ impl Default for Config {
             relay_max_text_chars: default_relay_max_text_chars(),
             autostart: false,
             elevated: false,
+            auto_update: true,
         }
     }
 }

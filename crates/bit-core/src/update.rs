@@ -530,6 +530,10 @@ fn find_app_dir(dir: &Path) -> Option<PathBuf> {
 /// 启动后台自动更新：延时后检测 → 有新版本即静默下载（一次），发 update-state 事件。
 /// 下载失败静默跳过（不打扰用户，pill 仍可手动点击打开下载页）。
 pub async fn auto_update_task(ctx: Arc<Ctx>) {
+    // 用户点了「不再更新」：启动链路完全静默（手动检查更新不受影响）
+    if !ctx.config.lock().unwrap().auto_update {
+        return;
+    }
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
     let latest = match fetch_latest().await {
         Ok(l) => l,
