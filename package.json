@@ -1,7 +1,7 @@
 {
   "name": "bit-frontend",
   "private": true,
-  "version": "0.6.35",
+  "version": "0.6.36",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
