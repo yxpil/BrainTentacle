@@ -26,7 +26,20 @@ pub mod desktop_ctl;
 pub mod desktop_ctl {
     use std::sync::Arc;
     type Ctx = Arc<crate::state::Ctx>;
-    pub fn screenshot(_ctx: &Ctx, _d: usize, _r: Option<(u32, u32, u32, u32)>) -> Result<String, String> {
+    pub fn screenshot(
+        _ctx: &Ctx,
+        _d: usize,
+        _r: Option<(u32, u32, u32, u32)>,
+        _grid: bool,
+    ) -> Result<String, String> {
+        Err("此构建未编译本机操控能力（no-GUI/musl 目标）".into())
+    }
+    /// 格子规格 stub（exotic/musl 无屏幕概念）：签名与 desktop-ctl 版对齐，运行时报错
+    pub fn screen_dims(_d: usize) -> Result<(u32, u32, f64), String> {
+        Err("此构建未编译本机操控能力（no-GUI/musl 目标）".into())
+    }
+    /// 格子引用解析 stub：同上
+    pub fn parse_cell(_s: &str, _w: u32, _h: u32) -> Result<(i32, i32), String> {
         Err("此构建未编译本机操控能力（no-GUI/musl 目标）".into())
     }
     pub fn mouse(_a: &str, _p: &serde_json::Value) -> Result<serde_json::Value, String> {
