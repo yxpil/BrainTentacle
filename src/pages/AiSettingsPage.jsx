@@ -18,12 +18,12 @@ const PRESETS = [
   { name: "OpenAI GPT-5.6", protocol: "openai", base: "https://api.openai.com/v1", model: "gpt-5.6-sol" },
   { name: "DeepSeek", protocol: "openai", base: "https://api.deepseek.com/v1", model: "deepseek-chat" },
   { name: "Kimi K3", protocol: "openai", base: "https://api.moonshot.cn/v1", model: "kimi-k3" },
-  { name: "通义千问 Qwen", protocol: "openai", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-max" },
-  { name: "智谱 GLM-5.3", protocol: "openai", base: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3" },
+  { name: "Qwen (通义千问)", protocol: "openai", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-max" },
+  { name: "Zhipu GLM (智谱)", protocol: "openai", base: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3" },
   { name: "xAI Grok 4.6", protocol: "openai", base: "https://api.x.ai/v1", model: "grok-4.6" },
   { name: "OpenRouter", protocol: "openai", base: "https://openrouter.ai/api/v1", model: "openrouter/auto" },
-  { name: "硅基流动", protocol: "openai", base: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3" },
-  { name: "Ollama（本地）", protocol: "openai", base: "http://127.0.0.1:11434/v1", model: "qwen3" },
+  { name: "SiliconFlow (硅基流动)", protocol: "openai", base: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3" },
+  { name: "Ollama (local / 本地)", protocol: "openai", base: "http://127.0.0.1:11434/v1", model: "qwen3" },
   { name: "Google Gemini", protocol: "gemini", base: "https://generativelanguage.googleapis.com", model: "gemini-3.7-flash" },
   { name: "Claude Sonnet 5", protocol: "claude", base: "https://api.anthropic.com", model: "claude-sonnet-5" },
   { name: "Claude Fable 5", protocol: "claude", base: "https://api.anthropic.com", model: "claude-fable-5" },
@@ -588,9 +588,9 @@ export default function AiSettingsPage({ onStats, stats }) {
       <div className="card flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium">工具环境</p>
+            <p className="text-sm font-medium">{t("ai.toolEnvTitle")}</p>
             <p className="mt-0.5 text-xs text-neutral-500">
-              自定义工具的执行超时与 agent 执行命令所用的 shell；AI 代码环境统一收纳在数据目录 toolhomes（python venv / node_modules 自动就绪）
+              {t("ai.toolEnvDesc")}
             </p>
           </div>
           {toolEnvSaved && (
@@ -602,7 +602,7 @@ export default function AiSettingsPage({ onStats, stats }) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block px-2 text-xs text-neutral-500">工具超时（秒）</label>
+            <label className="mb-1 block px-2 text-xs text-neutral-500">{t("ai.toolTimeout")}</label>
             <input
               className="field tabular-nums"
               type="number"
@@ -613,35 +613,35 @@ export default function AiSettingsPage({ onStats, stats }) {
                 saveToolEnv({ ...toolEnv, tool_timeout_secs: Math.max(10, Math.min(600, parseInt(e.target.value, 10) || 120)) })
               }
             />
-            <p className="mt-1 px-2 text-[11px] text-neutral-400">默认 120，上限 600：鼠标/屏幕监听类长循环脚本建议调大</p>
+            <p className="mt-1 px-2 text-[11px] text-neutral-400">{t("ai.toolTimeoutHint")}</p>
           </div>
           <div>
-            <label className="mb-1 block px-2 text-xs text-neutral-500">默认 Shell</label>
+            <label className="mb-1 block px-2 text-xs text-neutral-500">{t("ai.defaultShell")}</label>
             <select
               className="field"
               value={toolEnv.default_shell}
               onChange={(e) => saveToolEnv({ ...toolEnv, default_shell: e.target.value })}
             >
-              <option value="">自动识别（推荐）</option>
+              <option value="">{t("ai.shellAuto")}</option>
               {toolEnv.available_shells.map((s) => (
                 <option key={s} value={s}>
                   {s}
                 </option>
               ))}
             </select>
-            <p className="mt-1 px-2 text-[11px] text-neutral-400">留空自动选本机最顺手的（Windows 优先 pwsh，Unix 优先登录 shell）</p>
+            <p className="mt-1 px-2 text-[11px] text-neutral-400">{t("ai.shellAutoHint")}</p>
           </div>
         </div>
       </div>
 
       {/* AI 行为设置 */}
       <div className="card flex flex-col gap-4">
-        <p className="text-sm font-medium">AI 行为设置</p>
+        <p className="text-sm font-medium">{t("ai.behaviorTitle")}</p>
 
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm">自动推进（auto-drive）</p>
-            <p className="text-xs text-neutral-500">回合结束后若有未完成目标，自动续跑直到完成</p>
+            <p className="text-sm">{t("ai.autoDrive")}</p>
+            <p className="text-xs text-neutral-500">{t("ai.autoDriveHint")}</p>
           </div>
           <PillSwitch
             checked={behavior.auto_drive}
@@ -685,10 +685,9 @@ export default function AiSettingsPage({ onStats, stats }) {
 
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm">兼容模式</p>
+            <p className="text-sm">{t("ai.compatMode")}</p>
             <p className="text-xs text-neutral-500">
-              默认走标准协议（原生工具调用）。开启后改用文本约定：注入 JSON 调用契约，
-              并识别回复中的单行 JSON 工具调用——用于不支持 tools 参数的端点
+              {t("ai.compatModeHint")}
             </p>
           </div>
           <PillSwitch
@@ -699,8 +698,8 @@ export default function AiSettingsPage({ onStats, stats }) {
 
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm">敏感词审核</p>
-            <p className="text-xs text-neutral-500">HTTP 对话端点输入/输出双向过滤</p>
+            <p className="text-sm">{t("ai.moderationTitle")}</p>
+            <p className="text-xs text-neutral-500">{t("ai.moderationHint")}</p>
           </div>
           <PillSwitch
             checked={behavior.moderation_enabled}
@@ -711,15 +710,15 @@ export default function AiSettingsPage({ onStats, stats }) {
         <div className="flex flex-col gap-2 border-t border-neutral-200/70 pt-3 dark:border-neutral-800/70">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-neutral-700 dark:text-neutral-300">审核词表</p>
+              <p className="text-sm text-neutral-700 dark:text-neutral-300">{t("ai.moderationWordsTitle")}</p>
               <p className="text-xs text-neutral-500">
-                每行一个词（也支持逗号/分号分隔）。保存后整体替换内置词库；留空保存 = 恢复内置。关闭审核时不可编辑。
+                {t("ai.moderationWordsHint")}
               </p>
             </div>
             {wordsSaved && (
               <span className="flex shrink-0 items-center gap-1 text-xs text-neutral-500">
                 <IconCheck size={14} />
-                已保存
+                {t("common.saved")}
               </span>
             )}
           </div>
@@ -730,16 +729,16 @@ export default function AiSettingsPage({ onStats, stats }) {
               setWordsText(e.target.value);
               setWordsDirty(true);
             }}
-            placeholder={"每行一个词，例如：\n儿童色情\n制毒教程\nchild porn"}
+            placeholder={t("ai.moderationPlaceholder")}
             disabled={!behavior.moderation_enabled}
           />
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
               {behavior.moderation_enabled
                 ? wordsCustom
-                  ? `自定义词库 · ${wordsCount(wordsText)} 条（已替换内置）`
-                  : `内置默认词库 · ${wordsCount(wordsText)} 条`
-                : "审核已关闭，当前词表暂不生效"}
+                  ? t("ai.moderationCustom", { n: wordsCount(wordsText) })
+                  : t("ai.moderationDefault", { n: wordsCount(wordsText) })
+                : t("ai.moderationOff")}
             </span>
             <div className="flex gap-2">
               {wordsCustom && (
@@ -748,7 +747,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                   disabled={!behavior.moderation_enabled}
                   onClick={() => saveWords([])}
                 >
-                  恢复内置默认
+                  {t("ai.moderationReset")}
                 </button>
               )}
               <button
@@ -756,7 +755,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                 disabled={!behavior.moderation_enabled || !wordsDirty}
                 onClick={() => saveWords(wordsToList(wordsText))}
               >
-                保存词表
+                {t("ai.moderationSave")}
               </button>
             </div>
           </div>
@@ -764,17 +763,17 @@ export default function AiSettingsPage({ onStats, stats }) {
 
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm">工具审批模式</p>
-            <p className="text-xs text-neutral-500">危险操作需要你确认</p>
+            <p className="text-sm">{t("ai.approvalTitle")}</p>
+            <p className="text-xs text-neutral-500">{t("ai.approvalHint")}</p>
           </div>
           <select
             className="field w-auto"
             value={behavior.tool_approval}
             onChange={(e) => saveBehavior({ ...behavior, tool_approval: e.target.value })}
           >
-            <option value="ask">每次询问</option>
-            <option value="auto">自动审批（危险操作仍询问）</option>
-            <option value="allow_all">完全放行</option>
+            <option value="ask">{t("ai.approvalAsk")}</option>
+            <option value="auto">{t("ai.approvalAuto")}</option>
+            <option value="allow_all">{t("ai.approvalAll")}</option>
           </select>
         </div>
       </div>
@@ -783,16 +782,15 @@ export default function AiSettingsPage({ onStats, stats }) {
       <div className="card flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium">系统提示词模板</p>
+            <p className="text-sm font-medium">{t("ai.systemPromptTitle")}</p>
             <p className="mt-0.5 text-xs text-neutral-500">
-              完全替换内置模板（包含 Conduct、工具说明等）。留空恢复默认。
-              运行时信息（目标/todo/解释器/memory/skills）会自动追加到末尾。
+              {t("ai.systemPromptDesc")}
             </p>
           </div>
           {systemPromptSaved && (
             <span className="flex items-center gap-1 text-xs text-neutral-500">
               <IconCheck size={14} />
-              已保存
+              {t("common.saved")}
             </span>
           )}
         </div>
@@ -800,7 +798,7 @@ export default function AiSettingsPage({ onStats, stats }) {
           className="field !rounded-2xl min-h-[200px] resize-y font-mono text-xs leading-relaxed"
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
-          placeholder="留空 = 使用内置模板。输入则完全覆盖，例如：&#10;你是我的专属编程助手。&#10;回答代码要完整可编译，先列出思路再给出实现。"
+          placeholder={t("ai.systemPromptPlaceholder")}
         />
         <div className="flex justify-end gap-2">
           {systemPrompt && (
@@ -814,7 +812,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                 });
               }}
             >
-              恢复默认
+              {t("ai.systemPromptReset")}
             </button>
           )}
           <button
@@ -826,7 +824,7 @@ export default function AiSettingsPage({ onStats, stats }) {
               });
             }}
           >
-            保存
+            {t("common.save")}
           </button>
         </div>
       </div>
@@ -877,13 +875,13 @@ export default function AiSettingsPage({ onStats, stats }) {
       <div className="card flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium">自定义提示词 / 人设</p>
-            <p className="mt-0.5 text-xs text-neutral-500">追加到 system prompt 最开头，空则不注入</p>
+            <p className="text-sm font-medium">{t("ai.customPromptTitle")}</p>
+            <p className="mt-0.5 text-xs text-neutral-500">{t("ai.customPromptDesc")}</p>
           </div>
           {promptSaved && (
             <span className="flex items-center gap-1 text-xs text-neutral-500">
               <IconCheck size={14} />
-              已保存
+              {t("common.saved")}
             </span>
           )}
         </div>
@@ -891,7 +889,7 @@ export default function AiSettingsPage({ onStats, stats }) {
           className="field !rounded-2xl min-h-[100px] resize-y font-mono text-xs leading-relaxed"
           value={customPrompt}
           onChange={(e) => setCustomPrompt(e.target.value)}
-          placeholder={`例如：\n你是一位严谨的 Rust 系统编程专家，回答时优先给出可编译的代码。\n你偏爱极简主义设计，讨厌冗余抽象。`}
+          placeholder={t("ai.customPromptPlaceholder")}
         />
         <div className="flex justify-end gap-2">
           {customPrompt && (
@@ -905,7 +903,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                 });
               }}
             >
-              清空
+              {t("ai.customPromptClear")}
             </button>
           )}
           <button
@@ -917,7 +915,7 @@ export default function AiSettingsPage({ onStats, stats }) {
               });
             }}
           >
-            保存
+            {t("common.save")}
           </button>
         </div>
       </div>
@@ -958,7 +956,7 @@ export default function AiSettingsPage({ onStats, stats }) {
                 setTimeout(() => setHotkeySaved(false), 1500);
               }}
             >
-              {t("common.clear") || "清空"}
+              {t("common.clear")}
             </button>
           )}
           <button
@@ -971,7 +969,7 @@ export default function AiSettingsPage({ onStats, stats }) {
               }).catch((e) => setHotkeyErr(String(e)));
             }}
           >
-            {hotkeySaved ? "✓" : t("common.save") || "保存"}
+            {hotkeySaved ? "✓" : t("common.save")}
           </button>
         </div>
       </div>
