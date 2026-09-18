@@ -25,6 +25,8 @@ extraResources:
     to: .
 asar: true
 compression: maximum
+# 打包收尾：删除 Electron 自带 default_app（防止 BIT.exe 回退成裸 Chromium 浏览器）
+afterPack: scripts/after-pack.cjs
 
 win:
   icon: src-tauri/icons/icon.ico

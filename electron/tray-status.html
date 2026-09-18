@@ -173,6 +173,33 @@
   .foot .gap { width: 10px; }
   .foot .hint { margin-left: auto; font-size: 10px; color: var(--text3); }
 
+  /* ── 页内确认弹窗：删除类操作二次确认（与主界面 ConfirmHost 同一视觉语言） ── */
+  .ask {
+    position: fixed; inset: 0; z-index: 60;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.4); border-radius: inherit;
+  }
+  .ask.open { display: flex; animation: askfade var(--dur-fast) var(--ease-pill); }
+  @keyframes askfade { from { opacity: 0; } to { opacity: 1; } }
+  .ask-card {
+    width: min(88%, 260px); padding: 14px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-card, 16px);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 10px 28px -12px rgba(0,0,0,0.4);
+    animation: pop var(--dur-slow) var(--ease-spring);
+  }
+  .ask-card .msg { font-size: 12px; color: var(--text); margin-bottom: 12px; overflow-wrap: anywhere; }
+  .ask-card .row { display: flex; justify-content: flex-end; gap: 8px; }
+  .ask-card button {
+    font-size: 11px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-pill), color var(--dur-fast) var(--ease-pill),
+      border-color var(--dur-fast) var(--ease-pill), transform var(--dur-fast) var(--ease-pill);
+  }
+  .ask-card button:active { transform: scale(0.96); }
+  .ask-card .no { color: var(--text2); background: transparent; border: 1px solid var(--border); }
+  .ask-card .no:hover { color: var(--text); border-color: color-mix(in srgb, var(--text) 30%, var(--border)); }
+  .ask-card .yes { color: #fff; background: #dc2626; border: none; }
+  .ask-card .yes:hover { background: #ef4444; }
+
   /* ── 滚动条：与主界面同款悬浮小胶囊（8px、圆角、透明轨道、无上下箭头） ── */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb {
@@ -243,6 +270,15 @@
     <span class="hint" data-i18n="hint">左键托盘图标 = 主界面 · 失焦自动收起</span>
   </div>
 </div>
+<div class="ask" id="ask">
+  <div class="ask-card">
+    <div class="msg" id="ask-msg"></div>
+    <div class="row">
+      <button class="no" id="ask-no">取消</button>
+      <button class="yes" id="ask-yes">确认</button>
+    </div>
+  </div>
+</div>
 <script>
   const { ipcRenderer } = require('electron');
   // 托盘悬浮预览模式（?mode=hover）：紧凑布局，只读总览 + 会话 + 后台命令
@@ -280,6 +316,9 @@
     idle: { zh: '空闲', en: 'Idle' },
     noTask: { zh: '当前没有进行中的任务', en: 'Nothing running right now' },
     nItems: { zh: ' 项', en: '' },
+    delGoalConfirm: { zh: '确定删除这个计划吗？', en: 'Delete this plan?' },
+    confirm: { zh: '确认', en: 'Confirm' },
+    cancel: { zh: '取消', en: 'Cancel' },
   };
   const L = (k) => STR[k]?.[(snap.lang === 'en') ? 'en' : 'zh'] ?? k;
   // 语言切换时刷新静态 DOM（data-i18n / data-i18n-title）并清签名强制重建列表
@@ -354,11 +393,27 @@
   $('btn-close').onclick = () => ipcRenderer.send('tray:hide');
   $('btn-show').onclick = () => ipcRenderer.send('tray:show');
   $('btn-quit').onclick = () => ipcRenderer.send('tray:quit');
-  // 删除计划：事件委托（goals 区 innerHTML 按签名重建，直接绑会丢）
+  // 删除计划：事件委托（goals 区 innerHTML 按签名重建，直接绑会丢）——弹页内二次确认
   $('goals').addEventListener('click', (e) => {
     const btn = e.target?.closest?.('.gdel');
-    if (btn?.dataset?.gid) ipcRenderer.send('tray:remove-goal', btn.dataset.gid);
+    if (!btn?.dataset?.gid) return;
+    $('ask-msg').textContent = L('delGoalConfirm');
+    $('ask-no').textContent = L('cancel');
+    $('ask-yes').textContent = L('confirm');
+    $('ask-yes').dataset.gid = btn.dataset.gid;
+    $('ask').classList.add('open');
   });
+  // 确认/取消/遮罩/Esc 关闭；确认才真正发删除
+  $('ask-yes').addEventListener('click', () => {
+    const gid = $('ask-yes').dataset.gid;
+    $('ask').classList.remove('open');
+    delete $('ask-yes').dataset.gid;
+    if (gid) ipcRenderer.send('tray:remove-goal', gid);
+  });
+  const askClose = () => { $('ask').classList.remove('open'); delete $('ask-yes').dataset.gid; };
+  $('ask-no').addEventListener('click', askClose);
+  $('ask').addEventListener('click', (e) => { if (e.target === $('ask')) askClose(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') askClose(); });
   ipcRenderer.on('tray:status', (_e, s) => { snap = s || snap; render(); });
   // 每次窗口显示（含悬浮预览弹出）重播入场动画
   const rootEl = document.getElementById('root');

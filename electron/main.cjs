@@ -6,7 +6,7 @@
 //!   3) invoke 路由：B 类宿主命令（对话框/自启/热键/提权/换装重启）JS 拦截，
 //!      其余透传 Rust dispatch（白名单查表）
 //!   4) bit-asset 协议替代 Tauri assetProtocol（convertFileSrc 的文件图片访问）
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu, nativeTheme, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -297,6 +297,7 @@ function showHoverWindow() {
     },
   });
   hoverWin.setMenuBarVisibility(false);
+  hardenWebContents(hoverWin.webContents);
   hoverWin.loadFile(path.join(__dirname, 'tray-status.html'), { search: 'mode=hover' });
   hoverWin.on('closed', () => { hoverWin = null; });
   hoverWin.once('ready-to-show', () => {
@@ -429,6 +430,7 @@ function showStatusWindow(fromTray) {
     },
   });
   statusWin.setMenuBarVisibility(false);
+  hardenWebContents(statusWin.webContents);
   statusWin.loadFile(path.join(__dirname, 'tray-status.html'));
   statusWin.on('closed', () => { statusWin = null; });
   let statusFocused = false; // 面板是否真正获得过焦点（自动化/后台打开时拿不到焦点，不应触发失焦收起）
@@ -702,6 +704,49 @@ function handleCoreEventHooks(e) {
   }
 }
 
+// ── 原生提示框防呆（Deep Customization）：UI 一律自绘，堵死所有会冒出原生样式的口子 ──
+// 1) 主进程 dialog：showMessageBox* 直接拒绝（本仓库 UI 从不使用；showErrorBox 保留给
+//    bit.node 加载失败的致命场景——那时渲染层不存在，原生弹窗是唯一出口；文件选择
+//    showSaveDialog/showOpenDialog 是系统级对话框，所有桌面应用一致，保留）
+for (const fn of ['showMessageBox', 'showMessageBoxSync']) {
+  dialog[fn] = (...args) => {
+    console.warn(`[BIT] dialog.${fn} 已被禁用（防原生弹窗外泄），调用点：`, new Error().stack?.split('\n')[2]?.trim());
+    return fn.endsWith('Sync') ? { response: 0 } : Promise.resolve({ response: 0 });
+  };
+}
+// 2) webContents 加固：window.open 一律拦截（http/https 转交系统浏览器，其余直接拒绝，
+//    避免弹出带 Chrome 原生边框的新窗口）；beforeunload 拦截弹窗自动放行
+function hardenWebContents(wc) {
+  wc.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
+  wc.on('will-prevent-unload', (e) => e.preventDefault());
+  // 页面级跳转防护：主窗口是 SPA，永远不允许整窗导航（否则 Chromium 原生界面露馅）。
+  // http(s) 点击 → 转交系统浏览器；其余（file:// 等）一律拒绝；仅 dev server 放行。
+  wc.on('will-navigate', (e, url) => {
+    if (process.env.BIT_ELECTRON_DIST !== '1' && url.startsWith('http://localhost:5173')) return;
+    e.preventDefault();
+    if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+  });
+  // 生产环境锁死 DevTools：终端用户用不到，减小暴露面；开发模式不受影响
+  if (app.isPackaged) {
+    wc.on('devtools-opened', () => { try { wc.closeDevTools(); } catch {} });
+  }
+}
+// 5) Chromium 子系统裁剪：官方预编译二进制无法真正剔除内核组件（媒体栈因聊天视频
+//    播放必须保留），运行时关掉确定用不到的——翻译条/自动填充/投屏路由/优化提示。
+//    附带收益：这些是 Chromium 内置 UI 的潜在露馅面（如翻译弹条），一并消灭。
+app.commandLine.appendSwitch(
+  'disable-features',
+  ['Translate', 'TranslateUI', 'Autofill', 'AutofillServerCommunication', 'MediaRouter', 'OptimizationHints', 'SegmentPlatform'].join(',')
+);
+// 3) 渲染层 JS 弹窗（alert/confirm/prompt 在 Electron 下是 Chrome 样式弹层）：见 preload.cjs
+// 4) 默认应用菜单：生产环境摘除（无边框下不可见但仍占快捷键）
+function setAppMenu() {
+  if (app.isPackaged) Menu.setApplicationMenu(null);
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1120,
@@ -724,6 +769,7 @@ function createWindow() {
     },
   });
   win.setMenuBarVisibility(false);
+  hardenWebContents(win.webContents);
 
   // 冒烟模式（BIT_SMOKE=1）：渲染管线 console 转发 stdout，便于无窗诊断
   if (process.env.BIT_SMOKE === '1') {
@@ -783,6 +829,7 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(async () => {
+  setAppMenu();
   handleAssetProtocol();
   try {
     bit = require(NODE_PATH);

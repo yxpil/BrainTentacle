@@ -2292,7 +2292,9 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                     title="file-preview"
                     src={convertFileSrc(previewFile.path)}
                     className="h-full w-full border-0 bg-white"
-                    sandbox="allow-scripts allow-popups"
+                    // allow-top-navigation：预览页里的链接跳转顶窗 → 主进程 will-navigate
+                    // 守卫拦下 → 转交系统浏览器（iframe 内永远留在本地，Chromium 不露面）
+                    sandbox="allow-scripts allow-popups allow-top-navigation"
                   />
                 )}
               </div>

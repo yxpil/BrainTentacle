@@ -9,6 +9,16 @@
 //!   - data-tauri-drag-region 拖拽区（mousedown 左键 → start_dragging，双击 → 最大化切换）
 const { ipcRenderer, contextBridge } = require('electron');
 
+// ── 原生提示框防呆：alert/confirm/prompt 在 Electron 下渲染为 Chrome 样式弹层，
+// 与 BIT 自绘 UI 割裂。UI 一律走 ConfirmHost（React）/ 页内确认（托盘面板），
+// 残留或第三方误调用在这里静默降级，确保永远不会弹出来。
+// contextIsolation:false，preload 与页面同世界，覆盖对页面脚本同样生效。
+try {
+  window.alert = (msg) => console.warn('[BIT] alert 已禁用:', msg);
+  window.confirm = (msg) => { console.warn('[BIT] confirm 已禁用:', msg); return false; };
+  window.prompt = (msg) => { console.warn('[BIT] prompt 已禁用:', msg); return null; };
+} catch {}
+
 // ── 回调注册表：transformCallback 返回 id，事件到达时按 id 取回调用 ──
 const callbacks = new Map(); // handlerId -> { fn }
 let seq = 0;
