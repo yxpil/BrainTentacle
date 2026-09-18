@@ -43,7 +43,7 @@ jobs:
     steps:
       - id: tag
         run: echo "tag=${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
-      - run: gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG >/dev/null 2>&1 || gh release create "$TAG" --title "触手怪 $TAG（铁板鱿鱼 · Electron · 全平台）" --generate-notes --repo "$GITHUB_REPOSITORY"
+      - run: gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG >/dev/null 2>&1 || gh release create "$TAG" --title "触手怪 $TAG（Electron · 全平台）" --generate-notes --repo "$GITHUB_REPOSITORY"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
