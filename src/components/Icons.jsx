@@ -109,6 +109,12 @@ export const IconTrash = (p) => (
   </I>
 );
 
+export const IconFolderOpen = (p) => (
+  <I {...p}>
+    <path d="M4 6a1 1 0 0 1 1-1h4.6l1.7 2H19a1 1 0 0 1 1 1v2H6.4a1 1 0 0 0-.96.72L4 14.5V6zM4 18.5l2.4-7.06a1 1 0 0 1 .95-.69H21l-2.1 7.03a1 1 0 0 1-.96.72H5a1 1 0 0 1-1-1z" />
+  </I>
+);
+
 export const IconSend = (p) => (
   <I {...p}>
     <path d="M22 2 11 13M22 2 15 22l-4-9-9-4 20-7z" />

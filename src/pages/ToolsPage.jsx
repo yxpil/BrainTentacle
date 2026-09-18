@@ -13,6 +13,7 @@ import {
   IconTerminal,
   IconCode,
   IconRefresh,
+  IconFolderOpen,
   IconGlobe,
   IconX,
 } from "../components/Icons.jsx";
@@ -740,23 +741,34 @@ export default function ToolsPage({ onStats }) {
               </p>
             </div>
           </div>
-          <button
-            onClick={async () => {
-              setPluginBusy(true);
-              try {
-                await api.refreshPlugins();
-                const p = await api.listPlugins();
-                setPlugins(p?.plugins || []);
-              } finally {
-                setPluginBusy(false);
-              }
-            }}
-            className="pill pill-outline pill-hover"
-            disabled={pluginBusy}
-          >
-            <IconRefresh size={14} />
-            重扫插件
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => pluginDir && api.openPath(pluginDir).catch(() => {})}
+              className="pill pill-outline pill-hover"
+              title="打开插件目录"
+              disabled={!pluginDir}
+            >
+              <IconFolderOpen size={14} />
+              打开文件夹
+            </button>
+            <button
+              onClick={async () => {
+                setPluginBusy(true);
+                try {
+                  await api.refreshPlugins();
+                  const p = await api.listPlugins();
+                  setPlugins(p?.plugins || []);
+                } finally {
+                  setPluginBusy(false);
+                }
+              }}
+              className="pill pill-outline pill-hover"
+              disabled={pluginBusy}
+            >
+              <IconRefresh size={14} />
+              重扫插件
+            </button>
+          </div>
         </div>
 
         {pluginDir && (
