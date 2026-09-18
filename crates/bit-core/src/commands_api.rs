@@ -602,6 +602,8 @@ pub fn get_desktop_tools(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
 
 /// 本地插件：列表（含启用状态与内容摘要）
 pub fn list_plugins(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    // 确保插件目录存在：全新安装时「打开文件夹」按钮才不会因目录缺失而失败
+    let _ = std::fs::create_dir_all(crate::plugins::dir(ctx));
     let plugins = ctx.plugins.lock().unwrap().clone();
     let disabled: Vec<String> = { ctx.config.lock().unwrap().disabled_plugins.clone() };
     let list: Vec<serde_json::Value> = plugins

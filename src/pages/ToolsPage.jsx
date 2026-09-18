@@ -743,7 +743,7 @@ export default function ToolsPage({ onStats }) {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => pluginDir && api.openPath(pluginDir).catch(() => {})}
+              onClick={() => pluginDir && api.openPath(pluginDir).catch((e) => console.warn("打开插件目录失败:", e))}
               className="pill pill-outline pill-hover"
               title="打开插件目录"
               disabled={!pluginDir}
@@ -1023,8 +1023,8 @@ export default function ToolsPage({ onStats }) {
                 <div className="grid grid-cols-4 gap-2">
                   <input className="field" placeholder={t("tools.mcpStdioName")} value={stdioName} onChange={(e) => setStdioName(e.target.value)} />
                   <input className="field col-span-3 font-mono" placeholder={t("tools.mcpStdioCommand")} value={stdioCmd} onChange={(e) => setStdioCmd(e.target.value)} />
-                  <textarea className="field col-span-2 font-mono" rows={4} placeholder={t("tools.mcpStdioArgs")} value={stdioArgs} onChange={(e) => setStdioArgs(e.target.value)} />
-                  <textarea className="field col-span-2 font-mono" rows={4} placeholder={t("tools.mcpStdioEnv")} value={stdioEnv} onChange={(e) => setStdioEnv(e.target.value)} />
+                  <textarea className="field col-span-2 !rounded-2xl font-mono" rows={4} placeholder={t("tools.mcpStdioArgs")} value={stdioArgs} onChange={(e) => setStdioArgs(e.target.value)} />
+                  <textarea className="field col-span-2 !rounded-2xl font-mono" rows={4} placeholder={t("tools.mcpStdioEnv")} value={stdioEnv} onChange={(e) => setStdioEnv(e.target.value)} />
                 </div>
               )}
               {stdioErrs.length > 0 && (
