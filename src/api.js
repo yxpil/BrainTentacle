@@ -158,6 +158,7 @@ export const api = {
   toolApprove: (id, allow) => invoke("tool_approve", { id, allow }),
   setToolApproval: (mode) => invoke("set_tool_approval", { mode }),
   getToolApproval: () => invoke("get_tool_approval"),
+  askAnswer: (id, choices, supplement) => invoke("ask_answer", { id, choices, supplement }),
   getAutostart: () => invoke("get_autostart"),
   setAutostart: (enabled) => invoke("set_autostart", { enabled }),
   // 全局快捷键：唤出主界面（空 = 关闭）

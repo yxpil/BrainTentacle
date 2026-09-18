@@ -2317,6 +2317,25 @@ pub async fn tool_approve(ctx: &Arc<Ctx>, id: String, allow: bool) -> Result<ser
     crate::engine::approve(ctx, &id, allow).await
 }
 
+/// 用户应答 ask_user 提问：把选项 + 补充文本通过挂起通道回喂给等待中的工具调用
+pub async fn ask_answer(
+    ctx: &Arc<Ctx>,
+    id: String,
+    choices: Vec<String>,
+    supplement: String,
+) -> Result<serde_json::Value, String> {
+    let tx = ctx
+        .asks
+        .lock()
+        .unwrap()
+        .remove(&id)
+        .map(|p| p.tx)
+        .ok_or_else(|| format!("提问 {id} 不存在或已超时"))?;
+    let ans = serde_json::json!({ "choices": choices, "supplement": supplement });
+    let _ = tx.send(ans);
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// 设置工具审批模式：ask（每次询问）/ auto（危险询问、安全自动通过）/ allow_all（完全放行）
 pub async fn set_tool_approval(ctx: &Arc<Ctx>, mode: String) -> Result<serde_json::Value, String> {
     if !["ask", "auto", "allow_all"].contains(&mode.as_str()) {

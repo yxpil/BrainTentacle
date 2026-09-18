@@ -354,6 +354,7 @@ pub async fn dispatch(
         }
         "chat_interrupt" => bit_core::commands_api::chat_interrupt(ctx, a_str(&args, "session_id")?).await,
         "tool_approve" => bit_core::commands_api::tool_approve(ctx, a_str(&args, "id")?, a_bool(&args, "allow")?).await,
+        "ask_answer" => bit_core::commands_api::ask_answer(ctx, a_str(&args, "id")?, a_str_vec(&args, "choices")?, a_str(&args, "supplement")?).await,
         "set_tool_approval" => bit_core::commands_api::set_tool_approval(ctx, a_str(&args, "mode")?).await,
         "get_tool_approval" => bit_core::commands_api::get_tool_approval(ctx).await,
 

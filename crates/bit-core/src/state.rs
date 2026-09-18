@@ -135,6 +135,10 @@ pub struct Ctx {
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
     /// 审批请求自增 id
     pub approval_seq: AtomicU64,
+    /// ask_user 待应答提问（ask_id → 应答通道）。模型主动向用户提问（选项 + 补充）的挂起表
+    pub asks: Mutex<HashMap<String, PendingAsk>>,
+    /// 提问自增 id
+    pub ask_seq: AtomicU64,
     pub server_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// 云中继客户端循环句柄（随远程服务启停）
     pub relay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -197,6 +201,13 @@ pub struct PendingApproval {
     pub tx: tokio::sync::oneshot::Sender<bool>,
     pub tool: String,
     pub params: serde_json::Value,
+    pub created: std::time::Instant,
+}
+
+/// ask_user 的一条待应答提问：应答通道 + 会话归属（中断联动清理用）
+pub struct PendingAsk {
+    pub tx: tokio::sync::oneshot::Sender<serde_json::Value>,
+    pub session: String,
     pub created: std::time::Instant,
 }
 
@@ -355,6 +366,8 @@ impl Ctx {
             cache_stats: Mutex::new(HashMap::new()),
             approvals: Mutex::new(HashMap::new()),
             approval_seq: AtomicU64::new(1),
+            asks: Mutex::new(HashMap::new()),
+            ask_seq: AtomicU64::new(1),
             autopilot_running: AtomicBool::new(false),
             server_task: Mutex::new(None),
             relay_task: Mutex::new(None),

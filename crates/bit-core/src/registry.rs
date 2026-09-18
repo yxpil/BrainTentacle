@@ -398,6 +398,21 @@ pub fn builtin_tools() -> Vec<ToolDef> {
             }),
             "keyboard",
         ),
+        mk(
+            "builtin.ask_user",
+            "ask_user",
+            "Ask the user a question with selectable options and wait for their answer. Use when a decision or missing info blocks progress: which approach to take, which file variant to keep, confirm before an irreversible action, etc. The user picks option(s) and may add a free-form supplement. Do NOT use for trivial choices you can reasonably decide yourself",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "The question, one or two sentences, self-contained (the user may not see your surrounding reasoning)" },
+                    "options": { "type": "array", "items": { "type": "string" }, "description": "2-6 concise choices, each a short phrase (e.g. [\"方案A：先编译验证\", \"方案B：直接提交\"]). Omit for open questions where the user types the answer" },
+                    "allow_multiple": { "type": "boolean", "description": "true = user may select several options (default false, single choice)" }
+                },
+                "required": ["question"]
+            }),
+            "ask_user",
+        ),
     ]
 }
 
@@ -1102,6 +1117,107 @@ async fn builtin_invoke(
                 "path": path_str,
                 "note": "Diagram delivered to the user in the chat UI. The user has seen it; do NOT redraw or re-explain the diagram syntax in your reply text.",
             }))
+        }
+        // ── 2.11 ask_user：模型主动向用户提问（选项卡片 + 补充输入）。挂起等待用户应答
+        // （与工具审批同款 oneshot 通道模式），答案作为工具结果回喂模型；会话中断/超时自动取消
+        "ask_user" => {
+            let question = params
+                .get("question")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or("Missing parameter: question")?;
+            if question.len() > 4000 {
+                return Err("Question too long (limit 4000 chars)".into());
+            }
+            let options: Vec<String> = params
+                .get("options")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .take(8)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let allow_multiple = params
+                .get("allow_multiple")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let Some(session) = session else {
+                return Err("ask_user requires a chat session to deliver the question to".into());
+            };
+            // TUI 无 WebView 应答通道：让模型自行决策，不挂起空等
+            if std::env::var("BIT_TUI").is_ok() {
+                return Err(
+                    "ask_user is unavailable in TUI mode: decide by yourself or proceed with the most reasonable default".into(),
+                );
+            }
+            let id = format!("ask-{}", ctx.ask_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+            let (tx, rx) = tokio::sync::oneshot::channel::<serde_json::Value>();
+            ctx.asks.lock().unwrap().insert(
+                id.clone(),
+                crate::state::PendingAsk {
+                    tx,
+                    session: session.to_string(),
+                    created: std::time::Instant::now(),
+                },
+            );
+            ctx.emit(
+                "chat-ask",
+                serde_json::json!({
+                    "id": id, "session": session, "question": question,
+                    "options": options, "allow_multiple": allow_multiple,
+                }),
+            );
+            crate::audit::record(
+                ctx,
+                "model",
+                "ask.request",
+                "ask_user",
+                serde_json::json!({ "question": question, "options": options }),
+                true,
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            let mut rx = rx;
+            let outcome = loop {
+                tokio::select! {
+                    r = &mut rx => {
+                        break r.map_err(|_| "Ask channel closed; auto-cancelled".to_string());
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                        // 等待期间用户中断了会话：立即取消提问
+                        if crate::agent::interrupted(ctx, session) {
+                            break Err("对话已中断".into());
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            break Err("Ask timed out (300s): the user did not respond. Proceed with your best judgment instead of asking again".into());
+                        }
+                    }
+                }
+            };
+            ctx.asks.lock().unwrap().remove(&id);
+            match &outcome {
+                Ok(ans) => crate::audit::record(ctx, "user", "ask.answered", "ask_user", ans.clone(), true),
+                Err(e) => crate::audit::record(
+                    ctx,
+                    "user",
+                    "ask.cancelled",
+                    "ask_user",
+                    serde_json::json!({ "reason": e }),
+                    false,
+                ),
+            }
+            outcome.map(|ans| {
+                serde_json::json!({
+                    "answered": true,
+                    "choices": ans.get("choices").cloned().unwrap_or(serde_json::json!([])),
+                    "supplement": ans.get("supplement").and_then(|v| v.as_str()).unwrap_or(""),
+                    "note": "This is the user's own decision. Act on it; do not re-ask the same question.",
+                })
+            })
         }
         // ── 2.7 screen：截屏（desktop_ctl 跨平台实现；截图自动显示给用户并落盘）──
         "screen" => {

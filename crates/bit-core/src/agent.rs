@@ -279,6 +279,8 @@ fn is_safe_tool(tool: &str) -> bool {
         // 自扩展（注册/覆盖工具）是沉淀类动作，auto 模式自动放行
         "add_tool",
         "list_tools",
+        // ask_user 本身就是对用户的交互（无副作用），审批它毫无意义
+        "ask_user",
         // delete_tool 不在 SAFE 中：删除是破坏性语义，即使内置了 registry.rs 的删除保护
         // （builtin/remote/MCP 不可删），仍要求 auto 模式下需审批确认
     ];

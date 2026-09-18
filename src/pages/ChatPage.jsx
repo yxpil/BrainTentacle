@@ -106,6 +106,10 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
   const runningRef = useRef(new Set()); // runTask 重入保护
   // 工具审批：ask = 每次询问 / auto = 自动审批 / allow_all = 完全放行
   const [approvals, setApprovals] = useState([]); // 待审批 [{id, tool, params}]
+  // ask_user 提问卡片：AI 主动提问（选项 + 补充输入），用户应答后回流给模型
+  const [asks, setAsks] = useState([]); // 待应答 [{id, question, options, allow_multiple}]
+  const [askPicks, setAskPicks] = useState({}); // ask_id → 已选选项下标数组
+  const [askText, setAskText] = useState({}); // ask_id → 补充文本
   const [approvalMode, setApprovalMode] = useState("allow_all");
   const [approvalMenu, setApprovalMenu] = useState(false);
   const [planMenu, setPlanMenu] = useState(false); // 计划/待办 popover（无进行中内容时不显示按钮）
@@ -138,6 +142,13 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     api.getToolApproval().then((r) => r?.mode && setApprovalMode(r.mode)).catch(() => {});
     const un = listen("tool-approval", (e) => {
       setApprovals((arr) => [...arr, e.payload]);
+    });
+    // ask_user 提问请求：追加提问卡片（仅当前会话显示）
+    const unAsk = listen("chat-ask", (e) => {
+      const p = e.payload || {};
+      if (p.session && p.session === activeRef.current && p.id) {
+        setAsks((arr) => [...arr, p]);
+      }
     });
     // 非流式对话路径通过全局 chat-usage 事件上报缓存命中率
     const unUsage = listen("chat-usage", (e) => {
@@ -183,6 +194,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     });
     return () => {
       un.then((f) => f());
+      unAsk.then((f) => f());
       unUsage.then((f) => f());
       unImage.then((f) => f());
       unVideo.then((f) => f());
@@ -1092,6 +1104,32 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     await api.toolApprove(id, allow).catch(() => {});
   };
 
+  // ── ask_user 提问应答：所选选项 + 补充文本回喂模型；同时把回答落入对话气泡 ──
+  const submitAsk = async (a) => {
+    const picks = askPicks[a.id] || [];
+    const text = (askText[a.id] || "").trim();
+    if (picks.length === 0 && !text) return; // 没选也没填：不提交
+    setAsks((arr) => arr.filter((x) => x.id !== a.id));
+    setAskPicks(({ [a.id]: _, ...rest }) => rest);
+    setAskText(({ [a.id]: _, ...rest }) => rest);
+    const choiceText = picks.map((i) => a.options?.[i]).filter(Boolean).join("、");
+    setMessages((msgs) => [
+      ...msgs,
+      { role: "user", content: [choiceText, text].filter(Boolean).join("\n") },
+    ]);
+    await api.askAnswer(a.id, picks.map((i) => a.options?.[i]).filter(Boolean), text).catch(() => {});
+  };
+
+  const toggleAskPick = (a, idx) => {
+    setAskPicks((m) => {
+      const cur = m[a.id] || [];
+      if (a.allow_multiple) {
+        return { ...m, [a.id]: cur.includes(idx) ? cur.filter((i) => i !== idx) : [...cur, idx] };
+      }
+      return { ...m, [a.id]: cur[0] === idx ? [] : [idx] };
+    });
+  };
+
   const changeApprovalMode = (mode) => {
     setApprovalMode(mode);
     setApprovalMenu(false);
@@ -1614,6 +1652,55 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
               </div>
             </div>
           ))}
+
+          {/* ask_user 提问卡片：AI 主动提问，选项点选 + 补充输入 */}
+          {asks.map((a) => {
+            const picks = askPicks[a.id] || [];
+            const text = (askText[a.id] || "").trim();
+            const ready = picks.length > 0 || text.length > 0;
+            return (
+              <div key={a.id} className="card border-violet-400/60 p-3 dark:border-violet-500/40">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <IconChat size={15} className="text-violet-500" />
+                  {t("chat.askTitle")}
+                  {a.allow_multiple && <span className="text-[11px] text-neutral-400">{t("chat.askMulti")}</span>}
+                </div>
+                <div className="mb-2 text-sm whitespace-pre-wrap">{a.question}</div>
+                {a.options?.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {a.options.map((opt, idx) => {
+                      const on = picks.includes(idx);
+                      return (
+                        <button
+                          key={idx}
+                          onClick={() => toggleAskPick(a, idx)}
+                          className={on ? "pill border-violet-500 bg-violet-500 text-white" : "pill-outline pill-hover"}
+                        >
+                          {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <textarea
+                  value={askText[a.id] || ""}
+                  onChange={(e) => setAskText((m) => ({ ...m, [a.id]: e.target.value }))}
+                  placeholder={t("chat.askCustom")}
+                  rows={2}
+                  className="field mb-2 w-full !rounded-2xl"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => submitAsk(a)}
+                    disabled={!ready}
+                    className={`pill ${ready ? "pill-hover bg-violet-500 text-white" : "opacity-40"}`}
+                  >
+                    {t("chat.askSubmit")}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
 
           {/* 隐藏文件输入 */}
           <input
