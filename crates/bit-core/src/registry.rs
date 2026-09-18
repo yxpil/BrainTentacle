@@ -344,15 +344,16 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         mk(
             "builtin.screen",
             "screen",
-            "Capture the screen (full or a region) and show the screenshot to yourself via view_image. Use display index for multi-monitor",
+            "Capture the screen (full or a region) and show the screenshot to yourself via view_image. Full-screen captures are overlaid with a labeled grid: columns A-Z on X, rows 1..N on Y. Prefer clicking via grid refs (e.g. mouse action=click cell=\"K7\") instead of estimating pixel coordinates",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "display": { "type": "integer", "description": "Monitor index, 0 = primary (default 0)" },
-                    "x": { "type": "integer", "description": "Region crop: left (physical px, optional)" },
+                    "x": { "type": "integer", "description": "Region crop: left (physical px, optional; disables grid overlay)" },
                     "y": { "type": "integer", "description": "Region crop: top (optional)" },
                     "width": { "type": "integer", "description": "Region crop: width (optional)" },
-                    "height": { "type": "integer", "description": "Region crop: height (optional)" }
+                    "height": { "type": "integer", "description": "Region crop: height (optional)" },
+                    "grid": { "type": "boolean", "description": "Overlay labeled grid for cell-referenced clicking (default true; only applies to full-screen capture)" }
                 }
             }),
             "screen",
@@ -360,13 +361,15 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         mk(
             "builtin.mouse",
             "mouse",
-            "Control the mouse: position / move / click / double_click / right_click / drag / scroll. Coordinates are physical screen pixels (top-left origin)",
+            "Control the mouse: position / move / click / double_click / right_click / drag / scroll. Preferred: pass cell=\"K7\" (grid ref from the last full-screen screenshot, optional anchor like \"K7.br\") instead of pixel x/y. Pixels are physical, top-left origin",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": { "type": "string", "enum": ["position", "move", "click", "double_click", "right_click", "drag", "scroll"] },
+                    "cell": { "type": "string", "description": "Grid ref for target, e.g. \"K7\" or \"K7.br\" (overrides x/y)" },
                     "x": { "type": "integer", "description": "Target x (move/click/drag)" },
                     "y": { "type": "integer", "description": "Target y (move/click/drag)" },
+                    "cell2": { "type": "string", "description": "drag: destination grid ref (overrides x2/y2)" },
                     "x2": { "type": "integer", "description": "drag: destination x" },
                     "y2": { "type": "integer", "description": "drag: destination y" },
                     "dx": { "type": "integer", "description": "scroll: horizontal pixels" },
@@ -1115,15 +1118,21 @@ async fn builtin_invoke(
                 (Some(x), Some(y), Some(w), Some(h)) => Some((x as u32, y as u32, w as u32, h as u32)),
                 _ => None,
             };
+            let grid = params.get("grid").and_then(|v| v.as_bool()).unwrap_or(true);
             let ctx2 = ctx.clone();
-            let path = tokio::task::spawn_blocking(move || crate::desktop_ctl::screenshot(&ctx2, display, region))
+            let path = tokio::task::spawn_blocking(move || crate::desktop_ctl::screenshot(&ctx2, display, region, grid))
                 .await
                 .map_err(|e| format!("截屏任务失败: {e}"))??;
             // image 字段 → 对话 UI 自动出图（extract_tool_image 统一路径）；模型用 view_image 看图
             Ok(serde_json::json!({
                 "path": path,
                 "image": path,
-                "note": "Screenshot captured and shown to the user. Call view_image with this path to see it yourself.",
+                "note": if region.is_some() {
+                    "Screenshot captured (region crop, no grid). Use pixel coordinates for mouse."
+                } else {
+                    "Full-screen screenshot with labeled grid: columns A-Z (X), rows 1..N (Y). Click via mouse tool with cell=\"K7\" (anchors .c/.tl/.tr/.bl/.br, default center)."
+                },
+                "grid": region.is_none() && grid,
             }))
         }
         // ── 2.8 mouse：查看/操作鼠标（desktop_ctl 跨平台实现）──
@@ -1136,7 +1145,29 @@ async fn builtin_invoke(
                 .and_then(|v| v.as_str())
                 .ok_or("Missing parameter: action")?
                 .to_string();
-            let p2 = params.clone();
+            // 格子引用 → 像素：cell/cell2 来自最近一次全屏网格截图（坐标 = 物理屏幕尺寸换算）
+            let mut p2 = params.clone();
+            let resolve = |cell: &str| -> Result<(i32, i32), String> {
+                let (w, h, scale) = crate::desktop_ctl::screen_dims(0)
+                    .map_err(|e| format!("格子引用换算失败: {e}"))?;
+                let (x, y) = crate::desktop_ctl::parse_cell(cell, w, h)?;
+                // macOS 的 enigo 绝对坐标用逻辑点；Windows/Linux 用物理像素
+                #[cfg(target_os = "macos")]
+                let (x, y) = ((x as f64 / scale) as i32, (y as f64 / scale) as i32);
+                #[cfg(not(target_os = "macos"))]
+                let _ = scale;
+                Ok((x, y))
+            };
+            if let Some(cell) = params.get("cell").and_then(|v| v.as_str()) {
+                let (x, y) = resolve(cell)?;
+                p2["x"] = serde_json::json!(x);
+                p2["y"] = serde_json::json!(y);
+            }
+            if let Some(cell2) = params.get("cell2").and_then(|v| v.as_str()) {
+                let (x, y) = resolve(cell2)?;
+                p2["x2"] = serde_json::json!(x);
+                p2["y2"] = serde_json::json!(y);
+            }
             tokio::task::spawn_blocking(move || crate::desktop_ctl::mouse(&action, &p2))
                 .await
                 .map_err(|e| format!("鼠标任务失败: {e}"))?
