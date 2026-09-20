@@ -151,7 +151,7 @@ document.addEventListener('drop', (e) => {
 // 左键按在带属性元素上 → 跟踪 mousemove 增量发主进程平移窗口；双击 → 最大化切换
 let dragOrigin = null; // 起始屏幕坐标
 document.addEventListener('mousedown', (e) => {
-  if (e.button !== 0 || !e.target?.hasAttribute?.('data-tauri-drag-region')) return;
+  if (e.button !== 0 || !e.target?.closest?.('[data-tauri-drag-region]')) return;
   dragOrigin = { x: e.screenX, y: e.screenY };
   ipcRenderer.send('bit:drag-start');
 });
@@ -168,7 +168,7 @@ document.addEventListener('mouseup', () => {
   ipcRenderer.send('bit:drag-end');
 });
 document.addEventListener('dblclick', (e) => {
-  if (!e.target?.hasAttribute?.('data-tauri-drag-region')) return;
+  if (!e.target?.closest?.('[data-tauri-drag-region]')) return;
   window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize', {});
 });
 

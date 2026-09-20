@@ -94,14 +94,29 @@ pub fn ui_mounted(state: State<'_, Arc<Ctx>>) {
     );
 }
 
-/// 本进程内存占用（字节）：页眉仪表盘展示，前端每 3 秒轮询
+/// BIT 全系进程内存占用（字节）：页眉仪表盘展示，前端每 3 秒轮询
+/// Electron 多进程（主+GPU+渲染+zygote），只统计主进程会比系统监视器小一截
 #[tauri::command]
 pub fn mem_usage() -> u64 {
     use sysinfo::{ProcessesToUpdate, System};
     let mut sys = System::new();
-    let pid = sysinfo::Pid::from_u32(std::process::id());
-    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-    sys.process(pid).map(|p| p.memory()).unwrap_or(0)
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let self_pid = sysinfo::Pid::from_u32(std::process::id());
+    let mut total: u64 = 0;
+    for (pid, p) in sys.processes() {
+        // Linux 下 command() 形如 /opt/BIT/bit-frontend-real /opt/BIT/bit-frontend-real --type=gpu-process …
+        // macOS/Windows 的 comm 也都会带 "bit-frontend"
+        let cmd = p.command().join(" ");
+        let comm = p.name().to_lowercase();
+        if pid == &self_pid
+            || comm.contains("bit-frontend")
+            || cmd.contains("bit-frontend-real")
+            || cmd.contains("bit-frontend")
+        {
+            total = total.saturating_add(p.memory());
+        }
+    }
+    total
 }
 
 #[tauri::command]

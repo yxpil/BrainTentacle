@@ -57,9 +57,10 @@ const WORKER_EXE = isDev
   ? path.join(ROOT, 'src-tauri', 'target', 'debug', 'bit-cli.exe')
   : path.join(process.resourcesPath, 'bit-cli.exe');
 // 应用图标：开发期在 src-tauri/icons，打包后在 resources（extraResources 注入）
+// Linux 托盘（StatusNotifierItem）不支持 .ico，必须按平台选（Electron 0.6.42 修复）
 const ICON = isDev
-  ? path.join(ROOT, 'src-tauri', 'icons', 'icon.ico')
-  : path.join(process.resourcesPath, 'icon.ico');
+  ? path.join(ROOT, 'src-tauri', 'icons', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
+  : path.join(process.resourcesPath, process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 
 let bit = null; // bit.node 导出：hostStart / invoke / onUiEvent
 let win = null;
