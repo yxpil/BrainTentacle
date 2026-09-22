@@ -1,4 +1,4 @@
-# 触手怪 BIT — Agent Tool Hub
+# 触手怪 BrainTentacle — Agent Tool Hub
 
 简体中文 | [English](README_EN.md)
 
