@@ -1,5 +1,12 @@
 # BrainTentacle（路 BIT）测试说明
 
+- 测试完成：是（2026-10-04）
+- 测试日期：2026-10-04
+- 测试内容：单元测试（bit-core 各模块：agent/ai 协议解析、http_api 鉴权、hidden_code 脱敏、securefile 加密、store 存储、guardian 等）；集成测试 `crates/bit-core/tests/security_integration.rs`（加密往返/篡改、HMAC、Plugin 清单、监听主机归一化、路径清洗，共 12 例）；注入测试 5（sandbox `../` 路径穿越 4 + `config::normalize_host` 拒绝路径穿越/命令注入 1）；钩子测试 7（plugins `resolve_code` 文件优先/回退/空值 3 + 清单缺 id/垃圾容错 4）。
+- 运行命令：`cargo test -p bit-core --no-fail-fast`（全 workspace：`cargo test --workspace`）
+- 测试框架：Rust `#[cfg(test)]` + 外部 `tests/` 集成测试
+- 模型：豆包（Doubao）生成
+
 BrainTentacle 是一个 Cargo **workspace**，三个成员：
 
 - `crates/bit-core` — 框架无关核心库（agent 引擎 / 工具注册 / 存储与加密 / worker / TUI），同时带一个 `bit-cli` bin。
