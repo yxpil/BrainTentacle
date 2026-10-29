@@ -35,6 +35,8 @@ nsis:
   oneClick: true
   perMachine: false
   deleteAppDataOnUninstall: false
+  # customInit 里拦下"ARM64 包下到 x64 电脑"：见 packaging/nsis/installer.nsh
+  include: packaging/nsis/installer.nsh
 
 mac:
   # CI 用 --dir 出 .app 后手工 ad-hoc 深签名 + hdiutil/ditto（对齐旧 Tauri 流程，防 Gatekeeper"已损坏"）
