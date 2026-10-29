@@ -22,7 +22,9 @@ const showWhenVisible = () => {
   const showWindow = () => {
     try {
       getCurrentWindow().show().catch(() => {});
-    } catch {}
+    } catch {
+      /* show() 同步抛错（窗口句柄失效等）忽略，交由 3s 兜底重试 */
+    }
   };
   const scheduleShow = () => {
     requestAnimationFrame(() => requestAnimationFrame(showWindow));
