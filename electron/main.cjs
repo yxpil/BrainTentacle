@@ -769,9 +769,13 @@ function createWindow() {
     minHeight: 620,
     center: true,
     title: '触手怪',
-    // macOS 保留原生红绿灯（隐藏标题栏，对齐 Tauri 版 hidden_title）：frame:false 会把
-    // 红绿灯一起干掉，而前端 isMac 又隐藏自绘按钮 → 窗口没有任何关闭/最小化/最大化按钮
-    frame: process.platform !== 'darwin',
+    // 全平台自绘标题栏：macOS 用 titleBarStyle:'hidden' 保留原生红绿灯；Windows/Linux 无边框（TitleBar.jsx）。
+    // 0.6.50 曾把 frame 误改为 process.platform !== 'darwin'（Windows 变成带原生边框），
+    // 落在 Electron #51218「透明窗口 win32 用户调整大小修复」覆盖的组合之外 → Windows 端
+    // 边缘拖不动、拖拽时窗口跳变。改回 frame:false，Windows 显式启用 thickFrame（WS_THICKFRAME：
+    // 边缘拖拽调整大小 / resize 光标 / 贴边分屏）。
+    frame: false,
+    thickFrame: process.platform === 'win32',
     titleBarStyle: process.platform === 'darwin' ? 'hidden' : undefined,
     transparent: true,
     hasShadow: true,
