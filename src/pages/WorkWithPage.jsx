@@ -192,7 +192,7 @@ export default function WorkWithPage() {
             <input className="field" placeholder={t("ww.cwdPlaceholder")} value={form.cwd}
               onChange={(e) => setForm({ ...form, cwd: e.target.value })} />
           </div>
-          <textarea className="field !rounded-2xl min-h-[60px] resize-y"
+          <textarea className="field rounded-[var(--look-ui-radius,1rem)] min-h-[60px] resize-y"
             rows={2} placeholder={t("ww.envPlaceholder")}
             value={form.env} onChange={(e) => setForm({ ...form, env: e.target.value })} />
           <div className="flex items-center gap-4">

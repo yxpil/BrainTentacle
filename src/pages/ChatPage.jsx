@@ -1472,7 +1472,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                         </div>
                       )}
                       {c.visible && c.visible.trim() && (
-                        <div className="rounded-3xl rounded-bl-lg border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900">
+                        <div className="rounded-[var(--look-ui-radius,1.5rem)] rounded-bl-lg border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900">
                           <Markdown>{c.visible}</Markdown>
                         </div>
                       )}
@@ -1495,12 +1495,12 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                 {/* 本轮思考过程实时展示（默认展开，流式中） */}
                 {live.think && live.think.trim() && <ThinkPanel text={live.think} openDefault streaming />}
                 {live.text ? (
-                  <div className="rounded-3xl rounded-bl-lg border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900">
+                  <div className="rounded-[var(--look-ui-radius,1.5rem)] rounded-bl-lg border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900">
                     <Markdown>{live.text}</Markdown>
                     <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-neutral-900 align-middle dark:bg-white" />
                   </div>
                 ) : (
-                  <div className="mr-auto flex items-center gap-2 rounded-3xl rounded-bl-lg border border-neutral-200 bg-white px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900">
+                  <div className="mr-auto flex items-center gap-2 rounded-[var(--look-ui-radius,1.5rem)] rounded-bl-lg border border-neutral-200 bg-white px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900">
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-900 [animation-delay:0ms] dark:bg-white" />
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-900 [animation-delay:150ms] dark:bg-white" />
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-900 [animation-delay:300ms] dark:bg-white" />
@@ -1687,7 +1687,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                   onChange={(e) => setAskText((m) => ({ ...m, [a.id]: e.target.value }))}
                   placeholder={t("chat.askCustom")}
                   rows={2}
-                  className="field mb-2 w-full !rounded-2xl"
+                  className="field mb-2 w-full rounded-[var(--look-ui-radius,1rem)]"
                 />
                 <div className="flex gap-2">
                   <button
@@ -1851,7 +1851,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
           )}
 
           {/* 底部 pb-12 为工具栏/发送按钮预留独立一行：textarea 只在自己的区域滚动，永不进入按钮行 */}
-          <div className="relative rounded-2xl border border-neutral-300 bg-white pb-12 transition-colors focus-within:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:focus-within:border-neutral-200">
+          <div className="relative rounded-[var(--look-ui-radius,1rem)] border border-neutral-300 bg-white pb-12 transition-colors focus-within:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:focus-within:border-neutral-200">
             {/* 工具栏：左下角 absolute 排成一行（外层按钮收进输入框内） */}
             <div className="pointer-events-auto absolute bottom-2 left-2 z-10 flex items-center gap-0.5">
             {/* 上下文预览 */}
@@ -2621,7 +2621,7 @@ function MessageBubble({ message, onPreview }) {
   if (isUser) {
     return (
       <div className="group ml-auto flex max-w-[80%] flex-col items-end gap-0.5">
-        <div className="accent-solid whitespace-pre-wrap rounded-3xl rounded-br-lg px-4 py-2.5 text-sm leading-relaxed">
+        <div className="accent-solid whitespace-pre-wrap rounded-[var(--look-ui-radius,1.5rem)] rounded-br-lg px-4 py-2.5 text-sm leading-relaxed">
           {message.content}
         </div>
         <CopyBtn text={message.content || ""} />
@@ -2672,7 +2672,7 @@ function MessageBubble({ message, onPreview }) {
       )}
       {hasText && (
         <div className="group flex flex-col gap-0.5">
-          <div className="rounded-3xl rounded-bl-lg border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900">
+          <div className="rounded-[var(--look-ui-radius,1.5rem)] rounded-bl-lg border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900">
             <Markdown>{message.content}</Markdown>
           </div>
           <CopyBtn text={message.content || ""} />

@@ -45,6 +45,7 @@ function applyLook(look) {
     // 恢复默认
     root.style.removeProperty("--app-bg-image");
     root.style.removeProperty("--look-card-radius");
+    root.style.removeProperty("--look-ui-radius");
     root.style.removeProperty("--look-bg-color-light");
     root.style.removeProperty("--look-bg-color-dark");
     root.style.removeProperty("--look-bg-opacity");
@@ -73,6 +74,10 @@ function applyLook(look) {
 
   // 圆角
   root.style.setProperty("--look-card-radius", (look.cardRadius ?? 24) + "px");
+  // 输入框/对话圆角（独立调节）：0/未设 = 回退各元素原生圆角（胶囊/16/24）
+  const uiRadius = look.uiRadius ?? 0;
+  if (uiRadius > 0) root.style.setProperty("--look-ui-radius", uiRadius + "px");
+  else root.style.removeProperty("--look-ui-radius");
 
   // 边框 & 阴影开关
   root.classList.toggle("no-border", !look.borderOn);
@@ -91,6 +96,7 @@ const DEFAULT_LOOK = {
   borderOn: true,
   borderRadius: 0,
   cardRadius: 24,
+  uiRadius: 0,
   winRadius: 16,
   fontScale: 1,
   shadowOn: true,

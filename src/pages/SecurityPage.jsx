@@ -285,7 +285,7 @@ export default function SecurityPage() {
             onChange={(e) => setScanText(e.target.value)}
             placeholder={t("sec.hc.scanText", "粘贴文本以探测敏感信息（不自动保存）")}
             rows={3}
-            className="field !rounded-2xl resize-y"
+            className="field rounded-[var(--look-ui-radius,1rem)] resize-y"
           />
           <div className="flex items-center gap-3">
             <button

@@ -248,6 +248,8 @@
     @apply w-full rounded-full border border-neutral-300 bg-white px-4 py-2
       text-sm text-neutral-900 outline-none transition-colors
       focus:border-neutral-900 placeholder:text-neutral-400;
+    /* 外观页「输入框/对话圆角」独立调节；未设（0）时回退胶囊 */
+    border-radius: var(--look-ui-radius, 9999px);
   }
   .dark .field {
     @apply border-neutral-700 bg-neutral-950 text-neutral-100

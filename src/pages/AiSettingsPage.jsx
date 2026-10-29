@@ -723,7 +723,7 @@ export default function AiSettingsPage({ onStats, stats }) {
             )}
           </div>
           <textarea
-            className="field !rounded-2xl min-h-[130px] resize-y font-mono text-xs leading-relaxed disabled:cursor-not-allowed disabled:opacity-50"
+            className="field rounded-[var(--look-ui-radius,1rem)] min-h-[130px] resize-y font-mono text-xs leading-relaxed disabled:cursor-not-allowed disabled:opacity-50"
             value={wordsText}
             onChange={(e) => {
               setWordsText(e.target.value);
@@ -795,7 +795,7 @@ export default function AiSettingsPage({ onStats, stats }) {
           )}
         </div>
         <textarea
-          className="field !rounded-2xl min-h-[200px] resize-y font-mono text-xs leading-relaxed"
+          className="field rounded-[var(--look-ui-radius,1rem)] min-h-[200px] resize-y font-mono text-xs leading-relaxed"
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
           placeholder={t("ai.systemPromptPlaceholder")}
@@ -886,7 +886,7 @@ export default function AiSettingsPage({ onStats, stats }) {
           )}
         </div>
         <textarea
-          className="field !rounded-2xl min-h-[100px] resize-y font-mono text-xs leading-relaxed"
+          className="field rounded-[var(--look-ui-radius,1rem)] min-h-[100px] resize-y font-mono text-xs leading-relaxed"
           value={customPrompt}
           onChange={(e) => setCustomPrompt(e.target.value)}
           placeholder={t("ai.customPromptPlaceholder")}

@@ -841,7 +841,7 @@ export default function ToolsPage({ onStats }) {
         </div>
 
         <textarea
-          className="field h-44 !rounded-2xl p-3 font-mono text-xs"
+          className="field h-44 rounded-[var(--look-ui-radius,1rem)] p-3 font-mono text-xs"
           value={code}
           onChange={(e) => setCode(e.target.value)}
           spellCheck={false}
@@ -878,7 +878,7 @@ export default function ToolsPage({ onStats }) {
               </span>
             </div>
             <textarea
-              className="field h-28 !rounded-2xl p-3 font-mono text-xs"
+              className="field h-28 rounded-[var(--look-ui-radius,1rem)] p-3 font-mono text-xs"
               readOnly
               value={result.loading ? "…" : JSON.stringify(result.data, null, 2)}
             />
@@ -1013,7 +1013,7 @@ export default function ToolsPage({ onStats }) {
             <div className="mt-3 flex-1 overflow-y-auto">
               {stdioMode === "json" ? (
                 <textarea
-                  className="field !rounded-2xl min-h-[300px] w-full resize-y font-mono text-xs"
+                  className="field rounded-[var(--look-ui-radius,1rem)] min-h-[300px] w-full resize-y font-mono text-xs"
                   value={stdioJson}
                   onChange={(e) => setStdioJson(e.target.value)}
                   placeholder={STDIO_JSON_EXAMPLE}
@@ -1023,8 +1023,8 @@ export default function ToolsPage({ onStats }) {
                 <div className="grid grid-cols-4 gap-2">
                   <input className="field" placeholder={t("tools.mcpStdioName")} value={stdioName} onChange={(e) => setStdioName(e.target.value)} />
                   <input className="field col-span-3 font-mono" placeholder={t("tools.mcpStdioCommand")} value={stdioCmd} onChange={(e) => setStdioCmd(e.target.value)} />
-                  <textarea className="field col-span-2 !rounded-2xl font-mono" rows={4} placeholder={t("tools.mcpStdioArgs")} value={stdioArgs} onChange={(e) => setStdioArgs(e.target.value)} />
-                  <textarea className="field col-span-2 !rounded-2xl font-mono" rows={4} placeholder={t("tools.mcpStdioEnv")} value={stdioEnv} onChange={(e) => setStdioEnv(e.target.value)} />
+                  <textarea className="field col-span-2 rounded-[var(--look-ui-radius,1rem)] font-mono" rows={4} placeholder={t("tools.mcpStdioArgs")} value={stdioArgs} onChange={(e) => setStdioArgs(e.target.value)} />
+                  <textarea className="field col-span-2 rounded-[var(--look-ui-radius,1rem)] font-mono" rows={4} placeholder={t("tools.mcpStdioEnv")} value={stdioEnv} onChange={(e) => setStdioEnv(e.target.value)} />
                 </div>
               )}
               {stdioErrs.length > 0 && (
