@@ -57,9 +57,10 @@ const WORKER_EXE = isDev
   ? path.join(ROOT, 'src-tauri', 'target', 'debug', 'bit-cli.exe')
   : path.join(process.resourcesPath, 'bit-cli.exe');
 // 应用图标：开发期在 src-tauri/icons，打包后在 resources（extraResources 注入）
+// Linux/macOS 托盘（nativeImage）不支持 .ico，必须按平台选（与仓库修复一致）
 const ICON = isDev
-  ? path.join(ROOT, 'src-tauri', 'icons', 'icon.ico')
-  : path.join(process.resourcesPath, 'icon.ico');
+  ? path.join(ROOT, 'src-tauri', 'icons', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
+  : path.join(process.resourcesPath, process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 
 let bit = null; // bit.node 导出：hostStart / invoke / onUiEvent
 let win = null;
@@ -221,9 +222,19 @@ function startGoalsPolling() {
 let quitting = false; // 真正退出（quit_app / app.quit）时置位：窗口关闭不再隐藏到托盘
 
 // ── 托盘常驻（M3）：点击/菜单唤起主界面，退出走真正退出链 ──
+// macOS 菜单栏图标标准 16pt（Retina 32px）：icon.png 512px / 状态灯 64px 直接上栏过大 → 缩到 20px（10pt，比系统图标小约 30%）
+function traySized(img) {
+  if (process.platform !== 'darwin') return img;
+  const s = img.getSize();
+  return s.width > 20 || s.height > 20 ? img.resize({ width: 20, height: 20 }) : img;
+}
+
 function createTray() {
   try {
-    tray = new Tray(ICON);
+    const { nativeImage } = require('electron');
+    const trayImg = traySized(nativeImage.createFromPath(ICON));
+    console.info(`[BIT] 托盘图标 ${trayImg.getSize().width}x${trayImg.getSize().height}`);
+    tray = new Tray(trayImg);
   } catch (e) {
     console.warn('[BIT] 托盘创建失败（不影响主流程）:', e.message);
     return;
@@ -378,7 +389,7 @@ async function makeStatusIcons() {
 function updateTrayIcon() {
   if (!tray) return;
   const img = lampIcons[trayLamp];
-  if (img) { try { tray.setImage(img); } catch {} }
+  if (img) { try { tray.setImage(traySized(img)); } catch {} } // 状态灯图同为大图，同样缩放
 }
 
 // 事件流 → 指示灯：开始即黄，正常结束绿，出错红；无任何事件保持白
@@ -726,6 +737,9 @@ function hardenWebContents(wc) {
   // http(s) 点击 → 转交系统浏览器；其余（file:// 等）一律拒绝；仅 dev server 放行。
   wc.on('will-navigate', (e, url) => {
     if (process.env.BIT_ELECTRON_DIST !== '1' && url.startsWith('http://localhost:5173')) return;
+    // 同页 reload 放行：location.reload() 也走 will-navigate，
+    // 否则前端「字体缩放生效重启」被这条防护拦死（遮罩+重启机制失效）
+    if (url === wc.getURL()) return;
     e.preventDefault();
     if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
   });
@@ -755,7 +769,10 @@ function createWindow() {
     minHeight: 620,
     center: true,
     title: '触手怪',
-    frame: false,
+    // macOS 保留原生红绿灯（隐藏标题栏，对齐 Tauri 版 hidden_title）：frame:false 会把
+    // 红绿灯一起干掉，而前端 isMac 又隐藏自绘按钮 → 窗口没有任何关闭/最小化/最大化按钮
+    frame: process.platform !== 'darwin',
+    titleBarStyle: process.platform === 'darwin' ? 'hidden' : undefined,
     transparent: true,
     hasShadow: true,
     show: false,
@@ -769,6 +786,12 @@ function createWindow() {
     },
   });
   win.setMenuBarVisibility(false);
+  // macOS 原生红点：关闭 = 隐藏到托盘（与自绘关闭一致；真正退出由 before-quit 置位 quitting 放行）
+  win.on('close', (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    win.hide();
+  });
   hardenWebContents(win.webContents);
 
   // 冒烟模式（BIT_SMOKE=1）：渲染管线 console 转发 stdout，便于无窗诊断
@@ -925,7 +948,8 @@ app.whenReady().then(async () => {
   createWindow();
 
   app.on('activate', () => {
-    if (!win) createWindow();
+    // 与仓库修复一致：隐藏的窗口也要重新显示（此前 !win 才重建，唤不回来）
+    showWindow();
   });
 });
 

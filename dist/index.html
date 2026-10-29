@@ -4,10 +4,69 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>触手怪</title>
-    <script type="module" crossorigin src="./assets/index-CYrBRk_U.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-B_6zJi5F.css">
+    <style>
+      #boot-mask { position: fixed; inset: 0; z-index: 2147483647; background: #ffffff; border-radius: var(--win-radius, 16px); opacity: 1; transition: opacity .25s ease; pointer-events: auto; }
+      #boot-mask.gone { opacity: 0; pointer-events: none; }
+      @media (prefers-color-scheme: dark) { #boot-mask:not([style*="background"]) { background: #18181b; } }
+    </style>
+    <script type="module" crossorigin src="./assets/index-DBVe-TpQ.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-CwXQ0KDp.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="boot-mask"></div>
+    <script>
+      (function () {
+        // —— 前端重启遮罩 ——
+        // 字体缩放改变根字号会引发布局缓存错位（左侧选中项漂移等）：
+        // 字号变更静默 600ms（=用户调完）后 reload 重建整个渲染状态，遮罩盖住整次刷新。
+        var start = Date.now(),
+          seen = document.documentElement.style.fontSize,
+          timer = null;
+        new MutationObserver(function () {
+          var cur = document.documentElement.style.fontSize;
+          if (cur === seen) return;
+          // 应用启动期的首次写入（seen 还是初始空值）只记录不刷新：防止恢复配置触发 reload 循环
+          var initPhase = seen === "" && Date.now() - start < 5000;
+          seen = cur;
+          if (initPhase) return;
+          clearTimeout(timer);
+          timer = setTimeout(function () {
+            location.reload();
+          }, 600);
+        }).observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+
+        // 遮罩底色：同步读 localStorage 首帧缓存（与应用实际主题一致），避免刷新瞬间闪色
+        try {
+          var mode = localStorage.getItem("bit.theme.v1") || "light";
+          if (mode === "auto") mode = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          var look = JSON.parse(localStorage.getItem("bit.look.v1") || "null");
+          var bg = look && look.enabled ? (mode === "dark" ? look.bgColorDark : look.bgColorLight) : null;
+          if (bg) document.getElementById("boot-mask").style.background = bg;
+          else if (mode === "dark") document.getElementById("boot-mask").style.background = "#18181b";
+        } catch (e) {}
+
+        // 应用挂载即淡出移除；3s 兜底放行（渲染异常时不永久遮挡）
+        function done() {
+          var m = document.getElementById("boot-mask");
+          if (!m || m.classList.contains("gone")) return;
+          m.classList.add("gone");
+          setTimeout(function () {
+            if (m.parentNode) m.parentNode.removeChild(m);
+          }, 320);
+        }
+        var iv = setInterval(function () {
+          var r = document.getElementById("root");
+          if (r && r.childElementCount > 0) {
+            clearInterval(iv);
+            done();
+          }
+        }, 50);
+        setTimeout(function () {
+          clearInterval(iv);
+          done();
+        }, 3000);
+      })();
+    </script>
+    <div id="root"></div>
   </body>
 </html>

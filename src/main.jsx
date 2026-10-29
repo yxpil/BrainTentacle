@@ -19,14 +19,26 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 // 兜底定时器防止渲染异常时窗口永不显示。
 // BIT_HEADLESS=1（E2E/专项测试）：窗口保持隐藏，不弹到用户屏幕
 const showWhenVisible = () => {
+  const showWindow = () => {
+    try {
+      getCurrentWindow().show().catch(() => {});
+    } catch {}
+  };
+  const scheduleShow = () => {
+    requestAnimationFrame(() => requestAnimationFrame(showWindow));
+    setTimeout(showWindow, 3000);
+  };
   invoke("is_headless")
-    .then((headless) => {
-      if (headless) return;
-      const win = getCurrentWindow();
-      const showWindow = () => win.show().catch(() => {});
-      requestAnimationFrame(() => requestAnimationFrame(showWindow));
-      setTimeout(showWindow, 3000);
+    .then((r) => {
+      // Tauri 壳返回 bool；NAPI bridge（Electron）返回 { headless: boolean }。
+      // 必须按值判断：历史上用真值判断，对象恒为真 → 提前 return → show 与
+      // 3s 兜底全被跳过，窗口永远停在 show:false（macOS 打包版启动无窗口的根因）
+      const headless = r === true || (r != null && r.headless === true);
+      if (!headless) scheduleShow();
     })
-    .catch(() => {});
+    .catch(() => {
+      // 元查询失败不允许吞掉 show：按非 headless 兜底，否则窗口永不显示
+      scheduleShow();
+    });
 };
 showWhenVisible();

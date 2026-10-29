@@ -81,6 +81,10 @@
   #root {
     position: relative;
     isolation: isolate;
+    /* fixed 浮层（弹窗遮罩/拖拽遮罩/toast）的包含块默认是 viewport，逃过下面的
+       overflow:hidden → 圆角调大后遮罩四角仍是直角、超出窗口圆角。
+       translateZ(0) 把包含块拉回 #root，overflow:hidden 即可统一裁剪所有 fixed 浮层 */
+    transform: translateZ(0);
     width: 100dvw;
     height: 100dvh;
     background-color: transparent !important;
