@@ -500,6 +500,7 @@ fn main() {
             commands::list_plugins,
             commands::toggle_plugin,
             commands::refresh_plugins,
+            commands::get_plugin_ui,
             commands::get_custom_prompt,
             commands::set_custom_prompt,
             commands::set_hotkey,

@@ -284,6 +284,7 @@ pub async fn dispatch(
         "list_plugins" => bit_core::commands_api::list_plugins(ctx),
         "toggle_plugin" => bit_core::commands_api::toggle_plugin(ctx, a_str(&args, "id")?, a_bool(&args, "enabled")?),
         "refresh_plugins" => bit_core::commands_api::refresh_plugins(ctx),
+        "get_plugin_ui" => bit_core::commands_api::get_plugin_ui(ctx),
 
         // ---------- AI（多协议提供方） ----------
         "list_providers" => bit_core::commands_api::list_providers(ctx),

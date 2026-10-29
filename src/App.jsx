@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "./api.js";
+import { loadPluginUi, subscribePluginPages, getPluginPages } from "./pluginHost.js";
 import { useTheme } from "./useTheme.js";
 import { useLang } from "./i18n.js";
 import logoUrl from "./assets/logo-64.png";
@@ -72,6 +73,26 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const { isDark, toggle } = useTheme();
   const { t, lang, toggleLang } = useLang();
+  // 插件页面登记表（pluginHost 维护，useSyncExternalStore 订阅变更）
+  const pluginPages = useSyncExternalStore(subscribePluginPages, getPluginPages);
+  // 导航登记表 = 内置页 + 插件页（插件 label 为原文，t() 缺 key 时回退原文展示）
+  const pages = { ...PAGES };
+  for (const [k, v] of Object.entries(pluginPages)) {
+    pages[k] = {
+      label: v.label,
+      icon: typeof v.icon === "function" ? v.icon : IconSkill,
+      page: v.component,
+    };
+  }
+  const secondaryKeys = [...SECONDARY, ...Object.keys(pluginPages)];
+  // 插件重载后当前页可能已消失：回落到对话页（否则主区空白）
+  useEffect(() => {
+    if (!pages[tab]) setTab(PRIMARY);
+  }, [pluginPages, tab]);
+  // 启动时加载插件 UI（css 注入 + js 执行）；失败不影响应用本体
+  useEffect(() => {
+    loadPluginUi().catch((e) => console.warn("[插件] UI 加载失败:", e));
+  }, []);
   const [showAbout, setShowAbout] = useState(false);
   const [appVersion, setAppVersion] = useState("");
   useEffect(() => {
@@ -274,8 +295,8 @@ export default function App() {
     }
   };
   useLayoutEffect(() => {
-    syncBlob(true); // tab / 侧栏按钮增减都会改变导航项位置，重播流动
-  }, [tab, chatSidebar]);
+    syncBlob(true); // tab / 侧栏按钮增减 / 插件页注册都会改变导航项位置，重播流动
+  }, [tab, chatSidebar, pluginPages]);
   useEffect(() => {
     const onResize = () => syncBlob(false); // 窗口缩放：静默校正，不播动画
     window.addEventListener("resize", onResize);
@@ -285,7 +306,7 @@ export default function App() {
   // 图标导航项：圆形小圆片（悬停显示名称），把宽度留给内容区
   // 选中态的实心圆片由共享的 nav-blob 提供（点击时从旧位置流过来），按钮本身只负责图标颜色
   const NavItem = ({ k }) => {
-    const { label, icon: Icon } = PAGES[k];
+    const { label, icon: Icon } = pages[k];
     const active = tab === k;
     return (
       <button
@@ -397,7 +418,7 @@ export default function App() {
               </>
             )}
             <div className="mx-auto my-2 h-px w-6 bg-neutral-200 dark:bg-neutral-800" />
-            {SECONDARY.map((k) => (
+            {secondaryKeys.map((k) => (
               <NavItem key={k} k={k} />
             ))}
           </nav>
@@ -419,7 +440,7 @@ export default function App() {
         {/* 主内容：所有页面常驻挂载（display 切换），保证对话页的
             执行状态 / 等待队列 / 审批监听在切换页面后不丢失 */}
         <main className="min-h-0 flex-1 overflow-hidden">
-          {Object.entries(PAGES).map(([k, { page: Page }]) => (
+          {Object.entries(pages).map(([k, { page: Page }]) => (
             <div
               key={k}
               className={`h-full ${k === PRIMARY ? "overflow-hidden px-2 pb-3 pt-2" : "overflow-auto p-6"}`}

@@ -171,6 +171,13 @@ export default function ToolsPage({ onStats }) {
   const [plugins, setPlugins] = useState([]);
   const [pluginDir, setPluginDir] = useState("");
   const [pluginBusy, setPluginBusy] = useState(false);
+  const [pluginErrors, setPluginErrors] = useState([]); // 清单校验/安全校验失败的插件错误
+
+  const applyPluginList = (p) => {
+    setPlugins(p?.plugins || []);
+    setPluginDir(p?.dir || "");
+    setPluginErrors(p?.errors || []);
+  };
 
   const reload = async () => {
     const [t, r, m, s] = await Promise.all([api.listTools(), api.listRuntimes(), api.mcpList(), api.getToolStats().catch(() => [])]);
@@ -178,10 +185,7 @@ export default function ToolsPage({ onStats }) {
     setRuntimes(r.runtimes || []);
     setMcpServers(m.servers || []);
     setStats(Object.fromEntries((Array.isArray(s) ? s : []).map((x) => [x.id, x])));
-    api.listPlugins().then((p) => {
-      setPlugins(p?.plugins || []);
-      setPluginDir(p?.dir || "");
-    }).catch(() => {});
+    api.listPlugins().then(applyPluginList).catch(() => {});
     if (!runtime && r.runtimes?.length) setRuntime(r.runtimes[0].id);
   };
   useEffect(() => {
@@ -729,7 +733,7 @@ export default function ToolsPage({ onStats }) {
         </div>
       </section>
 
-      {/* ── 本地插件：toolhomes/plugins 声明式插件包 ── */}
+      {/* ── 本地插件：toolhomes/plugins 声明式插件包（前后端统一：工具/提示词/技能/定时任务 + 界面 css/js）── */}
       <section className="card">
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -737,7 +741,7 @@ export default function ToolsPage({ onStats }) {
             <div>
               <h2 className="text-sm font-semibold">本地插件</h2>
               <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                在插件目录建 <span className="font-mono">&lt;名字&gt;/plugin.json</span> 声明工具 / 提示词 / 技能 / 定时任务，重扫即生效
+                在插件目录建 <span className="font-mono">&lt;名字&gt;/plugin.json</span> 声明工具 / 提示词 / 技能 / 定时任务 / 界面（ui.css + ui.js），重扫即生效
               </p>
             </div>
           </div>
@@ -756,8 +760,10 @@ export default function ToolsPage({ onStats }) {
                 setPluginBusy(true);
                 try {
                   await api.refreshPlugins();
-                  const p = await api.listPlugins();
-                  setPlugins(p?.plugins || []);
+                  applyPluginList(await api.listPlugins());
+                  // 插件增删/开关后重放渲染层 UI（样式与页面登记重建）
+                  const { reloadPluginUi } = await import("../pluginHost.js");
+                  await reloadPluginUi();
                 } finally {
                   setPluginBusy(false);
                 }
@@ -775,6 +781,16 @@ export default function ToolsPage({ onStats }) {
           <p className="mb-3 px-2 font-mono text-[11px] text-neutral-400">{pluginDir}</p>
         )}
 
+        {/* 清单/安全校验失败列表：不让错误静默（此前解析失败只进 trace，用户无感知） */}
+        {pluginErrors.length > 0 && (
+          <div className="mb-3 rounded-2xl border border-red-300/60 bg-red-50/60 px-3 py-2 dark:border-red-900/60 dark:bg-red-950/30">
+            <p className="mb-1 text-xs font-semibold text-red-600 dark:text-red-400">校验未通过（这些插件未加载）</p>
+            {pluginErrors.map((e) => (
+              <p key={e} className="break-all font-mono text-[11px] leading-relaxed text-red-500 dark:text-red-400/90">{e}</p>
+            ))}
+          </div>
+        )}
+
         <div className="flex flex-col gap-2">
           {plugins.map((p) => (
             <div key={p.id} className="flex items-center gap-3 rounded-2xl border border-neutral-200/70 px-4 py-2.5 dark:border-neutral-800/70">
@@ -784,11 +800,22 @@ export default function ToolsPage({ onStats }) {
                   {p.version && <span className="chip">{p.version}</span>}
                   {p.tools?.length > 0 && <span className="chip">{p.tools.length} 工具</span>}
                   {p.prompts > 0 && <span className="chip">{p.prompts} 提示词</span>}
-                  {p.skills > 0 && <span className="chip">{p.skills} 技能</span>}
+                  {p.skills > 0 && <span className="chip">{p.skills.length} 技能</span>}
                   {p.memories > 0 && <span className="chip">{p.memories} 记忆</span>}
                   {p.jobs?.map((j) => (
                     <span key={j.name} className="chip">{j.name} · {j.schedule}</span>
                   ))}
+                  {p.has_ui && <span className="chip">界面</span>}
+                  {/* 权限声明：启用前明示插件要什么能力 */}
+                  {p.permissions?.map((perm) => (
+                    <span key={perm} className="chip font-mono">{perm}</span>
+                  ))}
+                  {/* 安全校验状态：篡改 = 哈希基线不匹配，能力已全部摘除 */}
+                  {p.verify === "tampered" && (
+                    <span className="chip border-red-400 text-red-500" title="文件与启用时哈希基线不一致，所有能力已停用。重新启用即信任当前内容。">
+                      安全校验失败
+                    </span>
+                  )}
                 </div>
                 {p.description && (
                   <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">{p.description}</p>
@@ -797,10 +824,25 @@ export default function ToolsPage({ onStats }) {
               <PillSwitch
                 checked={p.enabled}
                 onChange={async () => {
+                  // 启用 = 明示信任：先弹权限清单让用户确认（停用无需确认）
+                  if (!p.enabled && (p.permissions?.length || p.has_ui)) {
+                    const perms = p.permissions || [];
+                    const ok = await confirmDialog({
+                      title: `启用插件「${p.name}」`,
+                      message:
+                        `该插件请求权限：${perms.join("、") || "无"}。` +
+                        `启用即以当前内容记录安全基线；之后文件被改动会自动停用并在上方提示。`,
+                    });
+                    if (!ok) return;
+                  }
                   setPluginBusy(true);
                   try {
                     await api.togglePlugin(p.id, !p.enabled);
-                    setPlugins((arr) => arr.map((x) => (x.id === p.id ? { ...x, enabled: !p.enabled } : x)));
+                    applyPluginList(await api.listPlugins());
+                    const { reloadPluginUi } = await import("../pluginHost.js");
+                    await reloadPluginUi();
+                  } catch (e) {
+                    await confirmDialog({ alert: true, title: "启用失败", message: String(e?.message || e) });
                   } finally {
                     setPluginBusy(false);
                   }

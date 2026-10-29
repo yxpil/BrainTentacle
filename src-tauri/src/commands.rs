@@ -676,12 +676,14 @@ pub fn get_desktop_tools(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
     })
 }
 
-/// 本地插件：列表（含启用状态与内容摘要）
+/// 本地插件：列表（含启用状态、内容摘要与安全校验状态）
 #[tauri::command]
 pub fn list_plugins(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
     let ctx = ctx(state);
-    let plugins = ctx.plugins.lock().unwrap().clone();
+    let (plugins, errs) = crate::plugins::scan(&ctx);
     let disabled: Vec<String> = { ctx.config.lock().unwrap().disabled_plugins.clone() };
+    let enabled: Vec<&crate::plugins::Plugin> = plugins.iter().filter(|p| !disabled.contains(&p.id)).collect();
+    let tampered = crate::plugins::tampered_ids(&ctx, &enabled);
     let list: Vec<serde_json::Value> = plugins
         .iter()
         .map(|p| {
@@ -696,10 +698,14 @@ pub fn list_plugins(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
                 "skills": p.skills.len(),
                 "memories": p.memories.len(),
                 "jobs": p.jobs.iter().map(|j| json!({ "name": j.name, "schedule": j.schedule })).collect::<Vec<_>>(),
+                "permissions": p.permissions,
+                "has_ui": p.ui.as_ref().map(|u| !u.css.is_empty() || !u.js.is_empty()).unwrap_or(false),
+                // 安全状态：verified=通过 / tampered=校验失败（篡改，未注入）/ disabled=用户停用
+                "verify": if disabled.contains(&p.id) { "disabled" } else if tampered.contains(&p.id) { "tampered" } else { "verified" },
             })
         })
         .collect();
-    json!({ "plugins": list, "dir": crate::plugins::dir(&ctx).to_string_lossy() })
+    json!({ "plugins": list, "dir": crate::plugins::dir(&ctx).to_string_lossy(), "errors": errs })
 }
 
 /// 本地插件：启用/停用（停用后工具/技能/记忆/提示词/定时任务全部摘除）
@@ -715,6 +721,13 @@ pub fn toggle_plugin(state: State<'_, Arc<Ctx>>, id: String, enabled: bool) -> R
         }
     }
     ctx.save_config();
+    // 启用 = 用户明示信任：以当前内容重录哈希基线（覆盖旧基线，篡改状态由此解除）
+    if enabled {
+        if let Err(e) = crate::plugins::record_baseline(&ctx, &id) {
+            crate::audit::record(&ctx, "local-user", "plugin.verify", &id, json!({ "ok": false, "error": e.clone() }), false);
+            return Err(format!("安全校验基线记录失败: {e}"));
+        }
+    }
     crate::plugins::sync(&ctx);
     crate::audit::record(&ctx, "local-user", "plugin.toggle", &id, json!({ "enabled": enabled }), true);
     Ok(json!({ "ok": true }))
@@ -728,6 +741,13 @@ pub fn refresh_plugins(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, 
     let plugins = ctx.plugins.lock().unwrap().len();
     crate::audit::record(&ctx, "local-user", "plugin.refresh", "plugins", json!({ "count": plugins }), true);
     Ok(json!({ "ok": true, "count": plugins }))
+}
+
+/// 本地插件：读取 UI 资源包（渲染进程插件加载器调用：注入 css / 执行 js）
+#[tauri::command]
+pub fn get_plugin_ui(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
+    let ctx = ctx(state);
+    json!({ "plugins": crate::plugins::ui_bundle(&ctx) })
 }
 
 /// 用户自定义提示词/人设：读取

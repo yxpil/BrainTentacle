@@ -41,6 +41,8 @@ export const api = {
   listPlugins: () => invoke("list_plugins"),
   togglePlugin: (id, enabled) => invoke("toggle_plugin", { id, enabled }),
   refreshPlugins: () => invoke("refresh_plugins"),
+  // 插件 UI 资源包：启用且通过安全校验的插件 css/js（渲染层插件加载器读取）
+  getPluginUi: () => invoke("get_plugin_ui"),
   // 用户自定义提示词/人设
   getCustomPrompt: () => invoke("get_custom_prompt"),
   setCustomPrompt: (custom_prompt) => invoke("set_custom_prompt", { customPrompt: custom_prompt }),

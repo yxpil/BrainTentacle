@@ -108,7 +108,28 @@ pub struct Plugin {
     pub memories: Vec<String>,
     #[serde(default)]
     pub jobs: Vec<PluginJob>,
+    // ── 插件化加强（前后端统一插件包）──
+    /// 权限声明（启用时向用户明示）：css=注入界面样式 js=执行界面脚本 invoke=调用后端命令
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    /// 前端 UI 能力：css/js 均为相对插件目录的文件路径列表（按序加载）
+    #[serde(default)]
+    pub ui: Option<PluginUi>,
 }
+
+/// 插件声明的界面能力（渲染进程侧加载）
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct PluginUi {
+    /// 样式文件（相对插件目录），注入 <style>
+    #[serde(default)]
+    pub css: Vec<String>,
+    /// 界面脚本入口（相对插件目录，按序执行），拿到受限插件 API
+    #[serde(default)]
+    pub js: Vec<String>,
+}
+
+/// 允许声明的权限位（未知权限 = 清单校验失败，插件不加载）
+const KNOWN_PERMS: &[&str] = &["css", "js", "invoke"];
 
 pub fn dir(ctx: &Arc<crate::state::Ctx>) -> PathBuf {
     crate::toolenv::dir(ctx).join("plugins")
@@ -129,7 +150,65 @@ fn resolve_code(plugin_dir: &std::path::Path, file: &Option<String>, code: &Opti
     code.clone().filter(|s| !s.trim().is_empty())
 }
 
-/// 扫描插件目录：读取全部 plugin.json（解析失败的目录跳过并列出错误）
+/// 相对路径包含性检查：拒绝绝对路径与 `..` 逃逸（ui/css/js 文件读取的统一闸门）
+fn safe_rel(raw: &str) -> Result<(), String> {
+    let p = std::path::Path::new(raw);
+    if p.is_absolute() {
+        return Err(format!("absolute path not allowed: {raw}"));
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("path escapes plugin dir: {raw}"));
+    }
+    Ok(())
+}
+
+/// 自我安全校验：清单 schema + 权限位 + 路径包含性。
+/// 不合格的插件整体不加载（scan 阶段拦截，错误进 errs 列表展示给用户）。
+fn validate(p: &Plugin, pdir: &std::path::Path) -> Result<(), String> {
+    if p.name.trim().is_empty() {
+        return Err("name is required".into());
+    }
+    for perm in &p.permissions {
+        if !KNOWN_PERMS.contains(&perm.as_str()) {
+            return Err(format!("unknown permission: {perm} (known: {})", KNOWN_PERMS.join(", ")));
+        }
+    }
+    // ui 能力必须有对应权限位声明（有文件无声明 = 拒绝，防"看起来无害"的插件夹带脚本）
+    if let Some(ui) = &p.ui {
+        if !ui.css.is_empty() && !p.permissions.iter().any(|x| x == "css") {
+            return Err("ui.css declared but missing permission \"css\"".into());
+        }
+        if !ui.js.is_empty() && !p.permissions.iter().any(|x| x == "js") {
+            return Err("ui.js declared but missing permission \"js\"".into());
+        }
+        for f in ui.css.iter().chain(ui.js.iter()) {
+            safe_rel(f)?;
+            if !pdir.join(f).is_file() {
+                return Err(format!("ui file not found: {f}"));
+            }
+        }
+    }
+    // interpreter 工具必须有运行时；工具源码文件同样过路径闸门
+    for t in &p.tools {
+        if t.kind != "script" && t.runtime.trim().is_empty() {
+            return Err(format!("tool `{}`: interpreter kind requires runtime", t.name));
+        }
+        if let Some(f) = &t.file {
+            safe_rel(f)?;
+        }
+    }
+    for j in &p.jobs {
+        if parse_schedule(&j.schedule).is_none() {
+            return Err(format!("job `{}`: bad schedule `{}`", j.name, j.schedule));
+        }
+        if let Some(f) = &j.file {
+            safe_rel(f)?;
+        }
+    }
+    Ok(())
+}
+
+/// 扫描插件目录：读取全部 plugin.json（解析失败/校验不过的目录跳过并列出错误）
 pub fn scan(ctx: &Arc<crate::state::Ctx>) -> (Vec<Plugin>, Vec<String>) {
     let mut out = Vec::new();
     let mut errs = Vec::new();
@@ -153,6 +232,11 @@ pub fn scan(ctx: &Arc<crate::state::Ctx>) -> (Vec<Plugin>, Vec<String>) {
                     if p.name.trim().is_empty() {
                         p.name = pid.to_string();
                     }
+                    // 自我安全校验（schema/权限/路径）：不过的插件不进加载列表
+                    if let Err(e) = validate(&p, &path) {
+                        errs.push(format!("{pid}: {e}"));
+                        continue;
+                    }
                     out.push(p);
                 }
                 Err(e) => errs.push(format!("{pid}: {e}")),
@@ -164,13 +248,133 @@ pub fn scan(ctx: &Arc<crate::state::Ctx>) -> (Vec<Plugin>, Vec<String>) {
     (out, errs)
 }
 
+// ---------- 自我安全校验：全文件 SHA-256 基线（防篡改）----------
+//
+// 首次启用插件时对插件目录全部文件算哈希基线（bit.db 文档 "plugin_baselines"），
+// 此后每次 scan 对比：文件被改动/新增/删除 → 该插件按未启用处理（不注入任何能力），
+// 错误进 errs 并记审计。用户在 UI 点「信任并启用」可重录基线（覆盖为当前内容）。
+
+/// 递归计算插件目录内容哈希：路径（相对、正斜杠）+ 内容 逐条喂 sha256，
+/// 顺序固定（目录遍历后排序），结果为 64 位 hex。
+fn dir_fingerprint(pdir: &std::path::Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    fn walk(base: &std::path::Path, cur: &std::path::Path, out: &mut Vec<(String, PathBuf)>) -> Result<(), String> {
+        let entries = fs::read_dir(cur).map_err(|e| e.to_string())?;
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(base, &p, out)?;
+            } else {
+                let rel = p
+                    .strip_prefix(base)
+                    .map_err(|_| "strip_prefix failed".to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push((rel, p));
+            }
+        }
+        Ok(())
+    }
+    walk(pdir, pdir, &mut files)?;
+    files.sort();
+    let mut h = Sha256::new();
+    for (rel, p) in &files {
+        h.update(rel.as_bytes());
+        h.update([0]);
+        let bytes = fs::read(p).map_err(|e| format!("{rel}: {e}"))?;
+        h.update(&(bytes.len() as u64).to_le_bytes());
+        h.update(&bytes);
+    }
+    Ok(format!("{:x}", h.finalize()))
+}
+
+type Baselines = HashMap<String, String>;
+
+fn load_baselines(ctx: &Arc<crate::state::Ctx>) -> Baselines {
+    let db = ctx.db.lock().unwrap();
+    crate::store::get_json::<Baselines>(&db, "plugin_baselines").unwrap_or_default()
+}
+
+fn save_baselines(ctx: &Arc<crate::state::Ctx>, st: &Baselines) {
+    let db = ctx.db.lock().unwrap();
+    crate::store::put_json(&db, "plugin_baselines", st);
+}
+
+/// 信任并启用：重录该插件的哈希基线（当前内容即信任基线）
+pub fn record_baseline(ctx: &Arc<crate::state::Ctx>, id: &str) -> Result<(), String> {
+    let fp = dir_fingerprint(&dir(ctx).join(id))?;
+    let mut st = load_baselines(ctx);
+    st.insert(id.to_string(), fp);
+    save_baselines(ctx, &st);
+    Ok(())
+}
+
+/// 校验单个插件：无基线 = 从未启用过（返回 Ok，首次启用时补录）；
+/// 有基线且不匹配 = 篡改，返回差异说明
+pub fn verify(ctx: &Arc<crate::state::Ctx>, id: &str) -> Result<(), String> {
+    let Some(base) = load_baselines(ctx).get(id).cloned() else {
+        return Ok(());
+    };
+    let now = dir_fingerprint(&dir(ctx).join(id))?;
+    if now != base {
+        return Err("内容与启用时基线不一致（文件被改动）".into());
+    }
+    Ok(())
+}
+
+/// 启用插件的基线核对（sync / prompt_fragment / scheduler 共用，幂等）：
+/// 无基线 → 补录当前内容（首次启用/升级接入）；不匹配 → 进返回列表（篡改）。
+/// 审计只在 sync 里记，避免非 sync 调用点重复刷审计流水。
+pub fn tampered_ids(ctx: &Arc<crate::state::Ctx>, enabled: &[&Plugin]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut baselines = load_baselines(ctx);
+    let mut dirty = false;
+    for p in enabled {
+        match dir_fingerprint(&dir(ctx).join(&p.id)) {
+            Ok(now) => match baselines.get(&p.id) {
+                Some(base) if *base != now => out.push(p.id.clone()),
+                None => {
+                    baselines.insert(p.id.clone(), now);
+                    dirty = true;
+                }
+                _ => {}
+            },
+            Err(_) => out.push(p.id.clone()), // 读不出文件按不可信处理
+        }
+    }
+    if dirty {
+        save_baselines(ctx, &baselines);
+    }
+    out
+}
+
 /// 工具/技能/记忆 与插件状态的同步：
 /// 先清掉旧的 plugin 来源条目，再按当前启用列表重新写入。
 /// 幂等：重扫/开关后调用都安全。
+/// 含自我安全校验：启用中的插件逐个过哈希基线，篡改的按未启用处理（不注入任何能力）。
 pub fn sync(ctx: &Arc<crate::state::Ctx>) {
-    let (plugins, errs) = scan(ctx);
+    let (plugins, mut errs) = scan(ctx);
     let disabled: Vec<String> = { ctx.config.lock().unwrap().disabled_plugins.clone() };
-    let is_on = |p: &Plugin| !disabled.contains(&p.id);
+
+    // ---- 哈希基线校验（防篡改）----
+    // 无基线的启用插件补录当前内容为基线；不匹配 = 篡改 → 按未启用处理 + errs + 审计。
+    let enabled_refs: Vec<&Plugin> = plugins.iter().filter(|p| !disabled.contains(&p.id)).collect();
+    let tampered = tampered_ids(ctx, &enabled_refs);
+    for id in &tampered {
+        errs.push(format!(
+            "{id}: 安全校验失败 — 内容与启用时基线不一致，已停用（在工具页重新启用可信任当前内容）"
+        ));
+        crate::audit::record(
+            ctx,
+            "system",
+            "plugin.verify",
+            id,
+            serde_json::json!({ "ok": false, "reason": "baseline mismatch" }),
+            false,
+        );
+    }
+    let is_on = |p: &Plugin| !disabled.contains(&p.id) && !tampered.contains(&p.id);
 
     // ---- 工具 ----
     {
@@ -271,12 +475,14 @@ pub fn sync(ctx: &Arc<crate::state::Ctx>) {
     }
 }
 
-/// 启用插件注入的提示词片段（禁用插件不注入）。供 ai.rs 组装系统提示词时调用。
+/// 启用插件注入的提示词片段（禁用/篡改插件不注入）。供 ai.rs 组装系统提示词时调用。
 pub fn prompt_fragment(ctx: &Arc<crate::state::Ctx>) -> String {
     let plugins = ctx.plugins.lock().unwrap();
     let disabled: Vec<String> = { ctx.config.lock().unwrap().disabled_plugins.clone() };
+    let enabled: Vec<&Plugin> = plugins.iter().filter(|p| !disabled.contains(&p.id)).collect();
+    let tampered = tampered_ids(ctx, &enabled);
     let mut out = String::new();
-    for p in plugins.iter().filter(|p| !disabled.contains(&p.id)) {
+    for p in enabled.into_iter().filter(|p| !tampered.contains(&p.id)) {
         for text in &p.prompts {
             if !text.trim().is_empty() {
                 out.push_str(&format!("### Plugin `{}`\n{}\n", p.name, text.trim()));
@@ -288,6 +494,53 @@ pub fn prompt_fragment(ctx: &Arc<crate::state::Ctx>) -> String {
     } else {
         format!("\n## Plugin instructions\n{out}")
     }
+}
+
+// ---------- 前端 UI 资源导出（供渲染进程插件加载器读取）----------
+
+/// 导出启用且通过安全校验的插件 UI 资源（css/js 源文本）。
+/// 只导出 permissions 里声明了对应权限位的内容；路径统一过 safe_rel 闸门。
+/// 返回 [{ id, name, version, permissions, css: [{path, text}], js: [{path, text}] }]
+pub fn ui_bundle(ctx: &Arc<crate::state::Ctx>) -> Vec<serde_json::Value> {
+    let (plugins, _) = scan(ctx);
+    let disabled: Vec<String> = { ctx.config.lock().unwrap().disabled_plugins.clone() };
+    let enabled: Vec<&Plugin> = plugins.iter().filter(|p| !disabled.contains(&p.id)).collect();
+    let tampered = tampered_ids(ctx, &enabled);
+    let mut out = Vec::new();
+    for p in enabled.into_iter().filter(|p| !tampered.contains(&p.id)) {
+        let Some(ui) = &p.ui else { continue };
+        let pdir = dir(ctx).join(&p.id);
+        let has = |perm: &str| p.permissions.iter().any(|x| x == perm);
+        let read = |paths: &[String]| -> Vec<serde_json::Value> {
+            let mut v = Vec::new();
+            for f in paths {
+                if safe_rel(f).is_err() {
+                    continue;
+                }
+                if let Ok(text) = fs::read_to_string(pdir.join(f)) {
+                    // 单文件 512KB 上限：防清单指个巨型文件把渲染层拖死
+                    if text.len() <= 512 * 1024 {
+                        v.push(serde_json::json!({ "path": f, "text": text }));
+                    }
+                }
+            }
+            v
+        };
+        let css = if has("css") { read(&ui.css) } else { Vec::new() };
+        let js = if has("js") { read(&ui.js) } else { Vec::new() };
+        if css.is_empty() && js.is_empty() {
+            continue;
+        }
+        out.push(serde_json::json!({
+            "id": p.id,
+            "name": p.name,
+            "version": p.version,
+            "permissions": p.permissions,
+            "css": css,
+            "js": js,
+        }));
+    }
+    out
 }
 
 // ---------- 定时任务调度 ----------
@@ -441,9 +694,12 @@ pub async fn scheduler(ctx: Arc<crate::state::Ctx>) {
             continue;
         }
         let disabled: Vec<String> = { ctx.config.lock().unwrap().disabled_plugins.clone() };
+        // 防篡改：篡改插件的定时任务不执行（校验顺便给新启用插件补录基线）
+        let enabled: Vec<&Plugin> = plugins.iter().filter(|p| !disabled.contains(&p.id)).collect();
+        let tampered = tampered_ids(&ctx, &enabled);
         let mut state = load_job_state(&ctx);
         let mut dirty = false;
-        for p in plugins.iter().filter(|p| !disabled.contains(&p.id)) {
+        for p in enabled.into_iter().filter(|p| !tampered.contains(&p.id)) {
             for job in &p.jobs {
                 let key = format!("{}/{}", p.id, job.name);
                 let Some(sched) = parse_schedule(&job.schedule) else {
