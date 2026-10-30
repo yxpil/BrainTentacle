@@ -447,6 +447,53 @@ html.dark.has-bg-image #root::after {
   background: rgba(0, 0, 0, 0.45);
 }
 
+/* ========== 输入框 / 聊天框专属背景（图片 + 独立透明度） ========== */
+/* 实现：面板自身底色让位给负 z 伪元素层（图片与底色合成一体，整体 opacity 控制
+   透明度），内容压在伪元素之上；border-radius:inherit 跟随面板圆角，
+   inset:0 只盖 padding 区不动 border。
+   聊天面板是滚动容器（absolute 子层会随内容滚走），ChatPage 把 overflow 挪到内层，
+   外层 panel-surface 只承载背景不滚动。
+   未定制（无图且透明度 100%）时 html 上不挂 has-*-bg，完全走原样式，零回归。 */
+.panel-surface {
+  position: relative;
+  isolation: isolate; /* 负 z 伪元素留在本层内：压在自身底色之上、内容之下 */
+}
+.panel-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+/* 输入框（聊天页底部输入区）：伪元素底色与原样式一致（白 / neutral-950） */
+html.has-input-bg .panel-input {
+  background-color: transparent !important;
+}
+html.has-input-bg .panel-input::before {
+  background-color: #ffffff;
+  background-image: var(--panel-input-image, none);
+  opacity: var(--panel-input-alpha, 1);
+}
+html.dark.has-input-bg .panel-input::before {
+  background-color: #0a0a0a; /* neutral-950 */
+}
+/* 聊天框（消息面板）：伪元素底色与 .card 一致（neutral-100 / neutral-900） */
+html.has-chat-bg .panel-chat {
+  background-color: transparent !important;
+}
+html.has-chat-bg .panel-chat::before {
+  background-color: #f5f5f5;
+  background-image: var(--panel-chat-image, none);
+  opacity: var(--panel-chat-alpha, 1);
+}
+html.dark.has-chat-bg .panel-chat::before {
+  background-color: #171717; /* neutral-900 */
+}
+
 /* Markdown 正文里的 SVG（模型直接输出的图表等）：约束不超容器宽，等比缩放 */
 .md svg {
   max-width: 100%;

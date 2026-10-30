@@ -32,7 +32,8 @@ function applyAccent(color) {
 }
 
 // 外观配置：背景色/透明度/图片/圆角，统一走 CSS 变量
-// look 结构：{ enabled, bgColorLight, bgColorDark, bgOpacity, bgImage, borderOn, borderRadius, cardRadius, shadowOn }
+// look 结构：{ enabled, bgColorLight, bgColorDark, bgOpacity, cardOpacity, bgImage, borderOn, borderRadius,
+//   cardRadius, shadowOn, fieldBgImage, fieldBgOpacity, chatBgImage, chatBgOpacity }（cardOpacity 未设=跟随背景+15%）
 function applyLook(look) {
   const root = document.documentElement;
   // 字体缩放：Tailwind 全 rem 布局，调根字号即全局等比缩放（窗口级属性，独立于外观开关）
@@ -49,7 +50,11 @@ function applyLook(look) {
     root.style.removeProperty("--look-bg-color-light");
     root.style.removeProperty("--look-bg-color-dark");
     root.style.removeProperty("--look-bg-opacity");
-    root.classList.remove("no-border", "no-shadow", "has-bg-image", "has-transparency");
+    root.style.removeProperty("--panel-input-image");
+    root.style.removeProperty("--panel-input-alpha");
+    root.style.removeProperty("--panel-chat-image");
+    root.style.removeProperty("--panel-chat-alpha");
+    root.classList.remove("no-border", "no-shadow", "has-bg-image", "has-transparency", "has-input-bg", "has-chat-bg");
     return;
   }
   // 背景色（light/dark 各自生效）
@@ -61,9 +66,9 @@ function applyLook(look) {
   // 透明度：背景 + 卡片/pill/chip 也跟着半透明（不透明度 = 背景透明度 + 15%，保证内容可读）
   const op = look.bgOpacity != null ? look.bgOpacity : 100;
   root.style.setProperty("--look-bg-opacity", op + "%");
-  // 卡片/pill 的 alpha：背景越透明，卡片也相应透出，但始终比背景高 15% 保证可读性
-  const cardAlpha = Math.min(1, Math.max(0.3, (op + 15) / 100));
-  root.style.setProperty("--look-card-alpha", cardAlpha.toFixed(2));
+  // 卡片/pill 的 alpha：默认跟随背景（背景+15% 保证可读），用户在外观页单独设置后独立固定
+  const cardOp = look.cardOpacity != null ? look.cardOpacity : Math.min(100, Math.max(30, op + 15));
+  root.style.setProperty("--look-card-alpha", (Math.min(100, Math.max(10, cardOp)) / 100).toFixed(2));
   if (look.bgImage) {
     root.style.setProperty("--app-bg-image", `url("${look.bgImage}")`);
     root.classList.add("has-bg-image");
@@ -71,6 +76,17 @@ function applyLook(look) {
     root.style.removeProperty("--app-bg-image");
     root.classList.remove("has-bg-image");
   }
+
+  // 输入框/聊天框专属背景：独立图片 + 独立透明度；无图且 100% 时不挂类（保持原样式零回归）
+  const panelBg = (img, alpha, imgVar, alphaVar, cls) => {
+    if (img) root.style.setProperty(imgVar, `url("${img}")`);
+    else root.style.removeProperty(imgVar);
+    const a = alpha != null ? alpha : 100;
+    root.style.setProperty(alphaVar, a + "%");
+    root.classList.toggle(cls, !!img || a < 100);
+  };
+  panelBg(look.fieldBgImage, look.fieldBgOpacity, "--panel-input-image", "--panel-input-alpha", "has-input-bg");
+  panelBg(look.chatBgImage, look.chatBgOpacity, "--panel-chat-image", "--panel-chat-alpha", "has-chat-bg");
 
   // 圆角
   root.style.setProperty("--look-card-radius", (look.cardRadius ?? 24) + "px");
@@ -82,8 +98,8 @@ function applyLook(look) {
   // 边框 & 阴影开关
   root.classList.toggle("no-border", !look.borderOn);
   root.classList.toggle("no-shadow", !look.shadowOn);
-  // 透明度联动：背景 < 100% 时给卡片/按钮也加半透明
-  root.classList.toggle("has-transparency", op < 100);
+  // 透明度联动：背景 < 100% 或卡片单独调过透明度时，给卡片/按钮加半透明样式
+  root.classList.toggle("has-transparency", op < 100 || cardOp < 100);
 }
 
 // 默认即「启用外观定制」：开箱即带主题色、背景色、透明度，不再回退到黑白胶囊风
@@ -100,7 +116,63 @@ const DEFAULT_LOOK = {
   winRadius: 16,
   fontScale: 1,
   shadowOn: true,
+  // 输入框/聊天框专属背景（各自独立；默认无图且 100% = 原样式）
+  fieldBgImage: "",
+  fieldBgOpacity: 100,
+  chatBgImage: "",
+  chatBgOpacity: 100,
 };
+
+// 背景图转码压缩：Chromium 对 CSS 变量值有约 2MB 硬上限，超限时 setProperty
+// 整体拒收、回读为空——表现为"has-bg-image 遮罩生效（背景变暗）但图片不显示"；
+// localStorage 配额同样有限。上传与存量迁移统一压到 ≤1920px / ≤1.9MB，
+// 背景图有 cover 缩放 + 35% 黑遮罩，肉眼无感差异。
+const BG_LIMIT = 1.9 * 1024 * 1024;
+export function compressBgImage(dataUrl, maxDim = 1920) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const ctx = c.getContext("2d");
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        // WEBP 更小且保透明；个别环境 canvas 不支持导出 webp → JPEG（铺白底防透明区发黑）
+        let type = "image/webp";
+        let out = c.toDataURL(type, 0.85);
+        if (!out.startsWith("data:image/webp")) {
+          type = "image/jpeg";
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, c.width, c.height);
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          out = c.toDataURL(type, 0.85);
+        }
+        // 仍超限 → 逐档降质量
+        for (let q = 0.7; out.length > BG_LIMIT && q >= 0.4; q -= 0.15) {
+          out = c.toDataURL(type, q);
+        }
+        // 极端情况还超限 → 缩小画布再来
+        while (out.length > BG_LIMIT && c.width > 640) {
+          c.width = Math.max(1, Math.round(c.width * 0.7));
+          c.height = Math.max(1, Math.round(c.height * 0.7));
+          if (type === "image/jpeg") {
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, c.width, c.height);
+          }
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          out = c.toDataURL(type, 0.7);
+        }
+        resolve(out);
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl); // 解码失败（如 HEIC）保持原样
+    img.src = dataUrl;
+  });
+}
 
 /** 主题：light / dark / auto + 自定义强调色（--accent）。
  * 主题标记存 bit.db（config.theme）统一读取——托盘/任务面板共用（localStorage 仅作首帧缓存） */
@@ -164,6 +236,19 @@ export function useTheme() {
     localStorage.setItem(LOOK_KEY, JSON.stringify(look));
     applyLook(look);
   }, [look]);
+
+  // 存量迁移：早期版本把原图 data URL 直写 CSS 变量，超过 ~2MB 会被 Chromium
+  // 整体拒收（背景变暗但看不到图）——打开时自动转码到限内，一次性修复坏配置
+  useEffect(() => {
+    const bi = look.bgImage;
+    if (bi && bi.startsWith("data:") && bi.length > BG_LIMIT) {
+      compressBgImage(bi).then((small) => {
+        if (small !== bi) {
+          setLookState((l) => (l.bgImage === bi ? { ...l, bgImage: small } : l));
+        }
+      });
+    }
+  }, [look.bgImage]);
 
   // 最大化/全屏时窗口外圆角归零（贴边不留缝），还原后恢复
   useEffect(() => {

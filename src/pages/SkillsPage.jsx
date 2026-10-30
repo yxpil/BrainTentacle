@@ -129,7 +129,7 @@ export default function SkillsPage({ onStats }) {
           </label>
           {selected.size > 0 && (
             <button
-              className="pill pill-hover ml-auto border-red-200 text-red-600 disabled:opacity-50"
+              className="pill-outline pill-hover ml-auto border-red-200 text-red-600 disabled:opacity-50"
               disabled={busy}
               onClick={removeSelected}
             >

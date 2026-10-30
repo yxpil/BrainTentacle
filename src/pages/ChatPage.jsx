@@ -1391,7 +1391,9 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
 
       {/* 对话主区：无标题行，主体完全留给消息 */}
       <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="card flex-1 overflow-y-auto">
+        {/* 外层承载专属背景（panel-chat 伪元素不随滚动），overflow 挪到内层滚动容器 */}
+        <div className="panel-surface panel-chat card flex-1 overflow-hidden">
+        <div className="h-full overflow-y-auto">
           {messages.length === 0 && !busy && (
             <div className="flex h-full items-center justify-center px-6 text-center text-sm text-neutral-400">
               {t("chat.emptyHint")}
@@ -1510,6 +1512,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
             )}
             <div ref={bottom} />
           </div>
+        </div>
         </div>
 
         <div className="flex flex-col gap-2">
@@ -1851,7 +1854,8 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
           )}
 
           {/* 底部 pb-12 为工具栏/发送按钮预留独立一行：textarea 只在自己的区域滚动，永不进入按钮行 */}
-          <div className="relative rounded-[var(--look-ui-radius,1rem)] border border-neutral-300 bg-white pb-12 transition-colors focus-within:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:focus-within:border-neutral-200">
+          {/* panel-input：输入区专属背景（图片+透明度由外观页控制），textarea 本身透明可透出 */}
+          <div className="panel-surface panel-input relative rounded-[var(--look-ui-radius,1rem)] border border-neutral-300 bg-white pb-12 transition-colors focus-within:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:focus-within:border-neutral-200">
             {/* 工具栏：左下角 absolute 排成一行（外层按钮收进输入框内） */}
             <div className="pointer-events-auto absolute bottom-2 left-2 z-10 flex items-center gap-0.5">
             {/* 上下文预览 */}
