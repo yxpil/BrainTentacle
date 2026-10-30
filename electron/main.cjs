@@ -580,7 +580,8 @@ function handleWindowOp(op, args) {
       const { screen: sc } = require('electron');
       const p = sc.getCursorScreenPoint();
       const b = win.getBounds();
-      win.setPosition(b.x + (p.x - (args._cursor?.x ?? 0)), b.y + (p.y - (args._cursor?.y ?? 0)));
+      // 同上：显式带回宽高，防止 Windows 透明窗在程序化移动时尺寸漂移
+      win.setBounds({ x: b.x + (p.x - (args._cursor?.x ?? 0)), y: b.y + (p.y - (args._cursor?.y ?? 0)), width: b.width, height: b.height });
       return null;
     }
     default:
@@ -923,7 +924,9 @@ app.whenReady().then(async () => {
   });
   ipcMain.on('bit:drag-move', (_e, { dx = 0, dy = 0 } = {}) => {
     if (!win || win.isDestroyed() || !dragOrigin) return;
-    win.setPosition(dragOrigin.x + dx, dragOrigin.y + dy);
+    // Windows 透明窗 + thickFrame 下，拖拽过程中窗口尺寸会缓慢漂移（表现为窗口缓缓放大）。
+    // 拖拽期间显式钉死为起始宽高，每步只允许移动位置；拖拽结束后边缘调整大小不受影响。
+    win.setBounds({ x: dragOrigin.x + dx, y: dragOrigin.y + dy, width: dragOrigin.width, height: dragOrigin.height });
   });
   ipcMain.on('bit:drag-end', () => {
     dragOrigin = null;
