@@ -1,5 +1,5 @@
 // 简约 TUI E2E：`bit tui` 终端模式功能完整性 + 与桌面端同数据目录并行运行无冲突
-// 覆盖：/help 对话 工具调用 会话管理 记忆 install-cli 桌面端/TUI 同跑
+// 覆盖：/help 对话 工具调用 会话管理 记忆 已删命令回归 桌面端/TUI 同跑
 // 用法：mock-ai(9901) 就绪后：node e2e/tui.cjs [BIT 二进制路径]
 const { spawn, execSync } = require("child_process");
 const { StringDecoder } = require("string_decoder");
@@ -164,7 +164,7 @@ async function main() {
     tui.send("/quit");
     const code = await tui.waitExit();
     const out = tui.out;
-    const ok = code === 0 && ["/sessions", "/new", "/use", "/tools", "/mem", "/install-cli"].every((c) => out.includes(c));
+    const ok = code === 0 && ["/sessions", "/new", "/use", "/tools", "/mem", "/quit"].every((c) => out.includes(c));
     record("T1 /help 命令清单", ok, ok ? `exit=${code}` : tail(out));
   }
 
@@ -191,31 +191,16 @@ async function main() {
     record("T5 记忆沉淀/查看", memOk, "");
   }
 
-  // ── T6 /install-cli：macOS/Linux 符号链接 / Windows bit.cmd 启动器 ──
+  // ── T6 /install-cli 已移除：命令应报 Unknown（原 bit 安装功能整体删除） ──
   {
-    const CLI_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "bit-tui-cli-"));
-    const tui = launchTui(DIR, { BIT_CLI_DIR: CLI_DIR });
+    const tui = launchTui(DIR);
     await tui.ready();
     tui.send("/install-cli");
     tui.send("/quit");
-    await tui.waitExit();
-    let ok = false, detail = "";
-    if (process.platform === "win32") {
-      // Windows 写 bit.cmd 启动脚本（内含 exe 路径与 tui 参数）
-      const launcher = path.join(CLI_DIR, "bit.cmd");
-      try {
-        const content = fs.readFileSync(launcher, "utf8");
-        ok = /tui/.test(content) && content.toLowerCase().includes("bit");
-        detail = content.trim().split(/\r?\n/).pop() || "";
-      } catch (e) { detail = e.message; }
-    } else {
-      const link = path.join(CLI_DIR, "bit");
-      try {
-        ok = fs.realpathSync(link) === fs.realpathSync(BIN);
-        detail = fs.readlinkSync(link);
-      } catch (e) { detail = e.message; }
-    }
-    record("T6 /install-cli 安装", ok, detail);
+    const code = await tui.waitExit();
+    const out = tui.out;
+    const ok = code === 0 && out.includes("Unknown /install-cli");
+    record("T6 /install-cli 已删除", ok, `exit=${code}`);
   }
 
   // ── T8 非法命令与用法错误：各自得到提示，REPL 存活继续 ──
@@ -226,7 +211,7 @@ async function main() {
     tui.send("/use");
     tui.send("/use deadbeef-0000");
     tui.send("/mem");
-    tui.send("/install-cli-extra"); // 带参数的未知命令
+    tui.send("/cli-extra"); // 带参数的未知命令
     tui.send("/QUIT");              // 大小写不敏感退出
     const code = await tui.waitExit();
     const out = tui.out;
@@ -235,7 +220,7 @@ async function main() {
       out.includes("Usage: /use") &&
       out.includes("Session not found") &&
       out.includes("Usage: /mem") &&
-      out.includes("Unknown /install-cli-extra") &&
+      out.includes("Unknown /cli-extra") &&
       code === 0;
     record("T8 非法命令/用法错误", ok, `exit=${code}`);
   }

@@ -20,7 +20,11 @@ export const api = {
   clearAudit: () => invoke("clear_audit"),
   deleteAuditEntry: (id) => invoke("delete_audit_entry", { id }),
   getRemoteConfig: () => invoke("get_remote_config"),
+  // 检测独立 CLI（npm 全局包 BrainTentacle_cli）是否已安装
+  detectCli: () => invoke("detect_cli"),
+  // 安装/卸载 npm 全局包（braintentacle_cli），完成后前端重新 detectCli 刷新状态
   installCli: () => invoke("install_cli"),
+  uninstallCli: () => invoke("uninstall_cli"),
   saveRemoteConfig: (remote_enabled, host, port) =>
     // Tauri v2 按 camelCase 匹配 Rust 多词参数：remote_enabled → remoteEnabled
     invoke("save_remote_config", { remoteEnabled: remote_enabled, host, port }),

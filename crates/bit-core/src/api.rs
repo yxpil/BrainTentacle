@@ -226,7 +226,17 @@ pub fn quit_app(ctx: &Arc<Ctx>) -> serde_json::Value {
     json!({ "quit": true })
 }
 
-/// 安装 `bit` 命令到终端 PATH（设置页 / TUI / Electron 均可触发）
-pub fn install_cli(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
-    crate::install::install_cli_impl(ctx)
+/// 检测独立 CLI（npm 全局包 BrainTentacle_cli）是否已安装（设置页自动展示状态）
+pub fn detect_cli(_ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::cli::detect_cli_impl()
+}
+
+/// 安装独立 CLI（npm 全局安装 braintentacle_cli；耗时操作，调用方放阻塞线程池）
+pub fn install_cli(_ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::cli::install_cli_impl()
+}
+
+/// 卸载独立 CLI（npm 全局卸载 braintentacle_cli）
+pub fn uninstall_cli(_ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::cli::uninstall_cli_impl()
 }

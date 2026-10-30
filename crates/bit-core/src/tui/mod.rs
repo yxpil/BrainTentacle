@@ -29,7 +29,6 @@ Commands:
   /mems            List memories
   /pwd             Show workspace root
   /cd <path>       Change workspace
-  /install-cli     Install 'bit' to PATH
   /quit            Exit
 Anything else → chat with AI.";
 
@@ -181,14 +180,6 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
                 if mems.is_empty() { out.line("(no memories)"); }
                 for m in mems.iter().rev() {
                     out.line(format!("{}  {}  {}", &m.id[..m.id.len().min(8)], m.ts, m.content));
-                }
-                Ok(Flow::Continue)
-            }
-            "install-cli" => {
-                let r = crate::install::install_cli_impl(ctx)?;
-                out.line(format!("bit CLI installed: {}", r["path"].as_str().unwrap_or("")));
-                if let Some(hint) = r["hint"].as_str() {
-                    if !hint.is_empty() { out.line(format!("Hint: {hint}")); }
                 }
                 Ok(Flow::Continue)
             }

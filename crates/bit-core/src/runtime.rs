@@ -113,9 +113,9 @@ fn probe(cmd: &str, version_arg: &str) -> Option<(String, String)> {
     Some((exe_path, if ver.is_empty() { "unknown".into() } else { ver }))
 }
 
-/// 类似 `where` / `which`：定位命令的绝对路径
+/// 类似 `where` / `which`：定位命令的绝对路径（cli 模块探测 npm 也复用）
 /// macOS .app 进程 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，扫常见用户路径兜底
-fn which(cmd: &str) -> Option<String> {
+pub(crate) fn which(cmd: &str) -> Option<String> {
     #[cfg(windows)]
     {
         let mut c = Command::new("where");

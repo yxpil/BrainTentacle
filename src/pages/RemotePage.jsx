@@ -23,8 +23,9 @@ export default function RemotePage({ onStats }) {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
   const [pwdMsg, setPwdMsg] = useState("");
-  const [cli, setCli] = useState(null); // {path, hint} | {error}
+  const [cli, setCli] = useState(null); // {installed, version, npm} | {error}
   const [cliBusy, setCliBusy] = useState(false);
+  const [cliAction, setCliAction] = useState(""); // "" | "install" | "uninstall"（安装/卸载进行中）
   // 扫码连接二维码：payload 含全部连接信息（地址候选/端口/密钥/密码/会话/云中继）
   const [qr, setQr] = useState(null);
   const [qrBusy, setQrBusy] = useState(false);
@@ -73,15 +74,32 @@ export default function RemotePage({ onStats }) {
     }
   };
 
-  const installCli = async () => {
+  // 终端命令：检测 npm 全局包 BrainTentacle_cli 是否已安装（进页面自动探测）
+  const detectCli = async () => {
     setCliBusy(true);
     setCli(null);
     try {
-      setCli(await api.installCli());
+      setCli(await api.detectCli());
     } catch (e) {
       setCli({ error: String(e) });
     } finally {
       setCliBusy(false);
+    }
+  };
+
+  // 安装/卸载 npm 全局包：成功后重新检测刷新状态；失败把 npm 的真实报错展示出来
+  const runCliAction = async (action) => {
+    setCliAction(action);
+    try {
+      if (action === "install") await api.installCli();
+      else await api.uninstallCli();
+      await detectCli();
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("npm_not_found")) setCli({ installed: false, version: null, npm: false });
+      else setCli({ error: msg });
+    } finally {
+      setCliAction("");
     }
   };
 
@@ -97,6 +115,7 @@ export default function RemotePage({ onStats }) {
       setStunInput((c.stun_servers || []).join(", "));
     });
     loadQr();
+    detectCli();
   }, []);
 
   const changed =
@@ -531,21 +550,41 @@ curl -X POST ${base}/api/chat \\
   -d '{"message":"${t("remote.curlAIChatContent")}"}'`}</pre>
       </div>
 
-      {/* 终端命令：安装 bit 命令到 PATH，bit tui 进入简约终端模式 */}
+      {/* 终端命令：自动检测 npm 全局包 BrainTentacle_cli（独立 CLI 版本）是否安装 */}
       <div className="card">
         <p className="mb-3 font-medium">{t("remote.cliTitle")}</p>
         <p className="mb-3 text-xs text-neutral-500">{t("remote.cliDesc")}</p>
-        <div className="flex items-center gap-3">
-          <button onClick={installCli} disabled={cliBusy} className="pill pill-hover shrink-0">
-            {cliBusy ? "..." : t("remote.cliInstall")}
-          </button>
-          {cli && !cli.error && (
-            <code className="truncate font-mono text-xs text-neutral-500">{cli.path}</code>
+        <div className="flex flex-wrap items-center gap-3">
+          {(cliBusy || cliAction) && (
+            <span className="text-xs text-neutral-500">
+              {cliAction
+                ? t(cliAction === "install" ? "remote.cliInstalling" : "remote.cliUninstalling")
+                : "…"}
+            </span>
           )}
-          {cli?.error && <span className="text-xs text-red-500">{cli.error}</span>}
+          {cli && !cli.error && cli.installed && !cliAction && (
+            <>
+              <span className="pill-outline text-emerald-600">{t("remote.cliInstalled")}</span>
+              <code className="truncate font-mono text-xs text-neutral-500">
+                BrainTentacle_cli {cli.version ? `v${cli.version}` : ""}
+              </code>
+              <button className="pill" onClick={() => runCliAction("uninstall")}>
+                {t("remote.cliUninstallBtn")}
+              </button>
+            </>
+          )}
+          {cli && !cli.error && !cli.installed && !cliAction && (
+            <>
+              <span className="pill-outline text-neutral-500">{t("remote.cliNotInstalled")}</span>
+              <button className="pill" onClick={() => runCliAction("install")}>
+                {t("remote.cliInstallBtn")}
+              </button>
+            </>
+          )}
+          {cli?.error && <span className="text-xs text-red-500 break-all">{cli.error}</span>}
         </div>
-        {cli && !cli.error && cli.hint && (
-          <p className="mt-2 text-xs text-neutral-500">{cli.hint}</p>
+        {cli && !cli.error && !cli.installed && !cli.npm && (
+          <p className="mt-2 text-xs text-neutral-500">{t("remote.cliNoNpm")}</p>
         )}
       </div>
     </div>

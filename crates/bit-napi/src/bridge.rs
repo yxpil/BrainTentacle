@@ -137,7 +137,20 @@ pub async fn dispatch(
         "quit_app" => Ok(bit_core::api::quit_app(ctx)),
         // Electron 启动链（Tauri setup 等价物）：守护布防/toolhomes/插件/HTTP/autopilot/自动更新
         "bootstrap_services" => Ok(bit_core::api::bootstrap_services(ctx)),
-        "install_cli" => bit_core::api::install_cli(ctx),
+        "detect_cli" => bit_core::api::detect_cli(ctx),
+        "install_cli" => {
+            // npm 全局安装耗时数十秒 → 阻塞线程池，避免卡住 async 运行时
+            let c = ctx.clone();
+            tokio::task::spawn_blocking(move || bit_core::api::install_cli(&c))
+                .await
+                .map_err(|e| e.to_string())?
+        }
+        "uninstall_cli" => {
+            let c = ctx.clone();
+            tokio::task::spawn_blocking(move || bit_core::api::uninstall_cli(&c))
+                .await
+                .map_err(|e| e.to_string())?
+        }
 
         // ---------- 工具 ----------
         "register_tool" => {

@@ -29,7 +29,7 @@ type DoneTx = tokio::sync::mpsc::UnboundedSender<Result<Flow, String>>;
 const SLASH_COMMANDS: &[&str] = &[
     "/help", "/sessions", "/new", "/use", "/rename", "/delete", "/clear",
     "/goals", "/todo", "/approval", "/interrupt", "/tools", "/runtimes",
-    "/mem", "/mems", "/pwd", "/cd", "/install-cli", "/quit",
+    "/mem", "/mems", "/pwd", "/cd", "/quit",
 ];
 
 /// RAII 终端恢复：任何退出路径（含 unwinding panic）都还原用户终端

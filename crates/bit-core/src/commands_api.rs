@@ -13,7 +13,7 @@
 //!   set_elevation / relaunch_with_elevation（AppHandle 重启提权）、update_apply（AppHandle 重启）；
 //!   notify_done 由 chat / chat_stream 内联为 ctx.emit("notify-done", …) 事件；
 //!   is_headless / ui_mounted / mem_usage / get_overview / list_tools / check_updates /
-//!   quit_app / install_cli（install_cli_impl）已在 api.rs，install.rs 已有 install_cli_into。
+//!   quit_app / detect_cli（detect_cli_impl）已在 api.rs，npm 包探测逻辑在 cli.rs。
 //! - 辅助函数去重：estimate_context_tokens / fetch_provider_models / persist_model_context /
 //!   refresh_model_context / active_max_context / claude_context_for / context_len_from / ctx_key
 //!   已下沉 crate::ai；version_gt 已下沉 crate::update；qr_payload 已下沉 crate::relay；

@@ -15,6 +15,7 @@ pub mod commands_api;
 pub mod config;
 pub mod console_codec;
 pub mod crash;
+pub mod cli;
 // TUI 用的控制台附加/代码页还原，提升到 crate 根（tui/full.rs、tui/plain.rs 调 crate::restore_console_cp）
 pub use console_codec::{attach_console, restore_console_cp};
 pub mod delegation;
@@ -56,7 +57,6 @@ pub mod goal;
 pub mod guardian;
 pub mod hidden_code;
 pub mod http_api;
-pub mod install;
 pub mod l2pass;
 pub mod mcp;
 pub mod memory;
