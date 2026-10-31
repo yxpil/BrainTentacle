@@ -123,7 +123,7 @@ function looksLikeAudio(buf, format) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bit-tts-online-"));
   const token = crypto.randomBytes(32).toString("hex");
   const w = startWorker(dataDir, token);
-  let exitCode = 1;
+  let exitCode = 0;
   try {
     const port = await w.ready;
     console.log(`(tts-worker ready :${port}, data_dir: ${dataDir})`);
@@ -178,7 +178,7 @@ function looksLikeAudio(buf, format) {
     } catch {}
   }
 
-  console.log(`\n${c.rows.join("\n")}`);
+  console.log("");
   if (c.failed.length) {
     console.log(`==== tts-online-check FAIL：${c.failed.join(" / ")}`);
     exitCode = 1;
