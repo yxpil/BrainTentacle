@@ -293,6 +293,16 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
     // 复用：把当前窗口抬到最前（真实桌面语义：激活 + 输入焦点）
     const focusWindow = async () => {
       const title = await cdp.js("document.title");
+      if (process.platform === "darwin") {
+        // 没有 xdotool：借 System Events 把本进程拽到前台。
+        // 未授予「自动化 → System Events」时会失败，调用方据此跳过焦点类断言。
+        const r = await run("osascript", [
+          "-e",
+          `tell application "System Events" to set frontmost of (first process whose unix id is ${app.pid}) to true`,
+        ]);
+        if (r.err) throw new Error(`osascript 聚焦失败：${r.err.message}`);
+        return String(app.pid);
+      }
       let r = await run("xdotool", ["search", "--onlyvisible", "--name", title]);
       let ids = r.stdout.split("\n").filter(Boolean);
       if (!ids.length) {
@@ -430,30 +440,47 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
           1000
         );
         if (!/[\u4e00-\u9fff]{2,}/.test(text)) throw new Error(`转写结果不像中文：${JSON.stringify(text)}`);
+        // 粘贴通道可用时结果应落到前台并提示「已粘贴到原应用」；不可用（macOS 未授权辅助功能
+        // 等）时渲染层会兜底回草稿并提示「粘贴失败」——两种都算链路走通，但不能两种都没有。
+        const capsNow = (await cdp.invoke("get_app_hotkeys"))?.caps || {};
         const body = await toastText();
-        if (!/已粘贴到原应用|Pasted to the previous app/.test(body)) {
+        const pasted = /已粘贴到原应用|Pasted to the previous app/.test(body);
+        const fellBack = /粘贴失败|Paste failed/.test(body);
+        if (capsNow.paste_supported && !pasted) {
           throw new Error(`转写成功但剪贴板注入未成功（提示里没有「已粘贴到原应用」）：${text}`);
+        }
+        if (!capsNow.paste_supported && !fellBack) {
+          throw new Error(`本机无粘贴通道（${capsNow.paste_hint || "-"}），但界面也没给出兜底提示：${text}`);
         }
         const st = await cdp.invoke("voice_status");
         if (!st?.worker_running) throw new Error("转写完成但识别 worker 未在运行");
-        return `「${text}」`;
+        return `「${text}」${pasted ? "（已粘贴）" : "（转写结果回草稿）"}`;
       });
+    }
 
-      // ── P4 显式注入：paste_text_to_foreground + xdotool ─────
-      await probe("P4 显式粘贴：hostCommand 写剪贴板 → Ctrl+V 落到焦点框", async () => {
-        await focusWindow();
-        await cdp.js(`(() => { const t = document.querySelector(${JSON.stringify(DRAFT_SEL)}); t.focus(); return true; })()`);
-        const marker = `联调注入${Date.now()}`;
-        const r = await cdp.invoke("paste_text_to_foreground", { text: marker });
-        if (!r?.ok) throw new Error(`hostCommand 返回：${JSON.stringify(r)}`);
-        await until(
-          "标记文本进入输入框",
-          async () => (await draftValue()).includes(marker),
-          15000,
-          300
-        );
-        return marker;
-      });
+    // ── P4 显式注入：paste_text_to_foreground → 模拟 Ctrl+V ─────
+    // 与语音无关，单独跑：本机没有粘贴通道时只记录，不判失败
+    if (process.env.BIT_E2E_SKIP_PASTE !== "1") {
+      const capsNow = (await cdp.invoke("get_app_hotkeys"))?.caps || {};
+      await probe(
+        "P4 显式粘贴：hostCommand 写剪贴板 → Ctrl+V 落到焦点框",
+        async () => {
+          if (!capsNow.paste_supported) return `跳过：${capsNow.paste_hint || "本机无粘贴工具"}`;
+          await focusWindow();
+          await cdp.js(`(() => { const t = document.querySelector(${JSON.stringify(DRAFT_SEL)}); t.focus(); return true; })()`);
+          const marker = `联调注入${Date.now()}`;
+          const r = await cdp.invoke("paste_text_to_foreground", { text: marker });
+          if (!r?.ok) throw new Error(`hostCommand 返回：${JSON.stringify(r)}`);
+          await until(
+            "标记文本进入输入框",
+            async () => (await draftValue()).includes(marker),
+            15000,
+            300
+          );
+          return marker;
+        },
+        { hard: capsNow.paste_supported }
+      );
     }
 
     // ── P5 热键注册（信息性）：注册表能写、宿主能读回 ──────────
