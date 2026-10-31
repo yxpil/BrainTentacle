@@ -695,6 +695,10 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
       off += c.length;
     }
     if (rateRef.current !== VOICE_RATE) pcm = resampleLinear(pcm, rateRef.current, VOICE_RATE);
+    // 采到多长的音频决定了后面是「没声」还是「没转出字」，出问题时这行是唯一线索
+    console.debug(
+      `[BIT][voice] 录音结束 ${(pcm.length / VOICE_RATE).toFixed(2)}s（${chunks.length} 块，原生 ${rateRef.current}Hz）`
+    );
     if (ctx) {
       try {
         await ctx.close();
@@ -708,6 +712,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     try {
       const r = await api.voiceTranscribe(bytesToBase64(encodeWav16k(pcm)), "auto");
       const text = String(r?.text || "").trim();
+      console.debug(`[BIT][voice] 转写完成 ${text.length} 字符：${text.slice(0, 80)}`);
       if (!text) {
         flashVoiceHint(t("chat.voiceEmptyResult"), "err");
       } else if (pasteTargetRef.current) {
