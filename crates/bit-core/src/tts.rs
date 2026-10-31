@@ -1926,6 +1926,9 @@ mod tests {
         // 与 local_speak 同样的子进程卫生：不接管测试进程的 stdin、Windows 不弹控制台窗口
         cmd.stdin(std::process::Stdio::null());
         crate::registry::no_window_tokio(&mut cmd);
+        // 超时后必须把子进程一起带走：Windows runner 会等 job 里所有进程退出，
+        // 留一个挂死的内核在后台，测试进程退了这一步照样卡到 job 超时。
+        cmd.kill_on_drop(true);
         // 与 local_speak 同样的依赖库环境兜底（rpath 之外再指一次 lib/）
         if let Some(lib) = cli_lib_dir(&exe) {
             #[cfg(target_os = "macos")]

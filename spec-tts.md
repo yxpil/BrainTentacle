@@ -63,7 +63,7 @@
 | `src/api.js` | `ttsStatus` / `ttsPrepare` / `ttsSpeak` |
 | `voice-bridge/tts-worker.mjs` | 新建。stdout `{"port":N}` + `POST /synthesize`（Bearer）：**在线四分支**（edge=node-edge-tts+退避；gtts=fetch translate TTS；siliconflow/openai=fetch v1/audio/speech+key）+ `GET /voices`（edge 音色拉取/缓存）；本地引擎不走 worker（直接 CLI） |
 | `voice-bridge/package.json` | 加 `node-edge-tts@1.2.12`（MIT） |
-| `voice-bridge/assets.json` | 8 本地引擎分区：每文件 name/url/bytes/sha256 + **`tunables` 可调参数模板**（flag/类型/范围/默认，含 zipvoice·pocket 的 reference-text/audio 克隆项）；顶层 `tts_bin` 分区：sherpa-onnx v1.13.8 合成内核按 `os-arch` 给候选包（7 平台 9 包，exe/archive 两类，全部 bytes+sha256 对齐官方 release 元数据） |
+| `voice-bridge/assets.json` | 8 本地引擎分区：每文件 name/url/bytes/sha256 + **`tunables` 可调参数模板**（flag/类型/范围/默认，含 zipvoice·pocket 的 reference-text/audio 克隆项）；顶层 `tts_bin` 分区：sherpa-onnx v1.13.8 合成内核按 `os-arch` 给候选包（7 平台 7 包，全部归档并带 bytes+sha256，对齐官方 release 元数据） |
 | 合成内核落位 | 不再随包分发 `voice-bridge/tts-bin/`（旧做法只带 osx-arm64 一份，其它系统必挂）：`tts::ensure_cli` 在首启下载引擎模型时同链路拉取本机架构内核，解包到数据目录 `tts/cli/<os-arch>/`，`cli_ready` 兜 Unix 执行位 |
 | `electron-builder.yml` + `package.json` | `node_modules`（node-edge-tts）进 files/asarUnpack；`beforePack: scripts/before-pack.cjs` 按目标平台补齐识别原生包 |
 

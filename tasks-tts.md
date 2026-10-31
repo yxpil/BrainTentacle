@@ -10,7 +10,7 @@
 - [x] T2 `crates/bit-core/src/tts.rs`（bit.db "tts" 含 keys + status/prepare/speak 分派，下载复用 voice 链路→已抽 download.rs）+ lib.rs 挂载
 - [x] T3 四层命令注册：commands_api.rs / bridge.rs / src-tauri commands.rs+main.rs / api.js + tts-progress 事件（另加 tts_voices 供 Edge 音色下拉）
 - [x] T4 `voice-bridge/tts-worker.mjs`（在线四分支 edge/gtts/siliconflow/openai + 退避 + GET /voices）+ `node-edge-tts` 依赖 + assets.json 8 引擎分区（含每引擎 `tunables`）
-- [x] T5 本地引擎 speak_impl 走 offline-tts CLI + 内核按平台下载（assets.json `tts_bin` 7 平台 9 包，`tts::ensure_cli` 首启装到 `tts/cli/<os-arch>/`；**不再随包分发 `voice-bridge/tts-bin/`**，旧做法只带 osx-arm64 一份）
+- [x] T5 本地引擎 speak_impl 走 offline-tts CLI + 内核按平台下载（assets.json `tts_bin` 7 平台 7 包，`tts::ensure_cli` 首启装到 `tts/cli/<os-arch>/`；**不再随包分发 `voice-bridge/tts-bin/`**，旧做法只带 osx-arm64 一份）
 - [x] T6 前端 AiSettingsPage「语音合成」卡（引擎下拉本地/在线分组、下载进度、key 输入、参数区动态渲染 + tunables 控件、试听播放）+ i18n zh/en
 - [x] T7 静态验证：cargo check 0 error / tts 单测 4 passed / npm run lint 0 error / npm run build 通过
 - [ ] T8 真实试听 e2e：本地 8 引擎各一段 + EdgeTTS 中英（gTTS/OpenAI 未验证标注、SiliconFlow 等 key）

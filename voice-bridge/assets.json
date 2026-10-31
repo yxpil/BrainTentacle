@@ -1249,34 +1249,20 @@
       ],
       "windows-x86_64": [
         {
-          "kind": "exe",
-          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-non-streaming-tts-x64-v1.13.8.exe",
-          "bytes": 22974464,
-          "sha256": "79e9cb94df59b8baaa1abd31c31afbe5fbe4cad8c0d5438650cb60133b7aa946",
-          "note": "官方单文件 TTS CLI，落位为 sherpa-onnx-offline-tts.exe"
-        },
-        {
           "kind": "archive",
           "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release.tar.bz2",
           "bytes": 24805859,
           "sha256": "6dffdc715a4465b989446a6105265d2cb345e7101591a17d35534b6758f6e8df",
-          "note": "MT=静态 CRT，免装 VC 运行库；单文件 exe 缺库时的兜底"
+          "note": "MT=静态 CRT，免装 VC 运行库；bin/ 里 exe 与 dll 同目录。官方那个 non-streaming-tts-x64.exe 是 GUI 程序（PE subsystem=GUI、无 --output-filename），拿来当内核会开窗等人、永不返回"
         }
       ],
       "windows-i686": [
-        {
-          "kind": "exe",
-          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-non-streaming-tts-x86-v1.13.8.exe",
-          "bytes": 19872256,
-          "sha256": "4c326ff6e5f11b43677d660bfb752571942a1ed552c0bd44e3d1103a35466bcf",
-          "note": "32 位 Windows"
-        },
         {
           "kind": "archive",
           "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x86-shared-MT-Release.tar.bz2",
           "bytes": 21105780,
           "sha256": "78bac9926a7fb77042171d60db53aad71e813deb2d04e9853937d7ac357e01f2",
-          "note": "兜底归档"
+          "note": "32 位 Windows；同样不用官方 GUI 版单文件 exe"
         }
       ],
       "windows-aarch64": [
