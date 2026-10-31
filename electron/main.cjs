@@ -700,39 +700,19 @@ async function hostCommand(cmd, args) {
         // 先把录音开始时的前台窗口抢回来：转写这几秒里前台可能已被系统弹层抢走，
         // keybd_event 只认当前前台，不抢回来就贴到别人身上了。抢不回也不拦，
         // 仍按当前前台粘贴（用户可能自己切了窗口，那种情况本来就该贴到新窗口）。
+        // 这两步都走 Rust 进程内 Win32：借道 powershell.exe 会带出（隐藏的）控制台窗口，
+        // 那窗口自己就会把前台抢走——粘贴探针在 CI 上就是这么被它打偏的。
         const hwnd = String(args.hwnd || '').trim();
         if (/^\d+$/.test(hwnd)) {
-          const ps = `$ErrorActionPreference = 'SilentlyContinue'
-Add-Type -Namespace BIT -Name W -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int c); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool BringWindowToTop(System.IntPtr h); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(System.IntPtr h, [ref]int pid); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();'
-$h = [System.IntPtr]${hwnd}
-[BIT.W]::ShowWindow($h, 9) | Out-Null
-[BIT.W]::BringWindowToTop($h) | Out-Null
-[BIT.W]::SetForegroundWindow($h) | Out-Null
-Start-Sleep -Milliseconds 120
-if ([BIT.W]::GetForegroundWindow() -ne $h) {
-  $procId = 0
-  [BIT.W]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
-  if ($procId -ne 0) { (New-Object -ComObject WScript.Shell).AppActivate($procId) | Out-Null }
-  Start-Sleep -Milliseconds 200
-}
-([BIT.W]::GetForegroundWindow()).ToInt64().ToString()`;
-          const a = await execShot('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', ps]);
-          const now = a.err ? '' : String(a.stdout || '').trim().split('\n').pop().trim();
-          if (now !== hwnd) console.warn(`[BIT][paste] 目标窗口未回到前台（期望 ${hwnd}，实际 ${now || '空'}）`);
+          const ok = await bit.invoke('win_activate_window', { hwnd }).catch(() => false);
+          if (!ok) console.warn(`[BIT][paste] 目标窗口 ${hwnd} 未能回到前台，按当前前台粘贴`);
           else console.log(`[BIT][paste] 已把目标窗口 ${hwnd} 拉回前台`);
         }
-        // Ctrl+V 用 user32 keybd_event 直接注入：SendKeys 在部分应用（走原始输入的）会失效
-        const script = [
-          'Add-Type -Namespace BIT -Name Kb -MemberDefinition \'[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void keybd_event(byte b, byte s, uint f, System.UIntPtr e);\'',
-          '[BIT.Kb]::keybd_event(0x11, 0, 0, [System.UIntPtr]::Zero)',
-          '[BIT.Kb]::keybd_event(0x56, 0, 0, [System.UIntPtr]::Zero)',
-          '[BIT.Kb]::keybd_event(0x56, 0, 2, [System.UIntPtr]::Zero)',
-          '[BIT.Kb]::keybd_event(0x11, 0, 2, [System.UIntPtr]::Zero)',
-        ].join('\n');
-        const r = await execShot('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
-        if (r.err) {
+        try {
+          await bit.invoke('win_send_ctrl_v', {});
+        } catch (e) {
           await undoPaste();
-          throw new Error('模拟粘贴失败（PowerShell keybd_event）：' + lastLine(r.err));
+          throw new Error('模拟粘贴失败（keybd_event）：' + lastLine(e));
         }
         restore();
         return { ok: true };
@@ -1022,13 +1002,9 @@ async function doScreenshotQuestion() {
 }
 // 按下快捷键那一刻的前台窗口（Windows HWND，十进制字符串）。录音+转写有数秒窗口期，
 // 期间任何弹层（系统提示、子进程控制台）都可能把前台抢走；只认粘贴瞬间的前台，
-// 结果就会贴到别人身上。所以要把目标记下来，粘贴前再抢回来。
-const PS_GET_FOREGROUND = `Add-Type -Namespace BIT -Name W -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();'
-([BIT.W]::GetForegroundWindow()).ToInt64().ToString()`;
+// 结果就会贴到别人身上。所以要把目标记下来，粘贴前再抢回来。（Rust 进程内 Win32）
 function captureForegroundHwnd() {
-  return execShot('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', PS_GET_FOREGROUND])
-    .then((r) => (r.err ? '' : String(r.stdout || '').trim().split('\n').pop().trim()))
-    .catch(() => '');
+  return bit.invoke('win_foreground_hwnd', {}).then((v) => String(v || '').trim()).catch(() => '');
 }
 // 全局语音：记住当前前台应用（转写完粘贴回去）→ 弹窗 → 通知对话页开录
 // macOS 用 osascript 拿 bundleId 并在粘贴前激活；Windows 记 HWND 再在粘贴前激活；

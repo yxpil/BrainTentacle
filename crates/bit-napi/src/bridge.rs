@@ -560,6 +560,12 @@ pub async fn dispatch(
             )
             .await
         }
+        // ---------- 前台窗口（全局语音粘回原应用，Windows 进程内 Win32） ----------
+        "win_foreground_hwnd" => bit_core::commands_api::win_foreground_hwnd(ctx),
+        "win_activate_window" => {
+            bit_core::commands_api::win_activate_window(ctx, a_str(&args, "hwnd")?.to_string())
+        }
+        "win_send_ctrl_v" => bit_core::commands_api::win_send_ctrl_v(ctx),
 
         // ---------- 语音合成（本地 sherpa CLI + 在线四家） ----------
         "tts_status" => {

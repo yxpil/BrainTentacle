@@ -90,3 +90,5 @@ pub mod update;
 pub mod voice;
 pub mod worker;
 pub mod workwith;
+#[cfg(windows)]
+pub mod wininput;

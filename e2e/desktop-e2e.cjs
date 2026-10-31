@@ -662,10 +662,13 @@ $h.ToString()`);
         "P4 显式粘贴：hostCommand 写剪贴板 → Ctrl+V 落到焦点框",
         async () => {
           if (!capsNow.paste_supported) return `跳过：${capsNow.paste_hint || "本机无粘贴工具"}`;
-          await focusWindow();
+          const fgWin = await focusWindow();
           await cdp.js(`(() => { const t = document.querySelector(${JSON.stringify(DRAFT_SEL)}); t.focus(); return true; })()`);
           const marker = `联调注入${Date.now()}`;
-          const r = await cdp.invoke("paste_text_to_foreground", { text: marker });
+          const r = await cdp.invoke("paste_text_to_foreground", {
+            text: marker,
+            hwnd: process.platform === "win32" ? String(fgWin || "") : null,
+          });
           if (!r?.ok) throw new Error(`hostCommand 返回：${JSON.stringify(r)}`);
           await until(
             "标记文本进入输入框",
@@ -690,9 +693,12 @@ $h.ToString()`);
         const COLOR = [12, 34, 56];
         const want = COLOR.join(",");
         const pasteAndWait = async (marker) => {
-          await focusWindow();
+          const fgWin = await focusWindow();
           await cdp.js(`(() => { const t = document.querySelector(${JSON.stringify(DRAFT_SEL)}); t.focus(); return true; })()`);
-          const r = await cdp.invoke("paste_text_to_foreground", { text: marker });
+          const r = await cdp.invoke("paste_text_to_foreground", {
+            text: marker,
+            hwnd: process.platform === "win32" ? String(fgWin || "") : null,
+          });
           if (!r?.ok) throw new Error(`hostCommand 返回：${JSON.stringify(r)}`);
           await until("标记文本进入输入框", async () => (await draftValue()).includes(marker), 15000, 300);
         };

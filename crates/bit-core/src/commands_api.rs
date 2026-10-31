@@ -2644,6 +2644,46 @@ pub async fn voice_transcribe(
     crate::voice::transcribe_impl(ctx, wav_base64, language).await
 }
 
+// ---------- 前台窗口（Windows，全局语音粘回原应用；实现在 wininput.rs） ----------
+
+/// 当前前台窗口句柄（十进制字符串）；非 Windows 恒为空串
+pub fn win_foreground_hwnd(_ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        Ok(json!(crate::wininput::foreground_hwnd()))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(json!(""))
+    }
+}
+
+/// 把窗口拉回前台（含 AttachThreadInput 解锁）；抢不回返回 false，调用方仍可按当前前台粘贴
+pub fn win_activate_window(_ctx: &Arc<Ctx>, hwnd: String) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        Ok(json!(crate::wininput::activate(&hwnd)))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        Ok(json!(false))
+    }
+}
+
+/// 向当前前台窗口注入 Ctrl+V
+pub fn win_send_ctrl_v(_ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        crate::wininput::ctrl_v();
+        Ok(json!(true))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(json!(false))
+    }
+}
+
 // ---------- 语音合成（本地 sherpa CLI + 在线四家，实现在 tts.rs） ----------
 
 /// 语音合成状态：逐引擎就绪/体积/缺失文件 + key 是否配置 + 下载进度 + 最近错误。
