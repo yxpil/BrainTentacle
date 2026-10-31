@@ -2,7 +2,8 @@
 // 把构建产物复制到 packaging/native/，供 electron-builder extraResources 注入 resources 根：
 //   bit.node          napi 核心（cdylib：Windows=bit_napi.dll / Linux=libbit_napi.so / macOS=libbit_napi.dylib）
 //   bit-cli(.exe)     worker / guardian sidecar
-//   icon.ico          托盘/通知图标（Windows；mac/linux 打包用 yml 里的 icns/png）
+//   icon.ico          托盘/通知图标（Windows）
+//   icon.png          托盘/通知图标（macOS/Linux——nativeImage 不吃 ico，缺了打包版托盘为空图标）
 // 候选路径按优先级探测：--target 三元组目录 → 默认 target/release → 现存 bit_napi.node。
 // CI 的 napi 矩阵走 artifact 下载后同样落位 packaging/native/（文件名已归一）。
 'use strict';
@@ -44,6 +45,7 @@ const cliSrc = find([
   path.join(ROOT, 'src-tauri', 'target', 'release', EXE),
 ]);
 const iconSrc = find([path.join(ROOT, 'src-tauri', 'icons', 'icon.ico')]);
+const iconPngSrc = find([path.join(ROOT, 'src-tauri', 'icons', 'icon.png')]);
 
 if (!nodeSrc) {
   console.error(`stage-pack: 找不到 napi 核心产物（${NODE_LIB}）——先跑 cargo build --release -p bit-napi`);
@@ -57,13 +59,19 @@ if (!iconSrc) {
   console.error('stage-pack: 找不到 src-tauri/icons/icon.ico');
   process.exit(1);
 }
+if (!iconPngSrc) {
+  console.error('stage-pack: 找不到 src-tauri/icons/icon.png（macOS/Linux 托盘必需）');
+  process.exit(1);
+}
 
 fs.copyFileSync(nodeSrc, path.join(OUT, 'bit.node'));
 fs.copyFileSync(cliSrc, path.join(OUT, EXE));
 fs.copyFileSync(iconSrc, path.join(OUT, 'icon.ico'));
+fs.copyFileSync(iconPngSrc, path.join(OUT, 'icon.png'));
 
 const mb = (p) => (fs.statSync(p).size / 1024 / 1024).toFixed(1);
 console.log(`stage-pack OK → packaging/native/`);
 console.log(`  bit.node  ← ${nodeSrc} (${mb(nodeSrc)} MB)`);
 console.log(`  ${EXE} ← ${cliSrc} (${mb(cliSrc)} MB)`);
 console.log(`  icon.ico  ← ${iconSrc}`);
+console.log(`  icon.png  ← ${iconPngSrc}`);
