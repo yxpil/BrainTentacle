@@ -551,7 +551,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     };
   }, []);
   // 全局语音听写目标（global-voice 事件写入）：转写完成后粘贴回原前台应用而非进对话
-  const pasteTargetRef = useRef(null); // { bundleId } | null
+  const pasteTargetRef = useRef(null); // { bundleId, hwnd } | null
   // 提示词模板浮层（输入框工具栏）：懒加载列表，点选插入输入框
   const [tplOpen, setTplOpen] = useState(false);
   const [templates, setTemplates] = useState([]); // [{id,title,text}]
@@ -720,7 +720,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
         const target = pasteTargetRef.current;
         pasteTargetRef.current = null;
         try {
-          await api.pasteTextToForeground(text, target.bundleId);
+          await api.pasteTextToForeground(text, target.bundleId, target.hwnd);
           flashVoiceHint(t("chat.voicePasted"), "ok");
         } catch (e) {
           const emsg = typeof e === "string" ? e : e?.message || String(e);
@@ -932,7 +932,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
   // Electron 宿主全局事件：全局语音听写（开录，转写后粘贴回原应用）+ 截图提问（挂图片附件）
   useEffect(() => {
     const unVoice = listen("global-voice", (e) => {
-      pasteTargetRef.current = { bundleId: e.payload?.bundleId || "" };
+      pasteTargetRef.current = { bundleId: e.payload?.bundleId || "", hwnd: e.payload?.hwnd || "" };
       void voiceEntryRef.current();
     });
     const unShot = listen("screenshot-capture", (e) => {

@@ -134,8 +134,9 @@ export const api = {
   // 聊天工具栏剪刀按钮：macOS screencapture 框选 → 剪贴板 → 挂输入框附件（Electron 专属）
   screenshotRegion: () => invoke("screenshot_region"),
   setAppHotkeys: (screenshot, voice) => invoke("set_app_hotkeys", { screenshot: screenshot ?? null, voice: voice ?? null }),
-  // 全局语音转写结果粘贴回原前台应用（macOS osascript；需辅助功能权限）
-  pasteTextToForeground: (text, bundleId) => invoke("paste_text_to_foreground", { text, bundleId: bundleId || null }),
+  // 全局语音转写结果粘贴回原前台应用（macOS osascript；Windows 按 HWND 抢回前台再注入）
+  pasteTextToForeground: (text, bundleId, hwnd) =>
+    invoke("paste_text_to_foreground", { text, bundleId: bundleId || null, hwnd: hwnd || null }),
   // 流式对话：过程通过 Tauri 事件 event_name 推送增量，onEvent 收到 {type, ...} payload。
   // images 为可选的图片 base64 data URL 数组，仅随当前用户轮发给多模态模型。
   // 返回一个 Promise，resolve 为最终完整消息列表；调用方应先订阅事件再 await。

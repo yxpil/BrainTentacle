@@ -697,6 +697,30 @@ async function hostCommand(cmd, args) {
         }
       }
       if (process.platform === 'win32') {
+        // 先把录音开始时的前台窗口抢回来：转写这几秒里前台可能已被系统弹层抢走，
+        // keybd_event 只认当前前台，不抢回来就贴到别人身上了。抢不回也不拦，
+        // 仍按当前前台粘贴（用户可能自己切了窗口，那种情况本来就该贴到新窗口）。
+        const hwnd = String(args.hwnd || '').trim();
+        if (/^\d+$/.test(hwnd)) {
+          const ps = `$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -Namespace BIT -Name W -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int c); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool BringWindowToTop(System.IntPtr h); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(System.IntPtr h, [ref]int pid); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();'
+$h = [System.IntPtr]${hwnd}
+[BIT.W]::ShowWindow($h, 9) | Out-Null
+[BIT.W]::BringWindowToTop($h) | Out-Null
+[BIT.W]::SetForegroundWindow($h) | Out-Null
+Start-Sleep -Milliseconds 120
+if ([BIT.W]::GetForegroundWindow() -ne $h) {
+  $procId = 0
+  [BIT.W]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
+  if ($procId -ne 0) { (New-Object -ComObject WScript.Shell).AppActivate($procId) | Out-Null }
+  Start-Sleep -Milliseconds 200
+}
+([BIT.W]::GetForegroundWindow()).ToInt64().ToString()`;
+          const a = await execShot('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', ps]);
+          const now = a.err ? '' : String(a.stdout || '').trim().split('\n').pop().trim();
+          if (now !== hwnd) console.warn(`[BIT][paste] 目标窗口未回到前台（期望 ${hwnd}，实际 ${now || '空'}）`);
+          else console.log(`[BIT][paste] 已把目标窗口 ${hwnd} 拉回前台`);
+        }
         // Ctrl+V 用 user32 keybd_event 直接注入：SendKeys 在部分应用（走原始输入的）会失效
         const script = [
           'Add-Type -Namespace BIT -Name Kb -MemberDefinition \'[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void keybd_event(byte b, byte s, uint f, System.UIntPtr e);\'',
@@ -996,10 +1020,28 @@ async function doScreenshotQuestion() {
   showWindow();
   sendToMain('screenshot-capture', { dataUrl: 'data:image/png;base64,' + r.png });
 }
+// 按下快捷键那一刻的前台窗口（Windows HWND，十进制字符串）。录音+转写有数秒窗口期，
+// 期间任何弹层（系统提示、子进程控制台）都可能把前台抢走；只认粘贴瞬间的前台，
+// 结果就会贴到别人身上。所以要把目标记下来，粘贴前再抢回来。
+const PS_GET_FOREGROUND = `Add-Type -Namespace BIT -Name W -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();'
+([BIT.W]::GetForegroundWindow()).ToInt64().ToString()`;
+function captureForegroundHwnd() {
+  return execShot('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', PS_GET_FOREGROUND])
+    .then((r) => (r.err ? '' : String(r.stdout || '').trim().split('\n').pop().trim()))
+    .catch(() => '');
+}
 // 全局语音：记住当前前台应用（转写完粘贴回去）→ 弹窗 → 通知对话页开录
-// macOS 用 osascript 拿 bundleId 并在粘贴前激活；Windows/Linux 拿不到"上一个前台应用"
-// 且不该抢焦点（抢了就粘到自己身上），故改为不夺焦点地显示，粘贴落在用户原焦点窗口。
+// macOS 用 osascript 拿 bundleId 并在粘贴前激活；Windows 记 HWND 再在粘贴前激活；
+// Linux 拿不到"上一个前台应用"且不该抢焦点（抢了就粘到自己身上），故不夺焦点地显示。
 function doGlobalVoice() {
+  if (process.platform === 'win32') {
+    captureForegroundHwnd().then((hwnd) => {
+      if (win && !win.isDestroyed() && !win.isFocused()) win.showInactive();
+      else if (!win || win.isDestroyed()) createWindow();
+      sendToMain('global-voice', { bundleId: '', hwnd });
+    });
+    return;
+  }
   if (process.platform !== 'darwin') {
     if (win && !win.isDestroyed() && !win.isFocused()) win.showInactive();
     else if (!win || win.isDestroyed()) createWindow();
@@ -1160,6 +1202,9 @@ function createWindow() {
     win.hide();
   });
   hardenWebContents(win.webContents);
+  // 前台焦点是「全局语音粘回原应用」的隐含前提，出问题时这两行是判断粘贴贴错的依据
+  win.on('focus', () => console.log('[BIT][focus] 主窗口获得前台'));
+  win.on('blur', () => console.log('[BIT][focus] 主窗口失去前台'));
 
   // 冒烟模式（BIT_SMOKE=1）：渲染管线 console 转发 stdout，便于无窗诊断
   if (process.env.BIT_SMOKE === '1') {

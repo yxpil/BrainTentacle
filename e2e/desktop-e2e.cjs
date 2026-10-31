@@ -568,12 +568,15 @@ $h.ToString()`);
       });
 
       await probe("P3b 假麦克风录音 → 转写 → xdotool 粘回输入框", async () => {
-        await focusWindow();
+        const focused = await focusWindow();
+        // 与全局语音快捷键同一条链路：主进程在按快捷键时记下前台窗口（Windows = HWND），
+        // 转写完成后按它抢回前台再注入 Ctrl+V。测试直接发事件，就得自己补上这个目标，
+        // 否则转写期间一旦被系统弹层抢走前台，结果就贴到别人身上、草稿永远等不到文本。
+        const targetHwnd = process.platform === "win32" ? String(focused || "") : "";
         // 焦点落到草稿框：粘贴注入的目标就是「当前焦点」
         await cdp.js(`(() => { const t = document.querySelector(${JSON.stringify(DRAFT_SEL)}); if (!t) throw new Error('找不到草稿框'); t.focus(); return document.activeElement === t; })()`);
         const before = await draftValue();
-        // 与全局语音快捷键同一条链路：主进程 emit global-voice → 渲染层开录（假麦克风）
-        const emit = () => cdp.invoke("plugin:event|emit", { event: "global-voice", payload: { bundleId: "" } });
+        const emit = () => cdp.invoke("plugin:event|emit", { event: "global-voice", payload: { bundleId: "", hwnd: targetHwnd } });
         // 录音状态以界面文案为准（i18n 中英两套），不拿固定时长猜：
         // 渲染层的 downloading 标志清空比后端 ready 晚一拍（1.5s 轮询），这期间按键
         // 会被 toggleVoice 直接丢弃——按固定 sleep 发键，第一次就可能被吞掉
