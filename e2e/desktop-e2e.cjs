@@ -574,7 +574,26 @@ $h.ToString()`);
         const before = await draftValue();
         // 与全局语音快捷键同一条链路：主进程 emit global-voice → 渲染层开录（假麦克风）
         const emit = () => cdp.invoke("plugin:event|emit", { event: "global-voice", payload: { bundleId: "" } });
+        // 录音状态以界面文案为准（i18n 中英两套），不拿固定时长猜：
+        // 渲染层的 downloading 标志清空比后端 ready 晚一拍（1.5s 轮询），这期间按键
+        // 会被 toggleVoice 直接丢弃——按固定 sleep 发键，第一次就可能被吞掉
+        const voiceBar = () =>
+          cdp.js(`(() => {
+            const t = document.body.innerText || "";
+            return {
+              downloading: /模型下载中|Downloading model/.test(t),
+              recording: /录音中|Recording…/.test(t),
+            };
+          })()`);
+        await until("界面退出下载状态", async () => ((await voiceBar()).downloading ? null : true), 20000, 250);
         await emit();
+        try {
+          await until("录音开始", async () => ((await voiceBar()).recording ? true : null), 6000, 250);
+        } catch {
+          // 仍没开录：补发一次（上一次可能正好撞在丢弃窗口里）
+          await emit();
+          await until("录音开始", async () => ((await voiceBar()).recording ? true : null), 15000, 250);
+        }
         // 录 ~3 秒固定素材（素材本身约 2 秒，Chromium 会循环回放）
         await sleep(3200);
         await emit(); // 再触发一次 = 停止并转写
@@ -592,9 +611,10 @@ $h.ToString()`);
         } catch (e) {
           // 等不到结果时，把识别 worker 状态、界面提示与两端日志都带上——否则只有一句「超时」
           const st = await cdp.invoke("voice_status").catch(() => null);
+          const bar = await voiceBar().catch(() => null);
           const body = await toastText().catch(() => "");
           throw new Error(
-            `${e.message}\nvoice_status=${JSON.stringify(st).slice(0, 500)}\n界面文字=${String(body).slice(0, 300)}` +
+            `${e.message}\nvoice_status=${JSON.stringify(st).slice(0, 500)}\n语音状态条=${JSON.stringify(bar)}\n界面文字=${String(body).slice(0, 300)}` +
               `\n--- 渲染层 console ---\n${cdp.events.slice(-15).join("\n")}` +
               `\n--- 主进程日志尾部 ---\n${tail(20)}`
           );
