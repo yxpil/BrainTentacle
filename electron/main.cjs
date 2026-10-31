@@ -596,6 +596,11 @@ function handleWindowOp(op, args) {
   }
 }
 
+// 粘贴借走剪贴板后 800ms 还原。两次粘贴挨得近时（语音紧接着再来一次 / 语音后截图），
+// 上一轮的还原会把这一轮刚写进去的内容清掉，Ctrl+V 就粘到空内容；所以只保留一份
+// 「用户原剪贴板」，新一轮粘贴取消旧定时器并沿用最初的内容。
+let pendingPasteRestore = null;
+
 // ── B 类宿主命令：JS 拦截（Tauri 里走 AppHandle/插件，Electron 原生能力等价实现）──
 async function hostCommand(cmd, args) {
   switch (cmd) {
@@ -651,15 +656,29 @@ async function hostCommand(cmd, args) {
       // 异步剪贴板：写入要等 resolve，否则模拟 Ctrl+V 可能抢在内容落地前
       const oldText = await clipboard.readText().catch(() => '');
       const oldPng = await clipboardPng();
+      const saved = pendingPasteRestore || { text: oldText, png: oldPng, timer: null };
+      pendingPasteRestore = saved;
       await clipboard.writeText(text);
       // 目标应用读到剪贴板后再还原，避免覆盖用户原有内容
-      const restore = () =>
-        setTimeout(async () => {
+      const restore = () => {
+        if (saved.timer) clearTimeout(saved.timer);
+        saved.timer = setTimeout(async () => {
+          if (pendingPasteRestore === saved) pendingPasteRestore = null;
           try {
-            await clipboard.writeText(oldText);
-            if (oldPng) await clipboardWritePng(oldPng);
+            await clipboard.writeText(saved.text);
+            if (saved.png) await clipboardWritePng(saved.png);
           } catch { /* 恢复失败不影响主流程 */ }
         }, 800);
+      };
+      // 本次粘贴失败：立刻还回用户原内容，别留下半截状态
+      const undoPaste = async () => {
+        if (saved.timer) clearTimeout(saved.timer);
+        if (pendingPasteRestore === saved) pendingPasteRestore = null;
+        try {
+          await clipboard.writeText(saved.text);
+          if (saved.png) await clipboardWritePng(saved.png);
+        } catch { /* 恢复失败不影响主流程 */ }
+      };
       if (process.platform === 'darwin') {
         const { execFile } = require('child_process');
         const run = (cmd, a) => new Promise((resolve, reject) =>
@@ -673,6 +692,7 @@ async function hostCommand(cmd, args) {
           restore();
           return { ok: true };
         } catch {
+          await undoPaste();
           throw new Error('需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能');
         }
       }
@@ -687,8 +707,7 @@ async function hostCommand(cmd, args) {
         ].join('\n');
         const r = await execShot('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
         if (r.err) {
-          await clipboard.writeText(oldText);
-          if (oldPng) await clipboardWritePng(oldPng);
+          await undoPaste();
           throw new Error('模拟粘贴失败（PowerShell keybd_event）：' + lastLine(r.err));
         }
         restore();
@@ -699,8 +718,7 @@ async function hostCommand(cmd, args) {
       if (hasCmd('xdotool')) tools.push(['xdotool', ['key', 'ctrl+v']]);
       if (hasCmd('wtype')) tools.push(['wtype', ['-M', 'ctrl', 'v', '-m', 'ctrl']]);
       if (!tools.length) {
-        await clipboard.writeText(oldText);
-        if (oldPng) await clipboardWritePng(oldPng);
+        await undoPaste();
         throw new Error(
           isWayland()
             ? 'Wayland 模拟粘贴需要安装 wtype（或 xdotool 走 XWayland）；未装时转写结果留在对话草稿'
@@ -714,8 +732,7 @@ async function hostCommand(cmd, args) {
           return { ok: true };
         }
       }
-      await clipboard.writeText(oldText);
-      if (oldPng) await clipboardWritePng(oldPng);
+      await undoPaste();
       throw new Error('模拟粘贴失败：需 xdotool（X11）或 wtype（Wayland）');
     }
     case 'screenshot_region': {
