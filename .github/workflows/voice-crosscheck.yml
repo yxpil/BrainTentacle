@@ -5,8 +5,13 @@ name: voice-crosscheck
 #   2) 本地合成内核按平台真下载 → 解档 → 选名 → 执行（含 Windows DLL / Linux .so 加载）
 #   3) 跨架构识别原生包补装（electron-builder beforePack 的同一段逻辑）
 #   4) 识别 worker 起停 + 固定素材 WAV 转写（含 Linux LD_LIBRARY_PATH / Windows PATH）
-# 只 workflow_dispatch 触发：不打 tag、不出包、不上传任何产物，也不接进发布链。
+# 触发：手动 dispatch + 语音相关文件变更时自动跑（见下方 on: 说明）。
+# 不打 tag、不出包、不上传任何产物，也不接进发布链。
 # 交互部分（真实框选、抢焦点粘贴、辅助功能/UAC 弹窗）在这里验不了，仍需目标机器人工点一遍。
+# 触发说明：workflow_dispatch 要求工作流文件存在于**默认分支**才会在 Actions 里注册；
+# 本文件只在 windows 分支上，光有 dispatch 是点不起来的。故再加一个按路径收窄的 push 触发——
+# 只有语音/桌面能力相关代码变更才会跑这条自检，且它不出包、不上传产物、不参与发布链。
+# 等这套逻辑合进默认分支后，可以把 push 去掉只留手动。
 on:
   workflow_dispatch:
     inputs:
@@ -18,6 +23,19 @@ on:
         description: "跑合成内核端到端（各平台下载约 20-28MB）"
         type: boolean
         default: true
+  push:
+    branches:
+      - windows
+    paths:
+      - "crates/bit-core/src/voice.rs"
+      - "crates/bit-core/src/tts.rs"
+      - "crates/bit-core/src/download.rs"
+      - "voice-bridge/**"
+      - "electron/desktop-capabilities.cjs"
+      - "electron/main.cjs"
+      - "scripts/before-pack.cjs"
+      - "e2e/**"
+      - ".github/workflows/voice-crosscheck.yml"
 
 permissions:
   contents: read
@@ -86,6 +104,31 @@ jobs:
       - name: 本机真实探测结果（三端对照）
         run: node e2e/capabilities-probe.cjs
 
+      # ↓ 端到端与单测必须排在 beforePack 检查之前：beforePack 会改写并（CI 环境下）
+      # 剪掉 voice-bridge/node_modules 里的识别原生包，跑完再动它们就来不及了。
+      # push 事件下 inputs.* 恒为空，直接写 if: inputs.x 会让端到端在自动触发里静默跳过，
+      # 所以只在手动触发时才看开关。
+      - name: 内核端到端（真下载 + 解档 + 执行）
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.with_kernel }}
+        run: cargo test -p bit-core --lib tts::tests::e2e_cli_install_real_and_runs -- --ignored --nocapture
+
+      - name: 识别端到端（模型下载 + worker + 固定素材转写）
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.with_asr }}
+        run: cargo test -p bit-core --lib voice::tests::e2e_download_and_transcribe -- --ignored --nocapture
+
+      - name: 相关单测（tts）
+        run: "cargo test -p bit-core --lib tts::"
+
+      - name: 相关单测（voice，含下载续传与就绪判定）
+        run: "cargo test -p bit-core --lib voice::"
+
+      # 全量单测仅作参考：既有的 Windows 路径/工具门控用例在非 Windows 上本就红
+      - name: 全量单测（信息性，不作为闸门）
+        continue-on-error: true
+        run: cargo test -p bit-core --lib
+
+      # 跨架构补装检查放最后：它会往 voice-bridge/node_modules 装 foreign 包并删掉
+      # runner 自身的包（pruneForeign 只在 CI=true 时生效），属于「用完即弃」的步骤。
       - name: beforePack 跨架构补装（存在的目标包）
         env:
           BIT_XCHECK_PLATFORM: ${{ matrix.xcheck_platform }}
@@ -99,22 +142,3 @@ jobs:
           BIT_XCHECK_ARCH: ${{ matrix.skip_arch }}
           BIT_XCHECK_EXPECT: skip
         run: node e2e/before-pack-check.cjs
-
-      - name: 内核端到端（真下载 + 解档 + 执行）
-        if: ${{ inputs.with_kernel }}
-        run: cargo test -p bit-core --lib tts::tests::e2e_cli_install_real_and_runs -- --ignored --nocapture
-
-      - name: 识别端到端（模型下载 + worker + 固定素材转写）
-        if: ${{ inputs.with_asr }}
-        run: cargo test -p bit-core --lib voice::tests::e2e_download_and_transcribe -- --ignored --nocapture
-
-      - name: 相关单测（tts）
-        run: "cargo test -p bit-core --lib tts::"
-
-      - name: 相关单测（voice，含下载续传与就绪判定）
-        run: "cargo test -p bit-core --lib voice::"
-
-      # 全量单测仅作参考：既有的 Windows 路径/工具门控用例在非 Windows 上本就红
-      - name: 全量单测（信息性，不作为闸门）
-        continue-on-error: true
-        run: cargo test -p bit-core --lib
