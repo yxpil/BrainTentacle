@@ -53,6 +53,14 @@ pub fn bootstrap_services(ctx: &Arc<Ctx>) -> serde_json::Value {
         });
     }
 
+    // 待办计划执行调度循环（每 30 秒检查一次到点待办，到点唤回关联会话 / 标记 overdue）
+    {
+        let td_ctx = ctx.clone();
+        crate::task::spawn(async move {
+            crate::goal::schedule_todos_loop(td_ctx).await;
+        });
+    }
+
     // 解释器探测移到后台：不阻塞窗口显示
     let rt_ctx = ctx.clone();
     crate::task::spawn_blocking(move || {
@@ -239,4 +247,24 @@ pub fn install_cli(_ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
 /// 卸载独立 CLI（npm 全局卸载 braintentacle_cli）
 pub fn uninstall_cli(_ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
     crate::cli::uninstall_cli_impl()
+}
+
+/// DeepSeek Harness（dsh）：扫描 dsh 技能根导入 SKILL.md 为 BIT 技能（同名跳过）
+pub fn dsh_import_skills(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::dsh::import_skills_impl(ctx)
+}
+
+/// DeepSeek Harness（dsh）状态：已装插件 + 启停情况 + 桥注册情况 + 技能根路径
+pub fn dsh_status(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::dsh::status_impl(ctx)
+}
+
+/// DeepSeek Harness（dsh）插件启停：写 toolhomes/dsh/disabled.json，返回新状态
+pub fn dsh_toggle_plugin(ctx: &Arc<Ctx>, name: String, enabled: bool) -> Result<serde_json::Value, String> {
+    crate::dsh::toggle_plugin_impl(ctx, name, enabled)
+}
+
+/// DeepSeek Harness（dsh）首次接入：建 dsh 目录 + 定位桥脚本并注册为 stdio MCP server
+pub async fn dsh_setup_bridge(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::dsh::setup_bridge_impl(ctx).await
 }

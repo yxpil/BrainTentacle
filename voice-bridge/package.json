@@ -1,0 +1,13 @@
+{
+  "name": "bit-voice-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BIT 语音桥：本地 SenseVoice 离线识别（voice-worker.mjs）+ 在线 TTS 合成（tts-worker.mjs）",
+  "type": "module",
+  "main": "voice-worker.mjs",
+  "license": "MIT",
+  "dependencies": {
+    "node-edge-tts": "1.2.12",
+    "sherpa-onnx-node": "1.13.8"
+  }
+}

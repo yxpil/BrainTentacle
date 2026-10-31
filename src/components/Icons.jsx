@@ -22,6 +22,24 @@ export const IconPlay = (p) => (
   </I>
 );
 
+// 扬声器+声波：消息朗读按钮（描边风格，与工具栏其它图标统一）
+export const IconSpeaker = (p) => (
+  <I {...p}>
+    <polygon points="11,5 6,9 3,9 3,15 6,15 11,19" fill="none" strokeLinejoin="round" />
+    <path d="M14.5 9.5a4 4 0 0 1 0 5" />
+    <path d="M17.5 7a7.5 7.5 0 0 1 0 10" />
+  </I>
+);
+
+// 扬声器+斜线：停止朗读 / 关闭自动朗读（描边风格）
+export const IconSpeakerOff = (p) => (
+  <I {...p}>
+    <polygon points="11,5 6,9 3,9 3,15 6,15 11,19" fill="none" strokeLinejoin="round" />
+    <line x1="15" y1="9.5" x2="20.5" y2="14.5" />
+    <line x1="20.5" y1="9.5" x2="15" y2="14.5" />
+  </I>
+);
+
 export const IconPause = (p) => (
   <I {...p}>
     <circle cx="12" cy="12" r="9" />
@@ -175,6 +193,23 @@ export const IconCheck = (p) => (
   </I>
 );
 
+// 钟表：圆圈 + 时针分针（待办计划时间展示）
+export const IconClock = (p) => (
+  <I {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </I>
+);
+
+// 麦克风：胶囊拾音头 + 弧形支架 + 底座（语音输入）
+export const IconMic = (p) => (
+  <I {...p}>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M5 11v1a7 7 0 0 0 14 0v-1" />
+    <line x1="12" y1="19" x2="12" y2="22" />
+  </I>
+);
+
 export const IconCopy = (p) => (
   <I {...p}>
     <rect x="9" y="9" width="11" height="11" rx="2" />
@@ -294,6 +329,16 @@ export const IconImage = (p) => (
     <rect x="3" y="3" width="18" height="18" rx="2" />
     <circle cx="8.5" cy="8.5" r="1.5" />
     <path d="M21 15l-5-5L5 21" />
+  </I>
+);
+
+export const IconScissors = (p) => (
+  <I {...p}>
+    <circle cx="6" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <line x1="20" y1="4" x2="8.12" y2="15.88" />
+    <line x1="14.47" y1="14.48" x2="20" y2="20" />
+    <line x1="8.12" y1="8.12" x2="12" y2="12" />
   </I>
 );
 

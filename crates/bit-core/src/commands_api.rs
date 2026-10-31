@@ -13,7 +13,9 @@
 //!   set_elevation / relaunch_with_elevation（AppHandle 重启提权）、update_apply（AppHandle 重启）；
 //!   notify_done 由 chat / chat_stream 内联为 ctx.emit("notify-done", …) 事件；
 //!   is_headless / ui_mounted / mem_usage / get_overview / list_tools / check_updates /
-//!   quit_app / detect_cli（detect_cli_impl）已在 api.rs，npm 包探测逻辑在 cli.rs。
+//!   quit_app / detect_cli（detect_cli_impl）已在 api.rs，npm 包探测逻辑在 cli.rs；
+//!   dsh_import_skills / dsh_status / dsh_toggle_plugin / dsh_setup_bridge（DeepSeek
+//!   Harness 插件兼容）已在 api.rs，实现在 dsh.rs（setup_bridge 内部复用本模块 mcp_add_stdio）。
 //! - 辅助函数去重：estimate_context_tokens / fetch_provider_models / persist_model_context /
 //!   refresh_model_context / active_max_context / claude_context_for / context_len_from / ctx_key
 //!   已下沉 crate::ai；version_gt 已下沉 crate::update；qr_payload 已下沉 crate::relay；
@@ -1460,58 +1462,226 @@ pub fn workwith_logs(id: String, tail: Option<u64>) -> Result<serde_json::Value,
     Ok(crate::workwith::logs_of(&id, tail.map(|n| n as usize)))
 }
 
-/// 手动压缩会话：用 AI 把全部历史总结为一条摘要（system 消息），释放上下文空间。
-/// 摘要写入会话后返回新消息列表；压缩不影响会话本身，可继续对话。
-pub async fn compress_session(ctx: &Arc<Ctx>, session_id: String) -> Result<serde_json::Value, String> {
-    let target = if session_id.is_empty() {
-        ctx.sessions.lock().unwrap().active.clone()
-    } else {
-        session_id
-    };
-
+/// 压缩会话核心：把历史（除最近 keep_recent 条）用 AI 总结为摘要，替换进会话。
+/// provider_id 空 = 用当前激活模型；指定时走 simple_chat（可用便宜模型压，不占主力配置）。
+/// 返回 (压缩前消息数, 压缩后消息数)。
+async fn compress_core(
+    ctx: &Arc<Ctx>,
+    session_id: &str,
+    provider_id: Option<String>,
+    keep_recent: usize,
+) -> Result<(usize, usize), String> {
     // 取出历史（在锁外进行 AI 调用，避免阻塞其他会话）
     let history: Vec<crate::ai::ChatMessage> = {
         let store = ctx.sessions.lock().unwrap();
         let sess = store
             .sessions
             .iter()
-            .find(|s| s.id == target)
+            .find(|s| s.id == session_id)
             .ok_or("会话不存在")?;
         sess.messages.iter().filter(|m| m.role != "system").cloned().collect()
     };
     if history.len() < 4 {
         return Err("对话内容太少，无需压缩".into());
     }
+    // 保留最近几条原文衔接（自动压缩用），其余送去摘要
+    let (to_sum, kept): (Vec<_>, Vec<_>) = if keep_recent > 0 && history.len() > keep_recent {
+        let at = history.len() - keep_recent;
+        (history[..at].to_vec(), history[at..].to_vec())
+    } else {
+        (history.clone(), Vec::new())
+    };
 
-    let mut convo = vec![crate::ai::ChatMessage::system(
-        "你是对话压缩助手。请把下面这段 AI 对话历史浓缩成一份结构化中文摘要，保留：用户的需求与偏好、已达成的结论、关键事实与数据、未完成的待办。直接输出摘要正文，不要寒暄，控制在 800 字以内。",
-    )];
-    for m in &history {
+    let mut convo = String::new();
+    for m in &to_sum {
         let who = if m.role == "user" { "用户" } else { "AI" };
-        convo.push(crate::ai::ChatMessage::user(format!("【{who}】{}", m.content)));
+        convo.push_str(&format!("【{who}】{}\n\n", m.content));
     }
-    let summary = crate::ai::chat(ctx, &convo).await?;
+    let system = "你是对话压缩助手。请把下面这段 AI 对话历史浓缩成一份结构化中文摘要，保留：用户的需求与偏好、已达成的结论、关键事实与数据、未完成的待办。直接输出摘要正文，不要寒暄，控制在 800 字以内。";
+    // 指定压缩模型（便宜小模型）或当前激活模型；simple_chat 无工具无图、轻量采样参数
+    let pid = match provider_id {
+        Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => ctx
+            .ai_config
+            .lock()
+            .unwrap()
+            .active()
+            .map(|p| p.id.clone())
+            .ok_or("未配置任何 AI 提供方")?,
+    };
+    let summary = crate::ai::simple_chat(ctx, &pid, system, convo.trim(), 180).await?;
 
-    // 用摘要替换全部历史（摘要以 system 消息存放，前端气泡不显示）
-    let before = {
+    let before = history.len();
+    let after = {
         let mut store = ctx.sessions.lock().unwrap();
-        let sess = store.get_mut(&target).ok_or("会话不存在")?;
-        let n = sess.messages.len();
+        let sess = store.get_mut(session_id).ok_or("会话不存在")?;
         sess.messages = vec![crate::ai::ChatMessage::system(format!(
             "以下是对此前对话的压缩摘要，请结合它继续对话：\n\n{summary}"
         ))];
+        sess.messages.extend(kept);
         sess.touch();
-        n
+        sess.messages.len()
     };
     crate::session::persist(ctx);
+    Ok((before, after))
+}
+
+/// 手动压缩会话：用 AI 把历史总结为一条摘要（system 消息），释放上下文空间。
+/// provider_id 可指定压缩用模型（如便宜的小模型），空 = 当前激活模型。
+pub async fn compress_session(
+    ctx: &Arc<Ctx>,
+    session_id: String,
+    provider_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let target = if session_id.is_empty() {
+        ctx.sessions.lock().unwrap().active.clone()
+    } else {
+        session_id
+    };
+    let (before, after) = compress_core(ctx, &target, provider_id, 0).await?;
     crate::audit::record(ctx, "local-app", "session.compress", &target, json!({ "messages_before": before }), true);
     Ok(json!({
         "messages": ctx.sessions.lock().unwrap()
             .sessions.iter().find(|s| s.id == target)
             .map(|s| s.messages.clone()).unwrap_or_default(),
-        "summary": summary,
-        "messages_before": before
+        "messages_before": before,
+        "messages_after": after
     }))
+}
+
+// ---------- 上下文自动压缩 ----------
+
+use std::sync::atomic::AtomicBool;
+static COMPACTING: AtomicBool = AtomicBool::new(false);
+
+/// 压缩配置（store 键：ai.autoCompact / ai.autoCompactChars / ai.compactProvider）
+pub fn compact_config_get(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    let auto: bool = crate::store::get_json(&ctx.db.lock().unwrap(), "ai.autoCompact").unwrap_or(false);
+    let chars: u64 = crate::store::get_json(&ctx.db.lock().unwrap(), "ai.autoCompactChars").unwrap_or(24000);
+    let provider: String = crate::store::get_json(&ctx.db.lock().unwrap(), "ai.compactProvider").unwrap_or_default();
+    Ok(json!({ "auto": auto, "chars": chars.clamp(6000, 200000), "provider": provider }))
+}
+
+pub fn compact_config_set(
+    ctx: &Arc<Ctx>,
+    auto: bool,
+    chars: Option<u64>,
+    provider: Option<String>,
+) -> Result<serde_json::Value, String> {
+    {
+        let db = ctx.db.lock().unwrap();
+        crate::store::put_json(&db, "ai.autoCompact", &auto);
+        if let Some(c) = chars {
+            crate::store::put_json(&db, "ai.autoCompactChars", &c.clamp(6000, 200000));
+        }
+        if let Some(p) = provider {
+            crate::store::put_json(&db, "ai.compactProvider", &p);
+        }
+    }
+    compact_config_get(ctx)
+}
+
+// ---------- 提示词模板 ----------
+
+/// 内置模板：首次使用（尚未保存过）时的默认清单，覆盖高频指令场景
+fn builtin_prompt_templates() -> Vec<serde_json::Value> {
+    vec![
+        json!({ "id": "translate", "title": "翻译成中文", "text": "请把下面的内容翻译成通顺的中文，保留专业术语，只输出译文：\n\n" }),
+        json!({ "id": "polish", "title": "润色改写", "text": "请润色下面的文字，使其更通顺专业，保持原意不变：\n\n" }),
+        json!({ "id": "summary", "title": "总结要点", "text": "请把下面的内容总结成要点清单，按重要程度排序：\n\n" }),
+        json!({ "id": "explain", "title": "解释代码", "text": "请逐段解释下面代码的作用，指出潜在问题与改进建议：\n\n" }),
+        json!({ "id": "weekly", "title": "写周报", "text": "请根据下面的工作记录，整理成一份结构清晰的周报（本周完成 / 进行中 / 下周计划）：\n\n" }),
+    ]
+}
+
+/// 读取提示词模板列表（[{id,title,text}]）；从未保存过时返回内置默认
+pub fn prompt_templates_get(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    let saved: Option<Vec<serde_json::Value>> =
+        crate::store::get_json(&ctx.db.lock().unwrap(), "ai.promptTemplates");
+    let templates = saved.unwrap_or_else(builtin_prompt_templates);
+    Ok(json!({ "templates": templates }))
+}
+
+/// 保存提示词模板列表（整体替换）；空数组 = 恢复内置默认
+pub fn prompt_templates_set(ctx: &Arc<Ctx>, templates: Vec<serde_json::Value>) -> Result<serde_json::Value, String> {
+    // 归一化：id 缺省用序号补，title/text 转字符串并裁掉空白
+    let norm: Vec<serde_json::Value> = templates
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, mut v)| {
+            let obj = v.as_object_mut()?;
+            let title = obj.get("title").and_then(|x| x.as_str()).unwrap_or_default().trim().to_string();
+            let text = obj.get("text").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+            if title.is_empty() && text.trim().is_empty() {
+                return None; // 空模板直接丢弃
+            }
+            Some(json!({
+                "id": obj.get("id").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("tpl-{}", i + 1)),
+                "title": if title.is_empty() { format!("模板 {}", i + 1) } else { title },
+                "text": text,
+            }))
+        })
+        .collect();
+    if norm.len() > 100 {
+        return Err("模板数量过多（上限 100）".into());
+    }
+    let empty = norm.is_empty();
+    {
+        let db = ctx.db.lock().unwrap();
+        if empty {
+            // 空清单视为恢复默认：删除键，get 回退内置
+            let _ = crate::store::del(&db, "ai.promptTemplates");
+        } else {
+            crate::store::put_json(&db, "ai.promptTemplates", &norm);
+        }
+    }
+    if empty {
+        prompt_templates_get(ctx)
+    } else {
+        Ok(json!({ "ok": true, "templates": norm }))
+    }
+}
+
+/// 聊天入口的自动压缩检查：会话字符总量超阈值 → 先把旧历史压成摘要再继续。
+/// 失败静默（audit 记录），绝不阻塞对话；进行中/未开启直接跳过。
+pub async fn maybe_auto_compact(ctx: &Arc<Ctx>, session_id: &str) {
+    let (on, chars, provider): (bool, u64, String) = {
+        let db = ctx.db.lock().unwrap();
+        (
+            crate::store::get_json(&db, "ai.autoCompact").unwrap_or(false),
+            crate::store::get_json(&db, "ai.autoCompactChars").unwrap_or(24000),
+            crate::store::get_json(&db, "ai.compactProvider").unwrap_or_default(),
+        )
+    };
+    if !on || COMPACTING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let res: Result<Option<serde_json::Value>, String> = async {
+        let total: usize = {
+            let store = ctx.sessions.lock().unwrap();
+            let sess = store
+                .sessions
+                .iter()
+                .find(|s| s.id == session_id)
+                .ok_or("会话不存在")?;
+            sess.messages.iter().map(|m| m.content.chars().count()).sum::<usize>()
+        };
+        if total < chars.clamp(6000, 200000) as usize {
+            return Ok(None);
+        }
+        let (before, after) = compress_core(ctx, session_id, Some(provider), 4).await?;
+        Ok(Some(json!({ "session_id": session_id, "messages_before": before, "messages_after": after })))
+    }
+    .await;
+    COMPACTING.store(false, Ordering::SeqCst);
+    match res {
+        Ok(Some(info)) => ctx.emit("auto-compact", info),
+        Ok(None) => {}
+        Err(e) => crate::audit::record(
+            ctx, "local-app", "session.auto-compact-failed", session_id, json!({ "error": e }), false,
+        ),
+    }
 }
 
 // ---------- 会话（多对话分组） ----------
@@ -2275,6 +2445,7 @@ pub async fn chat(
     message: String,
     images: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
+    maybe_auto_compact(ctx, &session_id).await; // 超阈值先压历史（失败不阻塞）
     let messages = crate::agent::chat_turn(ctx, &session_id, &message, images.unwrap_or_default()).await?;
     let title = ctx
         .sessions
@@ -2304,9 +2475,65 @@ pub async fn chat_stream(
     event_name: String,
     images: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
+    maybe_auto_compact(ctx, &session_id).await; // 超阈值先压历史（失败不阻塞）
     let ev = if event_name.trim().is_empty() { "chat-stream".to_string() } else { event_name };
     let messages =
         crate::engine::chat_stream_auto(ctx, &session_id, &message, &ev, images.unwrap_or_default()).await?;
+    let title = ctx
+        .sessions
+        .lock()
+        .unwrap()
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .map(|s| s.title.clone())
+        .unwrap_or_default();
+    let reply = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "assistant")
+        .map(|m| crate::registry::safe_trunc(m.content.trim(), 80))
+        .unwrap_or_default();
+    ctx.emit("notify-done", json!({ "session_id": session_id, "title": title, "reply": reply }));
+    Ok(json!({ "messages": messages }))
+}
+
+/// 重新生成 / 编辑重发：从尾移除 assistant 消息，可选改写最后一条 user 消息内容，
+/// 然后只跑模型回合（不新写 user 消息），流式事件与 chat_stream 同款，返回最终消息列表。
+pub async fn regenerate_last(
+    ctx: &Arc<Ctx>,
+    session_id: String,
+    event_name: String,
+    edit_text: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // 1) 消息手术：删尾 assistant，定位（必要时改写）最后一条 user
+    {
+        let mut store = ctx.sessions.lock().unwrap();
+        let sess = store.get_mut(&session_id).ok_or("会话不存在")?;
+        if !sess.messages.iter().any(|m| m.role == "user") {
+            return Err("没有可重发的消息".into());
+        }
+        // 从尾移除连续的 assistant 消息（含工具卡片消息、被打断的半截回复）
+        while sess.messages.last().map(|m| m.role == "assistant").unwrap_or(false) {
+            sess.messages.pop();
+        }
+        let uidx = sess
+            .messages
+            .iter()
+            .rposition(|m| m.role == "user")
+            .ok_or("没有可重发的消息")?;
+        if let Some(t) = edit_text.as_deref() {
+            if !t.trim().is_empty() {
+                sess.messages[uidx].content = t.trim().to_string();
+            }
+        }
+        sess.touch();
+    }
+    crate::session::persist(ctx);
+
+    // 2) 只跑回合（流式事件同 chat_stream）
+    let ev = if event_name.trim().is_empty() { "chat-stream".to_string() } else { event_name };
+    let messages = crate::agent::respond_only_stream(ctx, &session_id, &ev).await?;
     let title = ctx
         .sessions
         .lock()
@@ -2374,4 +2601,83 @@ pub async fn set_tool_approval(ctx: &Arc<Ctx>, mode: String) -> Result<serde_jso
 pub async fn get_tool_approval(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
     let mode = ctx.config.lock().unwrap().tool_approval.clone();
     Ok(json!({ "mode": mode }))
+}
+
+// ---------- 语音输入（多模型选一，本地离线识别，实现在 voice.rs） ----------
+
+/// 语音输入状态：当前模型 / 全变体清单 / 就绪与进度 / worker 存活 / 最近错误
+pub fn voice_status(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::voice::status_impl(ctx)
+}
+
+/// 选择识别模型（写配置 + 热切换 worker；未下载时前端引导先 prepare）
+pub fn voice_select(ctx: &Arc<Ctx>, variant: String) -> Result<serde_json::Value, String> {
+    crate::voice::select_impl(ctx, variant)
+}
+
+/// 下载离线识别模型（后台任务，进度走 voice-progress 事件；幂等）
+pub async fn voice_prepare(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::voice::prepare_impl(ctx).await
+}
+
+/// 唤醒开关/灵敏度/自定义词表（写配置 + 重建 worker 使 kws 配置生效）
+pub async fn voice_kws_set(
+    ctx: &Arc<Ctx>,
+    enabled: bool,
+    score: Option<f64>,
+    keywords: Option<Vec<crate::voice::KwsWord>>,
+) -> Result<serde_json::Value, String> {
+    crate::voice::kws_set_impl(ctx, enabled, score, keywords).await
+}
+
+/// 下载唤醒模型（后台任务，进度走 voice-progress 事件；幂等）
+pub async fn voice_kws_prepare(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
+    crate::voice::kws_prepare_impl(ctx).await
+}
+
+/// WAV（base64）转写：确保 worker 在跑 → POST 转写，失败自动重启重试一次
+pub async fn voice_transcribe(
+    ctx: &Arc<Ctx>,
+    wav_base64: String,
+    language: Option<String>,
+) -> Result<serde_json::Value, String> {
+    crate::voice::transcribe_impl(ctx, wav_base64, language).await
+}
+
+// ---------- 语音合成（本地 sherpa CLI + 在线四家，实现在 tts.rs） ----------
+
+/// 语音合成状态：逐引擎就绪/体积/缺失文件 + key 是否配置 + 下载进度 + 最近错误。
+/// patch 为可选的设置补丁（引擎/音色/参数/key 的保存入口，免额外命令）
+pub fn tts_status(
+    ctx: &Arc<Ctx>,
+    patch: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    crate::tts::status_impl(ctx, patch)
+}
+
+/// 准备引擎：本地引擎后台下载模型（进度走 tts-progress 事件，幂等）；
+/// 在线引擎立即返回就绪。engine 可为字符串或设置补丁对象
+pub async fn tts_prepare(
+    ctx: &Arc<Ctx>,
+    engine: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    crate::tts::prepare_impl(ctx, engine).await
+}
+
+/// 合成语音：本地 = sherpa CLI 子进程；在线 = tts-worker HTTP；
+/// 返回 {audioBase64, sampleRate, format}
+pub async fn tts_speak(
+    ctx: &Arc<Ctx>,
+    text: String,
+    opts: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    crate::tts::speak_impl(ctx, text, opts).await
+}
+
+/// 在线引擎音色列表（目前仅 EdgeTTS 动态拉取，按语言分组）
+pub async fn tts_voices(
+    ctx: &Arc<Ctx>,
+    engine: String,
+) -> Result<serde_json::Value, String> {
+    crate::tts::voices_impl(ctx, engine).await
 }

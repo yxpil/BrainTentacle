@@ -1990,62 +1990,55 @@ pub fn workwith_logs(id: String, tail: Option<u64>) -> Result<serde_json::Value,
 }
 
 /// 手动压缩会话：用 AI 把全部历史总结为一条摘要（system 消息），释放上下文空间。
-/// 摘要写入会话后返回新消息列表；压缩不影响会话本身，可继续对话。
+/// provider_id 可指定压缩用模型（如便宜的小模型），空 = 当前激活模型。
 #[tauri::command]
 pub async fn compress_session(
     state: State<'_, Arc<Ctx>>,
     session_id: String,
+    provider_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let ctx = ctx(state);
-    let target = if session_id.is_empty() {
-        ctx.sessions.lock().unwrap().active.clone()
-    } else {
-        session_id
-    };
+    bit_core::commands_api::compress_session(&ctx(state), session_id, provider_id).await
+}
 
-    // 取出历史（在锁外进行 AI 调用，避免阻塞其他会话）
-    let history: Vec<crate::ai::ChatMessage> = {
-        let store = ctx.sessions.lock().unwrap();
-        let sess = store
-            .sessions
-            .iter()
-            .find(|s| s.id == target)
-            .ok_or("会话不存在")?;
-        sess.messages.iter().filter(|m| m.role != "system").cloned().collect()
-    };
-    if history.len() < 4 {
-        return Err("对话内容太少，无需压缩".into());
-    }
+/// 自动压缩配置（开关 / 阈值字符数 / 压缩用模型 id，空 = 当前模型）
+#[tauri::command]
+pub fn compact_config_get(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::compact_config_get(&ctx(state))
+}
 
-    let mut convo = vec![crate::ai::ChatMessage::system(
-        "你是对话压缩助手。请把下面这段 AI 对话历史浓缩成一份结构化中文摘要，保留：用户的需求与偏好、已达成的结论、关键事实与数据、未完成的待办。直接输出摘要正文，不要寒暄，控制在 800 字以内。",
-    )];
-    for m in &history {
-        let who = if m.role == "user" { "用户" } else { "AI" };
-        convo.push(crate::ai::ChatMessage::user(format!("【{who}】{}", m.content)));
-    }
-    let summary = crate::ai::chat(&ctx, &convo).await?;
+#[tauri::command]
+pub fn compact_config_set(
+    state: State<'_, Arc<Ctx>>,
+    auto: bool,
+    chars: Option<u64>,
+    provider: Option<String>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::compact_config_set(&ctx(state), auto, chars, provider)
+}
 
-    // 用摘要替换全部历史（摘要以 system 消息存放，前端气泡不显示）
-    let before = {
-        let mut store = ctx.sessions.lock().unwrap();
-        let sess = store.get_mut(&target).ok_or("会话不存在")?;
-        let n = sess.messages.len();
-        sess.messages = vec![crate::ai::ChatMessage::system(format!(
-            "以下是对此前对话的压缩摘要，请结合它继续对话：\n\n{summary}"
-        ))];
-        sess.touch();
-        n
-    };
-    crate::session::persist(&ctx);
-    crate::audit::record(&ctx, "local-app", "session.compress", &target, json!({ "messages_before": before }), true);
-    Ok(json!({
-        "messages": ctx.sessions.lock().unwrap()
-            .sessions.iter().find(|s| s.id == target)
-            .map(|s| s.messages.clone()).unwrap_or_default(),
-        "summary": summary,
-        "messages_before": before
-    }))
+/// 重新生成 / 编辑重发：删尾 assistant 消息（可选改写最后一条 user），只跑模型回合
+#[tauri::command]
+pub async fn regenerate_last(
+    state: State<'_, Arc<Ctx>>,
+    session_id: String,
+    event_name: String,
+    edit_text: Option<String>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::regenerate_last(&ctx(state), session_id, event_name, edit_text).await
+}
+
+/// 提示词模板：读取（未保存过时返回内置默认）/ 整体保存（空数组 = 恢复默认）
+#[tauri::command]
+pub fn prompt_templates_get(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::prompt_templates_get(&ctx(state))
+}
+
+#[tauri::command]
+pub fn prompt_templates_set(
+    state: State<'_, Arc<Ctx>>,
+    templates: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::prompt_templates_set(&ctx(state), templates)
 }
 
 // ---------- 会话（多对话分组） ----------
@@ -2921,6 +2914,122 @@ pub async fn uninstall_cli(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Val
     tokio::task::spawn_blocking(move || bit_core::api::uninstall_cli(&c))
         .await
         .map_err(|e| format!("卸载任务失败: {e}"))?
+}
+
+/// DeepSeek Harness（dsh）：扫描 dsh 技能根导入 SKILL.md 为 BIT 技能（同名跳过）
+#[tauri::command]
+pub fn dsh_import_skills(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::api::dsh_import_skills(&ctx(state))
+}
+
+/// DeepSeek Harness（dsh）状态：已装插件 + 启停情况 + 桥注册情况 + 技能根路径
+#[tauri::command]
+pub fn dsh_status(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::api::dsh_status(&ctx(state))
+}
+
+/// DeepSeek Harness（dsh）插件启停：写 toolhomes/dsh/disabled.json，返回新状态
+#[tauri::command]
+pub fn dsh_toggle_plugin(
+    state: State<'_, Arc<Ctx>>,
+    name: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    bit_core::api::dsh_toggle_plugin(&ctx(state), name, enabled)
+}
+
+/// DeepSeek Harness（dsh）首次接入：建 dsh 目录 + 定位桥脚本并注册为 stdio MCP server
+#[tauri::command]
+pub async fn dsh_setup_bridge(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::api::dsh_setup_bridge(&ctx(state)).await
+}
+
+/// 语音输入状态：当前模型 / 全变体清单 / 就绪与进度 / 识别进程存活 / 最近错误
+#[tauri::command]
+pub fn voice_status(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_status(&ctx(state))
+}
+
+/// 选择识别模型（写配置 + 热切换识别进程）
+#[tauri::command]
+pub fn voice_select(
+    state: State<'_, Arc<Ctx>>,
+    variant: String,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_select(&ctx(state), variant)
+}
+
+/// 唤醒开关/灵敏度/自定义词表（写配置 + 重建识别进程使 kws 配置生效）
+#[tauri::command]
+pub async fn voice_kws_set(
+    state: State<'_, Arc<Ctx>>,
+    enabled: bool,
+    score: Option<f64>,
+    keywords: Option<Vec<bit_core::voice::KwsWord>>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_kws_set(&ctx(state), enabled, score, keywords).await
+}
+
+/// 下载唤醒模型（后台任务，进度走 voice-progress 事件；幂等）
+#[tauri::command]
+pub async fn voice_kws_prepare(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_kws_prepare(&ctx(state)).await
+}
+
+/// 下载离线识别模型（后台任务，进度走 voice-progress 事件；重复调用幂等）
+#[tauri::command]
+pub async fn voice_prepare(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_prepare(&ctx(state)).await
+}
+
+/// WAV（base64）转写：确保识别进程在跑 → 转写，失败自动重启重试一次
+#[tauri::command]
+pub async fn voice_transcribe(
+    state: State<'_, Arc<Ctx>>,
+    wav_base64: String,
+    language: Option<String>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_transcribe(&ctx(state), wav_base64, language).await
+}
+
+/// 语音合成状态：逐引擎就绪/体积 + key 是否配置 + 下载进度 + 最近错误；
+/// patch 为可选设置补丁（保存引擎/音色/参数/key）
+#[tauri::command]
+pub fn tts_status(
+    state: State<'_, Arc<Ctx>>,
+    patch: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::tts_status(&ctx(state), patch)
+}
+
+/// 准备语音引擎：本地引擎后台下载模型（进度走 tts-progress 事件；幂等），
+/// 在线引擎直接返回就绪；engine 可为字符串或设置补丁对象
+#[tauri::command]
+pub async fn tts_prepare(
+    state: State<'_, Arc<Ctx>>,
+    engine: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::tts_prepare(&ctx(state), engine).await
+}
+
+/// 语音合成：本地引擎走 sherpa CLI，在线引擎走 tts-worker；
+/// 返回 {audioBase64, sampleRate, format}
+#[tauri::command]
+pub async fn tts_speak(
+    state: State<'_, Arc<Ctx>>,
+    text: String,
+    opts: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::tts_speak(&ctx(state), text, opts).await
+}
+
+/// 在线引擎音色列表（目前仅 EdgeTTS 动态拉取，按语言分组）
+#[tauri::command]
+pub async fn tts_voices(
+    state: State<'_, Arc<Ctx>>,
+    engine: String,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::tts_voices(&ctx(state), engine).await
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

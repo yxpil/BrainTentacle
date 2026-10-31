@@ -19,6 +19,9 @@ try {
   window.prompt = (msg) => { console.warn('[BIT] prompt 已禁用:', msg); return null; };
 } catch {}
 
+// ── Electron 环境标记：前端据此启用 Electron 专属能力（如 macOS 剪刀截图按钮）──
+window.__BIT_ELECTRON__ = true;
+
 // ── 回调注册表：transformCallback 返回 id，事件到达时按 id 取回调用 ──
 const callbacks = new Map(); // handlerId -> { fn }
 let seq = 0;

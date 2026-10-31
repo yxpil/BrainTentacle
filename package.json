@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "electron": "electron electron/main.cjs",
+    "postinstall": "npm --prefix dsh-bridge install --no-audit --no-fund && npm --prefix voice-bridge install --no-audit --no-fund",
     "dist:stage": "node scripts/stage-pack.cjs",
     "dist": "npm run build && npm run dist:stage && electron-builder --win nsis"
   },

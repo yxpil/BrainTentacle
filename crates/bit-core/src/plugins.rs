@@ -581,12 +581,13 @@ fn save_job_state(ctx: &Arc<crate::state::Ctx>, st: &JobState) {
 }
 
 /// 解析 "every Ns/m/h" 与 "daily HH:MM"。
-enum Sched {
+/// pub：待办计划（goal::schedule_task_set / schedule_todos_loop）复用同一文法与到点判定。
+pub enum Sched {
     Every(std::time::Duration),
     Daily(u32, u32),
 }
 
-fn parse_schedule(s: &str) -> Option<Sched> {
+pub fn parse_schedule(s: &str) -> Option<Sched> {
     let s = s.trim().to_lowercase();
     if let Some(rest) = s.strip_prefix("every ") {
         let rest = rest.trim();
@@ -616,7 +617,7 @@ fn parse_schedule(s: &str) -> Option<Sched> {
     None
 }
 
-fn is_due(sched: &Sched, last: Option<&String>) -> bool {
+pub fn is_due(sched: &Sched, last: Option<&String>) -> bool {
     match sched {
         Sched::Every(d) => match last.and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()) {
             Some(t) => {

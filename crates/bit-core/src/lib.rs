@@ -18,6 +18,8 @@ pub mod crash;
 pub mod cli;
 // TUI 用的控制台附加/代码页还原，提升到 crate 根（tui/full.rs、tui/plain.rs 调 crate::restore_console_cp）
 pub use console_codec::{attach_console, restore_console_cp};
+pub mod download;
+pub mod dsh;
 pub mod delegation;
 // 本机操控三件套：依赖 enigo（Linux 需要 libxdo）。musl / exotic 架构 / 无 GUI 目标
 // 用 --no-default-features 编译时替换为 stub，保证链接通过、工具返回明确错误
@@ -82,7 +84,9 @@ pub mod syntax;
 pub mod task;
 pub mod toolenv;
 pub mod trace;
+pub mod tts;
 pub mod tui;
 pub mod update;
+pub mod voice;
 pub mod worker;
 pub mod workwith;

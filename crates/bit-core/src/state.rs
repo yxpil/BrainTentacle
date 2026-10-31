@@ -309,6 +309,11 @@ impl Ctx {
         // 移除历史遗留的内置项，保留用户 / AI 自建的工具，再把最新内置放到最前。
         let tools = {
             let builtin = crate::registry::builtin_tools();
+            // 先记下磁盘旧清单里各工具的 enabled（按 name 对齐，参照 refresh_runtimes 的
+            // prev_enabled 模式）：重建内置工具后沿用用户开关——新装的内置工具（磁盘无记录）
+            // 用代码默认值（schedule_task 默认关，其余内置默认开），老内置的用户开关重启后保持。
+            let prev_enabled: std::collections::HashMap<String, bool> =
+                tools.iter().map(|t| (t.name.clone(), t.enabled)).collect();
             let builtin_names: std::collections::HashSet<String> =
                 builtin.iter().map(|t| t.name.clone()).collect();
             let mut custom: Vec<ToolDef> = tools
@@ -319,6 +324,11 @@ impl Ctx {
                 })
                 .collect();
             let mut merged = builtin;
+            for t in merged.iter_mut() {
+                if let Some(&en) = prev_enabled.get(&t.name) {
+                    t.enabled = en;
+                }
+            }
             merged.append(&mut custom);
             crate::store::put_json(&db, "tools", &merged);
             merged

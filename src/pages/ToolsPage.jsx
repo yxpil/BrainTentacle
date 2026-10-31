@@ -173,6 +173,12 @@ export default function ToolsPage({ onStats }) {
   const [pluginBusy, setPluginBusy] = useState(false);
   const [pluginErrors, setPluginErrors] = useState([]); // 清单校验/安全校验失败的插件错误
 
+  // DeepSeek Harness (dsh) 插件桥：状态（插件列表 + 桥注册）/ 操作互斥 / 结果与错误
+  const [dsh, setDsh] = useState(null); // dshStatus() 结果，进页面自动拉取
+  const [dshBusy, setDshBusy] = useState(false);
+  const [dshMsg, setDshMsg] = useState(""); // 操作结果提示（如导入统计），下次操作时清掉
+  const [dshErr, setDshErr] = useState(""); // 失败原因（页面既有红色错误样式）
+
   const applyPluginList = (p) => {
     setPlugins(p?.plugins || []);
     setPluginDir(p?.dir || "");
@@ -190,6 +196,8 @@ export default function ToolsPage({ onStats }) {
   };
   useEffect(() => {
     reload();
+    // dsh 插件桥：进页面自动拉一次状态（桥注册情况 + 插件列表）
+    loadDsh();
     // 启动时解释器在后台探测，完成后刷新列表
     const un = listen("runtimes-updated", () => reload());
     // 热加载：AI 注册/更新/删除工具或 MCP 接入后即时刷新清单（免重启）
@@ -396,6 +404,62 @@ export default function ToolsPage({ onStats }) {
       setMcpMsg(String(e));
     } finally {
       setMcpBusy(false);
+    }
+  };
+
+  // ── dsh：状态拉取 / 启用桥接 / 插件开关 / 技能导入 ──
+  // 拉取 dsh 状态：插件列表 + 桥注册情况（进页面自动调用，操作成功后重刷）
+  const loadDsh = async () => {
+    try {
+      setDsh(await api.dshStatus());
+      setDshErr("");
+    } catch (e) {
+      setDshErr(String(e));
+    }
+  };
+
+  // 启用桥接 = 确保 dsh 目录存在 + 注册 MCP 桥；成功后重刷状态，失败把报错直接展示
+  const enableDshBridge = async () => {
+    setDshBusy(true);
+    setDshErr("");
+    setDshMsg("");
+    try {
+      await api.dshSetupBridge();
+      await loadDsh();
+    } catch (e) {
+      setDshErr(String(e));
+    } finally {
+      setDshBusy(false);
+    }
+  };
+
+  // 单个 dsh 插件启用 / 停用：切换后重刷状态
+  const toggleDshPlugin = async (p) => {
+    setDshBusy(true);
+    setDshErr("");
+    setDshMsg("");
+    try {
+      await api.dshTogglePlugin(p.name, !(p.enabled ?? true));
+      await loadDsh();
+    } catch (e) {
+      setDshErr(String(e));
+    } finally {
+      setDshBusy(false);
+    }
+  };
+
+  // 一键导入 dsh 技能：完成后展示"已导入 X，跳过 Y"，保持到下次操作
+  const importDshSkills = async () => {
+    setDshBusy(true);
+    setDshErr("");
+    setDshMsg("");
+    try {
+      const r = await api.dshImportSkills();
+      setDshMsg(t("tools.dshImported", { imported: r?.imported ?? 0, skipped: r?.skipped ?? 0 }));
+    } catch (e) {
+      setDshErr(String(e));
+    } finally {
+      setDshBusy(false);
     }
   };
 
@@ -730,6 +794,80 @@ export default function ToolsPage({ onStats }) {
           {mcpServers.length === 0 && (
             <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("tools.mcpEmpty")}</p>
           )}
+        </div>
+      </section>
+
+      {/* ── DeepSeek Harness (dsh) 插件：桥接后插件工具经 MCP 接入，技能可一键导入 ── */}
+      <section className="card">
+        <div className="mb-3 flex items-center gap-2">
+          <IconServer size={18} />
+          <div>
+            <h2 className="text-sm font-semibold">{t("tools.dshTitle")}</h2>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              {t("tools.dshDesc")}
+            </p>
+          </div>
+        </div>
+
+        {/* 状态行：桥注册情况（进页面已自动拉取）+ 未启用时给启用按钮 */}
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          {dshBusy && <span className="text-xs text-neutral-500">…</span>}
+          {dsh?.bridge?.registered && (
+            <span className="pill-outline text-emerald-600">{t("tools.dshBridgeOn")}</span>
+          )}
+          {dsh && !dsh.bridge?.registered && (
+            <>
+              <span className="pill-outline text-neutral-500">{t("tools.dshBridgeOff")}</span>
+              <button onClick={enableDshBridge} className="pill pill-hover" disabled={dshBusy}>
+                {t("tools.dshEnable")}
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* 结果提示（导入统计）与失败原因（沿用本页红色错误样式） */}
+        {dshMsg && <p className="mb-2 px-2 text-xs text-neutral-500 dark:text-neutral-400">{dshMsg}</p>}
+        {dshErr && <p className="mb-2 break-all px-2 text-xs text-red-600">{dshErr}</p>}
+
+        {/* 插件列表：name + 版本灰字 + 圆片开关（切换即 dsh_toggle_plugin 后重刷） */}
+        <div className="flex flex-col gap-2">
+          {(dsh?.plugins || []).map((p) => {
+            const on = p.enabled ?? true;
+            return (
+              <div key={p.name} className="flex items-center gap-3 rounded-2xl border border-neutral-200/70 px-4 py-2.5 dark:border-neutral-800/70">
+                <div className={`flex min-w-0 flex-1 items-center gap-3 transition-opacity ${on ? "" : "opacity-45"}`}>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-900">
+                    <IconTool size={16} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold">{p.name}</span>
+                      {/* 版本灰字，没版本就不占位 */}
+                      {p.version && <span className="text-xs text-neutral-400">{p.version}</span>}
+                    </div>
+                  </div>
+                </div>
+                <PillSwitch
+                  checked={on}
+                  onChange={() => toggleDshPlugin(p)}
+                  disabled={dshBusy}
+                  title={on ? t("tools.dshPluginOn") : t("tools.dshPluginOff")}
+                />
+              </div>
+            );
+          })}
+          {/* 空列表：等状态拉到后再提示，避免加载瞬间闪"空" */}
+          {dsh && (dsh.plugins || []).length === 0 && (
+            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("tools.dshEmpty")}</p>
+          )}
+        </div>
+
+        {/* 底部：一键导入 dsh 插件生态里的技能 */}
+        <div className="mt-3 flex justify-end">
+          <button onClick={importDshSkills} className="pill pill-outline pill-hover" disabled={dshBusy}>
+            <IconRefresh size={14} />
+            {t("tools.dshImportSkills")}
+          </button>
         </div>
       </section>
 

@@ -21,6 +21,8 @@ regex = "1"
 encoding_rs = "0.8"
 serde.workspace = true
 serde_json.workspace = true
+# 用户主目录定位：dsh 标准技能发现根 ~/.dsh（Windows 取 USERPROFILE 展开的家目录）
+dirs = "6"
 tokio.workspace = true
 axum = "0.8"
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }

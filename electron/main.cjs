@@ -6,7 +6,7 @@
 //!   3) invoke 路由：B 类宿主命令（对话框/自启/热键/提权/换装重启）JS 拦截，
 //!      其余透传 Rust dispatch（白名单查表）
 //!   4) bit-asset 协议替代 Tauri assetProtocol（convertFileSrc 的文件图片访问）
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu, nativeTheme, shell, clipboard, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -49,9 +49,11 @@ const isDev = !app.isPackaged;
 const ROOT = path.join(__dirname, '..');
 const VERSION = app.getVersion();
 // napi 原生模块：开发期在 crates/bit-napi/，打包后在 resources
-const NODE_PATH = isDev
-  ? path.join(ROOT, 'crates', 'bit-napi', 'bit_napi.node')
-  : path.join(process.resourcesPath, 'bit.node');
+// [boot-dbg] isPackaged 在本环境误判为 true（execPath 位于 Electron.app 内），改为按存在性探测
+const NODE_PATH = [
+  path.join(ROOT, 'crates', 'bit-napi', 'bit_napi.node'),
+  path.join(process.resourcesPath, 'bit.node'),
+].find((p) => fs.existsSync(p)) || path.join(ROOT, 'crates', 'bit-napi', 'bit_napi.node');
 // worker sidecar（bit-cli）：存在即传给 Rust（子代理/后台 shell 用）；缺省 None 由 core 自行解析
 const WORKER_EXE = isDev
   ? path.join(ROOT, 'src-tauri', 'target', 'debug', 'bit-cli.exe')
@@ -65,6 +67,10 @@ const ICON = isDev
 let bit = null; // bit.node 导出：hostStart / invoke / onUiEvent
 let win = null;
 let tray = null;
+// [boot-dbg] 临时启动诊断日志（定位启动断点用，定位后删除）
+console.log('[boot-dbg] 顶层模块加载完成, isPackaged=', app.isPackaged, 'defaultApp=', !!process.defaultApp, 'execPath=', process.execPath);
+process.on('uncaughtException', (e) => console.error('[boot-dbg] uncaught:', e && e.stack || e));
+process.on('unhandledRejection', (e) => console.error('[boot-dbg] unhandled-rejection:', e && e.stack || e));
 let statusWin = null; // 任务面板窗口（托盘打开的网页）
 let hoverWin = null;  // 托盘悬浮预览小窗（同一 tray-status.html 的 hover 紧凑模式）
 let hoverShowTimer = null; // hover 防抖：快速划过不弹
@@ -624,6 +630,51 @@ async function hostCommand(cmd, args) {
       const hotkey = String(args.hotkey || '');
       return await ipcInvokeSetHotkey(hotkey);
     }
+    case 'get_app_hotkeys': {
+      // 应用级扩展快捷键（截图提问 / 全局语音）：Electron userData JSON，空串=未启用
+      return { screenshot: appHotkeys.screenshot || '', voice: appHotkeys.voice || '' };
+    }
+    case 'set_app_hotkeys': {
+      if (args.screenshot !== null && args.screenshot !== undefined) appHotkeys.screenshot = String(args.screenshot || '').trim();
+      if (args.voice !== null && args.voice !== undefined) appHotkeys.voice = String(args.voice || '').trim();
+      saveAppHotkeys();
+      registerAppShortcuts();
+      return { screenshot: appHotkeys.screenshot || '', voice: appHotkeys.voice || '' };
+    }
+    case 'paste_text_to_foreground': {
+      // 全局语音转写结果落到原前台应用：激活目标 app → 写剪贴板 → 模拟 Cmd+V → 恢复剪贴板
+      if (process.platform !== 'darwin') throw new Error('全局语音粘贴目前仅支持 macOS');
+      const text = String(args.text ?? '');
+      if (!text) return { ok: false };
+      const { execFile } = require('child_process');
+      const run = (cmd, a) => new Promise((resolve, reject) =>
+        execFile(cmd, a, { timeout: 5000 }, (err) => (err ? reject(err) : resolve())));
+      try {
+        if (args.bundleId) {
+          await run('osascript', ['-e', `tell application id "${String(args.bundleId)}" to activate`]);
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        const oldText = clipboard.readText();
+        const oldImg = clipboard.readImage();
+        clipboard.writeText(text);
+        await run('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down']);
+        // 粘贴完成（目标 app 已读到剪贴板）后恢复原内容
+        setTimeout(() => {
+          try {
+            clipboard.writeText(oldText);
+            if (!oldImg.isEmpty()) clipboard.writeImage(oldImg);
+          } catch { /* 恢复失败不影响主流程 */ }
+        }, 800);
+        return { ok: true };
+      } catch {
+        throw new Error('需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能');
+      }
+    }
+    case 'screenshot_region': {
+      // 聊天工具栏剪刀按钮：与全局截图提问同一管线（screencapture 框选 → 剪贴板 → 挂附件）
+      doScreenshotQuestion();
+      return { ok: true };
+    }
     case 'set_elevation': {
       // 高权限模式：UAC 弹窗后以管理员身份重启（Windows）
       const enabled = !!args.enabled;
@@ -655,26 +706,103 @@ async function hostCommand(cmd, args) {
   }
 }
 
+// ── 应用级全局快捷键（统一注册表）：main=唤出主窗口（core 配置持久化），
+// screenshot=截图提问、voice=全局语音听写（userData JSON 持久化）。
+// 不能 unregisterAll：三个快捷键互相独立保存，只按需重注册 ──
+let appHotkeys = { main: '', screenshot: '', voice: '' };
+const appHotkeysPath = () => path.join(app.getPath('userData'), 'app-hotkeys.json');
+function loadAppHotkeys() {
+  try { appHotkeys = { ...appHotkeys, ...JSON.parse(fs.readFileSync(appHotkeysPath(), 'utf8')) }; } catch { /* 首次无文件 */ }
+}
+function saveAppHotkeys() {
+  try { fs.writeFileSync(appHotkeysPath(), JSON.stringify(appHotkeys)); } catch { /* 落盘失败不影响运行 */ }
+}
+function sendToMain(event, payload) {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send('bit:core-event', { event, payload });
+}
+// 截图提问：screencapture 交互框选 → 临时文件 → dataURL 推给对话页挂附件（v1 macOS；Linux/Windows TODO）
+// 走临时文件而非剪贴板：避开剪贴板读取时序/占用问题，Esc 未生成文件视为取消
+function doScreenshotQuestion() {
+  if (process.platform !== 'darwin') return; // TODO: gnome-screenshot / PowerShell 截图方案
+  const { execFile } = require('child_process');
+  const file = path.join(app.getPath('temp'), `bit-shot-${Date.now()}.png`);
+  // 屏幕录制权限预检：未决定时主动弹系统授权框；被拒时给出精确指引
+  // （screencapture 报 "could not create image from rect" 即权限缺失的典型症状）
+  const perm = systemPreferences.getMediaAccessStatus('screen');
+  const go = (granted) => {
+    if (!granted) {
+      const msg = '需要屏幕录制权限：系统设置 → 隐私与安全性 → 屏幕录制 → 勾选 Electron（BIT）后重启应用';
+      console.warn('[BIT][shot] 权限不足（' + perm + '）');
+      sendToMain('screenshot-capture-error', { message: msg });
+      return;
+    }
+    execFile('screencapture', ['-i', file], (err) => {
+      if (err) {
+        const permHint = /could not create image from rect/i.test(err.message)
+          ? '（多为屏幕录制权限未授予：系统设置 → 隐私与安全性 → 屏幕录制）'
+          : '';
+        console.warn('[BIT][shot] screencapture 失败:', err.message);
+        sendToMain('screenshot-capture-error', { message: '截图失败：' + err.message + permHint });
+        return;
+      }
+      try {
+        if (!fs.existsSync(file)) {
+          console.log('[BIT][shot] 未生成文件（用户 Esc 取消）');
+          return;
+        }
+        const buf = fs.readFileSync(file);
+        fs.unlinkSync(file);
+        if (!buf.length) return;
+        console.log(`[BIT][shot] 已捕获 ${buf.length} 字节 → 推送 screenshot-capture`);
+        showWindow();
+        sendToMain('screenshot-capture', { dataUrl: 'data:image/png;base64,' + buf.toString('base64') });
+      } catch (e) {
+        console.warn('[BIT][shot] 读取失败:', e.message);
+        sendToMain('screenshot-capture-error', { message: '截图读取失败：' + e.message });
+      }
+    });
+  };
+  if (perm === 'not-determined') {
+    systemPreferences.askForMediaAccess('screen').then(go).catch(() => go(false));
+  } else {
+    go(perm === 'granted' || perm === 'unknown');
+  }
+}
+// 全局语音：记住当前前台应用（转写完粘贴回去）→ 弹窗 → 通知对话页开录
+function doGlobalVoice() {
+  if (process.platform !== 'darwin') return;
+  const { execFile } = require('child_process');
+  execFile('osascript', ['-e', 'tell application "System Events" to get bundle identifier of first process whose frontmost is true'],
+    (err, stdout) => {
+      const bundleId = err ? '' : String(stdout || '').trim();
+      showWindow();
+      sendToMain('global-voice', { bundleId });
+    });
+}
+function registerAppShortcuts() {
+  if (!globalShortcut) return;
+  const reg = (accelerator, fn) => {
+    if (!accelerator || !accelerator.trim()) return;
+    try { globalShortcut.unregister(accelerator); } catch { /* 未注册过 */ }
+    try { globalShortcut.register(accelerator, fn); } catch (e) { console.warn('[BIT] 快捷键注册失败:', accelerator, e.message); }
+  };
+  reg(appHotkeys.main, () => {
+    // Tauri 版语义：唤出/隐藏切换——已可见且聚焦时隐藏，否则唤出
+    if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) {
+      win.hide();
+    } else {
+      showWindow();
+    }
+  });
+  reg(appHotkeys.screenshot, doScreenshotQuestion);
+  reg(appHotkeys.voice, doGlobalVoice);
+}
+
 // 热键注册（set_hotkey 的实现体）：core 配置 + globalShortcut 双写
 async function ipcInvokeSetHotkey(hotkey) {
-  if (globalShortcut) {
-    globalShortcut.unregisterAll();
-    if (hotkey && hotkey.trim()) {
-      // Tauri 格式（如 Ctrl+Shift+B）与 Electron 兼容，直接注册
-      try {
-        globalShortcut.register(hotkey, () => {
-          // Tauri 版语义：唤出/隐藏切换——已可见且聚焦时隐藏，否则唤出
-          if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) {
-            win.hide();
-          } else {
-            showWindow();
-          }
-        });
-      } catch (e) {
-        console.warn('[BIT] 热键注册失败:', e.message);
-      }
-    }
-  }
+  appHotkeys.main = hotkey || '';
+  registerAppShortcuts();
   // 配置落盘走 core（get_hotkey 是 A 类命令，读的就是这份配置）
   return await bit.invoke('set_hotkey', { hotkey });
 }
@@ -857,15 +985,25 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(async () => {
+  console.log('[boot-dbg] whenReady');
   setAppMenu();
   handleAssetProtocol();
+  // 语音输入：渲染进程 getUserMedia 必须放行 media（麦克风）权限，否则录音直接被拒；
+  // 复制按钮依赖剪贴板写入。其余权限一律拒绝（最小权限；window.open 外链走
+  // setWindowOpenHandler，不受此 handler 影响）
+  // session 实例必须在 app ready 后经 session.defaultSession 取（Electron 44：命名空间模块上无实例方法）
+  require('electron').session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'media' || permission === 'clipboard-sanitized-write' || permission === 'clipboard-read');
+  });
   try {
     bit = require(NODE_PATH);
   } catch (e) {
+    console.error('[boot-dbg] bit-napi require 失败:', e && e.stack || e);
     dialog.showErrorBox('触手怪', `原生模块加载失败：\n${e.message}\n\n请重新构建 bit-napi。`);
     app.exit(1);
     return;
   }
+  console.log('[boot-dbg] bit-napi 已加载, exports:', Object.keys(bit).join(','));
 
   // UI 事件回流：TSFN → 渲染层广播 + 托盘/通知钩子
   // ⚠ 必须在 hostStart 之前注册——hostStart 内部从 EMITTER OnceLock 取回调注入 Ctx，
@@ -876,6 +1014,7 @@ app.whenReady().then(async () => {
   // BIT_DATA_DIR 可隔离（E2E/冒烟不污染真实数据）。
   // app_args：guardian 复活时透传给 electron.exe（裸拉只会打开默认欢迎页）
   const workerExe = fs.existsSync(WORKER_EXE) ? WORKER_EXE : null;
+  console.log('[boot-dbg] hostStart 前');
   await bit.hostStart(
     process.env.BIT_DATA_DIR || null,
     VERSION,
@@ -883,6 +1022,7 @@ app.whenReady().then(async () => {
     process.execPath,
     JSON.stringify([__filename]),
   );
+  console.log('[boot-dbg] hostStart 完成');
 
   // 优雅退出：core quit_app → ElectronHostHooks::exit_app → 这里 app.quit()
   // （before-quit 里做 globalShortcut 清理；core 侧的硬退 exit(0) 仅兜底）
@@ -939,20 +1079,25 @@ app.whenReady().then(async () => {
   loadLang(true); // 界面语言（bit.db 统一标记；前端切换另有实时推送，此处兜底）
   loadTheme(true); // 界面主题（bit.db 统一标记；前端切换另有实时推送，此处首帧兜底）
   try {
+    loadAppHotkeys();
     const hk = await bit.invoke('get_hotkey', {});
-    await ipcInvokeSetHotkey(String(hk?.hotkey || ''));
+    appHotkeys.main = String(hk?.hotkey || '');
+    registerAppShortcuts();
   } catch (e) {
     console.warn('[BIT] 启动热键注册失败:', e.message);
   }
 
   // core 服务 bootstrap（守护进程/HTTP 服务/插件/autopilot/自动更新）
+  console.log('[boot-dbg] bootstrap_services 前');
   try {
     await bit.invoke('bootstrap_services', {});
   } catch (e) {
     console.error('[BIT] bootstrap_services 失败:', e.message || e);
   }
 
+  console.log('[boot-dbg] createWindow');
   createWindow();
+  console.log('[boot-dbg] createWindow 已调用');
 
   app.on('activate', () => {
     // 与仓库修复一致：隐藏的窗口也要重新显示（此前 !win 才重建，唤不回来）

@@ -17,6 +17,9 @@ directories:
 files:
   - dist/**
   - electron/**
+  - dsh-bridge/**
+  - voice-bridge/**
+  - voice-bridge/tts-bin/**
   - package.json
   - "!**/*.map"
   - "!node_modules/**"
@@ -24,6 +27,16 @@ extraResources:
   - from: packaging/native
     to: .
 asar: true
+# dsh-bridge / voice-bridge 保持磁盘真实文件（不进 asar）：作为 stdio MCP server 与
+# 语音识别子进程时由 Electron 二进制以 ELECTRON_RUN_AS_NODE=1 直接执行脚本路径，
+# 对应 Rust find_bridge_script / find_worker_script 的
+# resources/app.asar.unpacked/{dsh-bridge/dsh-mcp.mjs, voice-bridge/voice-worker.mjs}。
+# tts-bin（sherpa-onnx-offline-tts + lib/）是真实可执行文件 + dylib，也必须落磁盘，
+# 对应 Rust tts::tts_cli 的 resources/app.asar.unpacked/voice-bridge/tts-bin/bin 探测。
+asarUnpack:
+  - dsh-bridge/**
+  - voice-bridge/**
+  - voice-bridge/tts-bin/**
 compression: maximum
 # 打包收尾：删除 Electron 自带 default_app（防止 BIT.exe 回退成裸 Chromium 浏览器）
 afterPack: scripts/after-pack.cjs

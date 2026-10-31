@@ -54,6 +54,7 @@ function applyLook(look) {
     root.style.removeProperty("--panel-input-alpha");
     root.style.removeProperty("--panel-chat-image");
     root.style.removeProperty("--panel-chat-alpha");
+    root.style.removeProperty("--look-bg-scrim");
     root.classList.remove("no-border", "no-shadow", "has-bg-image", "has-transparency", "has-input-bg", "has-chat-bg");
     return;
   }
@@ -71,9 +72,12 @@ function applyLook(look) {
   root.style.setProperty("--look-card-alpha", (Math.min(100, Math.max(10, cardOp)) / 100).toFixed(2));
   if (look.bgImage) {
     root.style.setProperty("--app-bg-image", `url("${look.bgImage}")`);
+    // 遮罩浓度（0-100 → 透明黑纱 alpha；默认 0 = 原图原色，无色差）
+    root.style.setProperty("--look-bg-scrim", ((look.bgScrim ?? 0) / 100).toFixed(2));
     root.classList.add("has-bg-image");
   } else {
     root.style.removeProperty("--app-bg-image");
+    root.style.removeProperty("--look-bg-scrim");
     root.classList.remove("has-bg-image");
   }
 

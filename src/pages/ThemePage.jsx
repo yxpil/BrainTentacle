@@ -16,9 +16,10 @@ import { IconImage, IconTrash, IconCheck } from "../components/Icons.jsx";
  *  - 一键恢复默认
  */
 export default function ThemePage() {
-  const { look, setLook, accent, setAccent } = useTheme();
+  const { look, setLook, accent, setAccent, setMode } = useTheme();
   const { t } = useLang();
   const fileRef = useRef(null);
+  const importRef = useRef(null);
 
   const ACCENT_PRESETS = [
     { color: null, label: "default" },
@@ -53,6 +54,57 @@ export default function ThemePage() {
     reader.onload = async () => patch({ bgImage: await compressBgImage(reader.result) });
     reader.readAsDataURL(f);
     e.target.value = "";
+  };
+
+  // ── 主题导入 / 导出：accent + 深浅模式 + look 全量打包 JSON；图片 data URL 直接内嵌 ──
+
+  const exportTheme = () => {
+    const data = {
+      app: "BIT",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      theme: localStorage.getItem("bit.theme.v1") || "light",
+      accent,
+      look,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `BIT主题-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  };
+
+  const onImportFile = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    if (f.size > 5 * 1024 * 1024) {
+      confirmDialog({ title: t("theme.importTooLarge", "主题文件过大（≤5MB）"), alert: true });
+      return;
+    }
+    let obj;
+    try {
+      obj = JSON.parse(await f.text());
+    } catch {
+      confirmDialog({ title: t("theme.importBad", "主题文件解析失败"), alert: true });
+      return;
+    }
+    if (!obj || typeof obj.look !== "object" || obj.look === null) {
+      confirmDialog({ title: t("theme.importBad", "不是有效的主题文件"), alert: true });
+      return;
+    }
+    if (!(await confirmDialog({ title: t("theme.importConfirm", "导入将覆盖当前外观配置，继续？") }))) return;
+    // 缺省键回退默认；背景图（全局/输入框/聊天框）超 CSS 变量 2MB 上限时自动转码
+    const incoming = { ...DEFAULT_LOOK, ...obj.look, enabled: true };
+    for (const k of ["bgImage", "fieldBgImage", "chatBgImage"]) {
+      if (typeof incoming[k] === "string" && incoming[k].startsWith("data:")) {
+        incoming[k] = await compressBgImage(incoming[k]);
+      }
+    }
+    setLook(incoming);
+    if (typeof obj.accent === "string") setAccent(obj.accent);
+    if (obj.theme === "light" || obj.theme === "dark" || obj.theme === "auto") setMode(obj.theme);
   };
 
   const PRESET_COLORS = [
@@ -250,6 +302,32 @@ export default function ThemePage() {
             onChange={onPickFile}
             className="hidden"
           />
+          {/* 遮罩浓度：默认 0 = 原图原色无色差；图过亮压不住文字时再调 */}
+          {look.bgImage && (
+            <div className="mt-3">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                  {t("theme.bgScrim", "遮罩浓度")}
+                </span>
+                <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">
+                  {look.bgScrim ?? 0}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="60"
+                step="5"
+                value={look.bgScrim ?? 0}
+                aria-label={t("theme.bgScrim", "遮罩浓度")}
+                onChange={(e) => patch({ bgScrim: Number(e.target.value) })}
+                className="w-full accent-[var(--accent)]"
+              />
+              <div className="mt-1 text-[11px] text-neutral-400">
+                {t("theme.bgScrimHint", "0 = 保持原图色彩；背景图太亮影响文字可读时可适当加深")}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ==== 输入框 / 聊天框专属背景（各自独立：图片 + 透明度） ==== */}
@@ -390,6 +468,23 @@ export default function ThemePage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 主题导入 / 导出：打包 accent + 深浅模式 + 全部外观配置，跨设备复用 */}
+      <div className="flex items-center justify-end gap-2">
+        <input
+          ref={importRef}
+          type="file"
+          accept="application/json,.json"
+          onChange={onImportFile}
+          className="hidden"
+        />
+        <button onClick={() => importRef.current?.click()} className="pill pill-hover">
+          {t("theme.import", "导入主题")}
+        </button>
+        <button onClick={exportTheme} className="pill pill-hover">
+          {t("theme.export", "导出主题")}
+        </button>
       </div>
 
       {/* 恢复默认 */}

@@ -9,6 +9,7 @@ import {
   IconTrash,
   IconPlus,
   IconEdit,
+  IconRefresh,
   IconChat,
   IconFile,
   IconLink,
@@ -22,7 +23,12 @@ import {
   IconTarget,
   IconStar,
   IconStarSolid,
+  IconScissors,
   IconTerminal,
+  IconClock,
+  IconMic,
+  IconSpeaker,
+  IconSpeakerOff,
 } from "../components/Icons.jsx";
 import PillSwitch from "../components/PillSwitch.jsx";
 import ToolCallCard from "../components/ToolCallCard.jsx";
@@ -38,6 +44,133 @@ const TAG_COLORS = [
   "#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1",
   "#8b5cf6", "#d946ef", "#ec4899", "#78716c",
 ];
+
+// 待办计划时间展示：scheduled_at（YYYY-MM-DD HH:MM 本地时间）取 HH:MM 部分
+const todoHM = (s) => String(s).match(/\d{1,2}:\d{2}/)?.[0] || String(s);
+// 到点判定：本地时间已过 scheduled_at 且未完成 → 标红（完成项不再标红）
+const isTodoOverdue = (td) => {
+  if (!td.scheduled_at || td.status === "completed") return false;
+  const at = new Date(String(td.scheduled_at).replace(" ", "T"));
+  return !Number.isNaN(at.getTime()) && Date.now() >= at.getTime();
+};
+
+// ── 语音输入：Float32 PCM → 16kHz 单声道 PCM16 WAV（纯 JS 编码，不引第三方库）──
+const VOICE_RATE = 16000;
+
+// 线性插值重采样：AudioContext 不支持指定采样率时，用默认采样率采集后在此转 16kHz
+const resampleLinear = (data, from, to) => {
+  if (from === to || !data.length) return data;
+  const ratio = from / to;
+  const out = new Float32Array(Math.floor(data.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const pos = i * ratio;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(i0 + 1, data.length - 1);
+    const f = pos - i0;
+    out[i] = data[i0] * (1 - f) + data[i1] * f;
+  }
+  return out;
+};
+
+// 手写 WAV 头（RIFF/WAVE/fmt /data）+ 16k 单声道 PCM16 数据
+const encodeWav16k = (samples) => {
+  const n = samples.length;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const ascii = (off, s) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i));
+  };
+  ascii(0, "RIFF");
+  v.setUint32(4, 36 + n * 2, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  v.setUint32(16, 16, true); // fmt 块长度
+  v.setUint16(20, 1, true); // PCM 格式
+  v.setUint16(22, 1, true); // 单声道
+  v.setUint32(24, VOICE_RATE, true); // 采样率
+  v.setUint32(28, VOICE_RATE * 2, true); // 字节率
+  v.setUint16(32, 2, true); // 块对齐
+  v.setUint16(34, 16, true); // 位深
+  ascii(36, "data");
+  v.setUint32(40, n * 2, true);
+  let off = 44;
+  for (let i = 0; i < n; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Uint8Array(buf);
+};
+
+// 字节 → base64：分块转，避免一次性 apply 超出调用栈参数上限
+const bytesToBase64 = (bytes) => {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+};
+
+// ---------- 消息朗读（TTS 进聊天）----------
+// 模块级音频句柄：手动朗读与自动朗读共用，任何新朗读先停掉上一次
+let ttsAudio = null;
+let ttsCancel = null; // 被新朗读打断时通知旧调用方复位（否则旧按钮会卡在播放态）
+// 朗读状态广播：免手对话 / 朗读打断（barge-in）需要知道当前是否在出声
+let ttsPlaying = false;
+const ttsStateSubs = new Set();
+function setTtsPlaying(v) {
+  if (ttsPlaying === v) return;
+  ttsPlaying = v;
+  for (const fn of ttsStateSubs) {
+    try { fn(v); } catch { /* 订阅者异常不影响其他 */ }
+  }
+}
+
+/// 朗读文本：走当前 TTS 引擎合成（后端 tts_speak 按已配置引擎出声）并播放
+async function speakText(text) {
+  stopTts();
+  if (!text || !text.trim()) return;
+  const r = await api.ttsSpeak(text);
+  const audio = new Audio(`data:audio/${r.format || "wav"};base64,${r.audioBase64}`);
+  ttsAudio = audio;
+  return new Promise((resolve, reject) => {
+    ttsCancel = () => {
+      if (ttsAudio === audio) ttsAudio = null;
+      setTtsPlaying(false);
+      resolve();
+    };
+    const finish = () => {
+      if (ttsAudio === audio) ttsAudio = null;
+      setTtsPlaying(false);
+      resolve();
+    };
+    audio.onended = finish;
+    audio.onerror = () => {
+      if (ttsAudio === audio) ttsAudio = null;
+      setTtsPlaying(false);
+      reject(new Error("audio play error"));
+    };
+    audio.play().then(() => setTtsPlaying(true)).catch((e) => {
+      if (ttsAudio === audio) ttsAudio = null;
+      setTtsPlaying(false);
+      reject(e);
+    });
+  });
+}
+
+/// 停止当前朗读
+function stopTts() {
+  setTtsPlaying(false);
+  if (ttsCancel) {
+    const c = ttsCancel;
+    ttsCancel = null;
+    c();
+  }
+  if (ttsAudio) {
+    ttsAudio.pause();
+    ttsAudio = null;
+  }
+}
 
 // AI 对话：多会话分组 + 工具调用可视化
 export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSidebar }) {
@@ -350,6 +483,461 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     };
   }, []);
 
+  // 待办时钟开关（localStorage bit.todoClock，默认开）：只控制待办面板的计划时间展示。
+  // 设置页与对话页同窗口渲染，改后广播自定义事件即时同步；跨窗口（远程 Web 端）靠 storage 事件同步
+  const [todoClock, setTodoClock] = useState(() => localStorage.getItem("bit.todoClock") !== "0");
+  useEffect(() => {
+    const sync = () => setTodoClock(localStorage.getItem("bit.todoClock") !== "0");
+    window.addEventListener("bit-todo-clock", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("bit-todo-clock", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+
+  // ── 语音输入：麦克风录音 → 本地离线转写（SenseVoice）→ 文字追加到输入框草稿 ──
+  // 转写结果绝不自动发送，也不进模型上下文；开关 localStorage bit.voiceInput（默认开）
+  const [voiceOn, setVoiceOn] = useState(() => localStorage.getItem("bit.voiceInput") !== "0");
+  const [recording, setRecording] = useState(false); // 正在录音
+  const [transcribing, setTranscribing] = useState(false); // 转写中（按钮转圈）
+  const [voiceDl, setVoiceDl] = useState(null); // 模型下载进度 {done,total}|null
+  const [voicePicker, setVoicePicker] = useState(null); // 识别模型选择弹窗 {variants,currentId,resolve}|null
+  // 自动朗读：AI 回复完成后自动朗读（localStorage bit.autoSpeak，默认关）
+  const [autoSpeak, setAutoSpeak] = useState(() => localStorage.getItem("bit.autoSpeak") === "1");
+  // 朗读中（ttsPlaying 镜像）：朗读打断（barge-in）与 KWS 保持监听的状态依据
+  const [speaking, setSpeaking] = useState(false);
+  useEffect(() => {
+    const fn = (v) => setSpeaking(v);
+    ttsStateSubs.add(fn);
+    return () => ttsStateSubs.delete(fn);
+  }, []);
+  // 免手对话：转写完成自动发送（localStorage bit.freehand，默认关；配合语音唤醒使用）
+  const [freehand, setFreehand] = useState(() => localStorage.getItem("bit.freehand") === "1");
+  const freehandRef = useRef(freehand);
+  freehandRef.current = freehand;
+  useEffect(() => {
+    const sync = () => setFreehand(localStorage.getItem("bit.freehand") === "1");
+    window.addEventListener("bit-freehand", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("bit-freehand", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+  // 全局语音听写目标（global-voice 事件写入）：转写完成后粘贴回原前台应用而非进对话
+  const pasteTargetRef = useRef(null); // { bundleId } | null
+  // 提示词模板浮层（输入框工具栏）：懒加载列表，点选插入输入框
+  const [tplOpen, setTplOpen] = useState(false);
+  const [templates, setTemplates] = useState([]); // [{id,title,text}]
+  // 编辑重发：{ text } 编辑最后一条 user 消息；确认后走 regenerate_last
+  const [editResend, setEditResend] = useState(null);
+  const [voiceHint, setVoiceHint] = useState(null); // 输入区上方临时提示 {msg, kind}
+  const voiceHintTimer = useRef(null);
+  const streamRef = useRef(null); // 麦克风 MediaStream
+  const ctxRef = useRef(null); // AudioContext
+  const procRef = useRef(null); // ScriptProcessorNode
+  const chunksRef = useRef([]); // 录音分片（Float32，onaudioprocess 里拷贝）
+  const rateRef = useRef(VOICE_RATE); // 实际采集采样率（停录时重采样到 16k）
+
+  // 语音提示（自动消失）：错误红色 4s，普通 3s
+  const flashVoiceHint = (msg, kind = "ok") => {
+    setVoiceHint({ msg, kind });
+    clearTimeout(voiceHintTimer.current);
+    voiceHintTimer.current = setTimeout(() => setVoiceHint(null), kind === "err" ? 4000 : 3000);
+  };
+
+  // 设置页开关广播（bit-voice-input）即时同步；跨窗口（远程 Web 端）靠 storage 事件兜底
+  useEffect(() => {
+    const sync = () => setVoiceOn(localStorage.getItem("bit.voiceInput") !== "0");
+    window.addEventListener("bit-voice-input", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("bit-voice-input", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+
+  // 模型下载进度：后端 ctx.emit("voice-progress") 推送
+  useEffect(() => {
+    const un = listen("voice-progress", (e) => {
+      const p = e.payload || {};
+      if (typeof p.done === "number" && typeof p.total === "number")
+        setVoiceDl({ done: p.done, total: p.total });
+    });
+    return () => un.then((f) => f());
+  }, []);
+
+  // 下载期间轮询 voiceStatus 兜底（事件可能丢）：ready/失败以状态查询为准
+  const downloading = !!voiceDl;
+  useEffect(() => {
+    if (!downloading) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const s = await api.voiceStatus();
+        if (stopped) return;
+        if (s?.progress?.total) setVoiceDl({ done: s.progress.done, total: s.progress.total });
+        if (s?.ready) {
+          setVoiceDl(null);
+          flashVoiceHint(t("chat.voiceReady"), "ok");
+        } else if (!s?.downloading) {
+          setVoiceDl(null);
+          flashVoiceHint(
+            s?.error ? `${t("voice.downloadFailed")}：${s.error}` : t("voice.downloadFailed"),
+            "err"
+          );
+        }
+      } catch { /* 后端暂不可用：保持当前进度显示 */ }
+    };
+    const timer = setInterval(tick, 1500);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [downloading]);
+
+  // 卸载兜底：释放麦克风与 AudioContext
+  useEffect(
+    () => () => {
+      const stream = streamRef.current;
+      const ctx = ctxRef.current;
+      streamRef.current = null;
+      ctxRef.current = null;
+      stream?.getTracks().forEach((tr) => tr.stop());
+      if (ctx) ctx.close().catch(() => {});
+    },
+    []
+  );
+
+  // 开始录音：拿麦克风流 + Web Audio 收集 Float32 PCM（优先 16k 采集）
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      let ctx;
+      try {
+        ctx = new Ctx({ sampleRate: VOICE_RATE });
+      } catch {
+        ctx = new Ctx(); // 不支持指定采样率：默认采样率采集，停录时线性插值重采样
+      }
+      const src = ctx.createMediaStreamSource(stream);
+      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      chunksRef.current = [];
+      rateRef.current = ctx.sampleRate;
+      proc.onaudioprocess = (e) => {
+        // inputBuffer 会被复用，必须拷贝后再存
+        chunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      // ScriptProcessor 需接到 destination 才会被拉动；中间插零增益，避免麦克风回放到扬声器
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      src.connect(proc);
+      proc.connect(mute);
+      mute.connect(ctx.destination);
+      streamRef.current = stream;
+      ctxRef.current = ctx;
+      procRef.current = proc;
+      setVoiceHint(null);
+      setRecording(true);
+    } catch {
+      flashVoiceHint(t("chat.voiceMicError"), "err");
+    }
+  };
+
+  // 停止录音并转写：Float32 → 重采样 16k → PCM16 WAV → voiceTranscribe → 追加到草稿
+  const stopRecording = async () => {
+    const stream = streamRef.current;
+    const ctx = ctxRef.current;
+    const proc = procRef.current;
+    streamRef.current = null;
+    ctxRef.current = null;
+    procRef.current = null;
+    try {
+      proc?.disconnect();
+    } catch { /* 已断开 */ }
+    stream?.getTracks().forEach((tr) => tr.stop()); // 无论转写成败都先释放麦克风
+    const chunks = chunksRef.current || [];
+    chunksRef.current = [];
+    setRecording(false);
+    // 拼接分片 → 需要时重采样到 16k
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    let pcm = new Float32Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      pcm.set(c, off);
+      off += c.length;
+    }
+    if (rateRef.current !== VOICE_RATE) pcm = resampleLinear(pcm, rateRef.current, VOICE_RATE);
+    if (ctx) {
+      try {
+        await ctx.close();
+      } catch { /* 已关闭 */ }
+    }
+    if (!pcm.length) {
+      flashVoiceHint(t("chat.voiceEmptyResult"), "err");
+      return;
+    }
+    setTranscribing(true);
+    try {
+      const r = await api.voiceTranscribe(bytesToBase64(encodeWav16k(pcm)), "auto");
+      const text = String(r?.text || "").trim();
+      if (!text) {
+        flashVoiceHint(t("chat.voiceEmptyResult"), "err");
+      } else if (pasteTargetRef.current) {
+        // 全局语音听写：转写结果粘贴回原前台应用（不进对话）
+        const target = pasteTargetRef.current;
+        pasteTargetRef.current = null;
+        try {
+          await api.pasteTextToForeground(text, target.bundleId);
+          flashVoiceHint(t("chat.voicePasted"), "ok");
+        } catch (e) {
+          const emsg = typeof e === "string" ? e : e?.message || String(e);
+          flashVoiceHint(`${t("chat.voicePasteFail")}${emsg ? `：${emsg}` : ""}`, "err");
+          // 粘贴失败兜底：结果回对话草稿，不丢内容
+          setInput((v) => (v ? v + (/\s$/.test(v) ? "" : " ") + text : text));
+          inputRef.current?.focus();
+        }
+      } else if (freehandRef.current) {
+        // 免手对话：转写文本直接发送（会话忙时自动进等待队列）
+        sendVoiceMessage(text);
+        flashVoiceHint(t("chat.freehandSent"), "ok");
+      } else {
+        // 只追加到草稿末尾（非空补一个空格），焦点回输入框；绝不自动发送
+        setInput((v) => (v ? v + (/\s$/.test(v) ? "" : " ") + text : text));
+        inputRef.current?.focus();
+      }
+    } catch (e) {
+      const emsg = typeof e === "string" ? e : e?.message || String(e);
+      flashVoiceHint(`${t("chat.voiceFailed")}${emsg ? `：${emsg}` : ""}`, "err");
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  // ── 语音唤醒：麦克风常驻 → worker /kws/feed，命中唤醒词自动开录 ──
+  const wakeRef = useRef({ on: false, http: null, stream: null, ctx: null, proc: null });
+  const [wakeOn, setWakeOn] = useState(false);
+
+  // 停止唤醒监听：释放麦克风 + 通知 worker 重置唤醒流（worker 可能已重启，错误忽略）
+  const stopWake = async () => {
+    const k = wakeRef.current;
+    if (!k.on && !k.stream) return;
+    wakeRef.current = { on: false, http: null, stream: null, ctx: null, proc: null };
+    try {
+      k.proc?.disconnect();
+    } catch { /* 已断开 */ }
+    k.stream?.getTracks().forEach((tr) => tr.stop());
+    try {
+      await k.ctx?.close();
+    } catch { /* 已关闭 */ }
+    if (k.http) {
+      try {
+        await fetch(`http://127.0.0.1:${k.http.port}/kws/stop`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${k.http.token}` },
+        });
+      } catch { /* worker 不在跑，忽略 */ }
+    }
+    setWakeOn(false);
+  };
+
+  // 唤醒命中：停监听 → 提示 → 直接开录（录音结束转写完，wakeTick effect 自动恢复监听）。
+  // 朗读打断（barge-in）：出声期间命中唤醒词只停声不开新麦（防误触），唤醒监听保持
+  const onWakeHit = async () => {
+    if (ttsPlaying) {
+      stopTts();
+      flashVoiceHint(t("chat.bargeIn"));
+      return;
+    }
+    await stopWake();
+    flashVoiceHint(t("chat.wakeHit"));
+    await startRecording();
+  };
+
+  // 开始唤醒监听：16k 采集 → PCM16 块喂 /kws/feed；命中即回调 onWakeHit
+  const startWake = async (http) => {
+    if (wakeRef.current.on) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      flashVoiceHint(t("chat.voiceMicError"), "err");
+      return;
+    }
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    let ctx;
+    try {
+      ctx = new Ctx({ sampleRate: VOICE_RATE });
+    } catch {
+      ctx = new Ctx(); // 不支持 16k：onaudioprocess 里线性插值重采样
+    }
+    const nativeRate = ctx.sampleRate;
+    const src = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    const mute = ctx.createGain();
+    mute.gain.value = 0; // 零增益防回放
+    src.connect(proc);
+    proc.connect(mute);
+    mute.connect(ctx.destination);
+    proc.onaudioprocess = (e) => {
+      const k = wakeRef.current;
+      if (!k.on) return;
+      let f = e.inputBuffer.getChannelData(0);
+      if (nativeRate !== VOICE_RATE) f = resampleLinear(f, nativeRate, VOICE_RATE);
+      const i16 = new Int16Array(f.length);
+      for (let i = 0; i < f.length; i++) {
+        const s = Math.max(-1, Math.min(1, f[i]));
+        i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      fetch(`http://127.0.0.1:${k.http.port}/kws/feed`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${k.http.token}`, "content-type": "application/octet-stream" },
+        body: i16.buffer,
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (j?.hit && wakeRef.current.on) void onWakeHit();
+        })
+        .catch(() => { /* worker 重启间隙，忽略本轮 */ });
+    };
+    wakeRef.current = { on: true, http, stream, ctx, proc };
+    setWakeOn(true);
+    try {
+      await fetch(`http://127.0.0.1:${http.port}/kws/start`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${http.token}` },
+      });
+    } catch { /* start 失败不影响 feed 建流重试 */ }
+  };
+
+  // 唤醒状态评估：录音/转写/下载忙时停监听；空闲时按后端 kws 配置起/停。
+  // 设置页改开关会 dispatch bit-kws-changed 事件触发这里重新评估。
+  const wakeApiRef = useRef({});
+  wakeApiRef.current = { startWake, stopWake };
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (recording || transcribing || downloading) {
+        await wakeApiRef.current.stopWake();
+        return;
+      }
+      try {
+        const st = await api.voiceStatus();
+        if (cancelled) return;
+        const k = st?.kws;
+        if (k?.enabled && k?.ready) {
+          if (!st?.worker_http) {
+            // worker 未跑（唤醒开启后还没起过）：拉起带 kws 的识别进程再重新评估
+            await api.voiceKwsSet(true, k.score).catch(() => {});
+            return;
+          }
+          if (wakeRef.current.on) {
+            wakeRef.current.http = st.worker_http; // worker 重启后端口/令牌跟随
+          } else {
+            await wakeApiRef.current.startWake(st.worker_http);
+          }
+        } else {
+          await wakeApiRef.current.stopWake();
+        }
+      } catch { /* 后端忙，忽略本轮 */ }
+    };
+    void tick();
+    const onChange = () => { void tick(); };
+    window.addEventListener("bit-kws-changed", onChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("bit-kws-changed", onChange);
+    };
+  }, [recording, transcribing, downloading]);
+
+  // 麦克风按钮总入口：录音中→停止；模型就绪→开录；
+  // 未下载→弹模型选择（多模型选一），确认后下载所选并自动切换
+  const toggleVoice = async () => {
+    if (recording) return stopRecording();
+    if (transcribing || downloading) return; // 转写/下载中不重复触发（下载中只显示进度）
+    let st = null;
+    try {
+      st = await api.voiceStatus();
+    } catch { /* 后端暂不可用：按未就绪处理，确认后由 voicePrepare 报错 */ }
+    if (st?.ready) return startRecording();
+    if (st?.downloading) {
+      setVoiceDl(
+        st.progress?.total ? { done: st.progress.done, total: st.progress.total } : { done: 0, total: 0 }
+      );
+      return;
+    }
+    // 未就绪：弹「识别模型选择」，列出全部变体（体积/语言/已就绪标记），默认选当前 variant
+    const variants = st?.variants || [];
+    const cur = st?.variant || "sense-voice";
+    let picked = null;
+    if (variants.length) {
+      picked = await selectVoiceModel(variants, cur);
+      if (!picked) return;
+      if (picked !== cur) {
+        try { await api.voiceSelect(picked); } catch { /* 选择失败不阻断下载，prepare 仍按当前变体 */ }
+      }
+    }
+    const ok = await confirmDialog({
+      title: t("voice.downloadConfirmTitle"),
+      message: t("voice.downloadConfirmBody"),
+      confirmText: t("voice.downloadBtn"),
+    });
+    if (!ok) return;
+    setVoiceDl({ done: 0, total: 0 });
+    try {
+      await api.voicePrepare();
+    } catch (e) {
+      setVoiceDl(null);
+      const emsg = typeof e === "string" ? e : e?.message || String(e);
+      flashVoiceHint(`${t("voice.downloadFailed")}${emsg ? `：${emsg}` : ""}`, "err");
+    }
+  };
+
+  // 麦克风入口 ref：全局语音快捷键事件在 effect 里调用，避免闭包过期
+  const voiceEntryRef = useRef(() => {});
+  voiceEntryRef.current = toggleVoice;
+
+  // Electron 宿主全局事件：全局语音听写（开录，转写后粘贴回原应用）+ 截图提问（挂图片附件）
+  useEffect(() => {
+    const unVoice = listen("global-voice", (e) => {
+      pasteTargetRef.current = { bundleId: e.payload?.bundleId || "" };
+      void voiceEntryRef.current();
+    });
+    const unShot = listen("screenshot-capture", (e) => {
+      const url = e.payload?.dataUrl;
+      if (!url) return;
+      setImages((arr) => [...arr, { name: `screenshot-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.png`, dataUrl: url }]);
+      flashVoiceHint(t("chat.shotAttached"));
+      inputRef.current?.focus();
+    });
+    const unShotErr = listen("screenshot-capture-error", (e) => {
+      const msg = e.payload?.message;
+      if (msg) flashVoiceHint(msg, "err");
+    });
+    return () => {
+      unVoice.then((f) => f());
+      unShot.then((f) => f());
+      unShotErr.then((f) => f());
+    };
+  }, []);
+
+  // 识别模型选择弹窗：variants=[{id,label,languages,bytes,ready}]；返回所选 id 或 null 取消
+  const selectVoiceModel = (variants, currentId) =>
+    new Promise((resolve) => {
+      const fmtMB = (b) => `${Math.round(b / 1024 / 1024)}MB`;
+      setVoicePicker({
+        variants: variants.map((v) => ({
+          ...v,
+          sizeText: fmtMB(v.bytes || 0),
+          langText: (v.languages || []).filter((l) => l !== "auto").slice(0, 5).join("/"),
+        })),
+        currentId,
+        resolve,
+      });
+    });
+
   // 后台会话变动（如子智能体新建会话 / 完成任务）：自动刷新侧栏与当前会话内容
   useEffect(() => {
     const un = listen("sessions-updated", (e) => {
@@ -366,6 +954,29 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
   const busy = !!busyMap[activeId]; // 当前会话是否执行中
   const live = liveMap[activeId] || null;
   const runningCount = Object.keys(busyMap).length;
+
+  // 自动朗读：busy 由真变假（回复完成）时，朗读最后一条 AI 消息的文字
+  const wasBusyRef = useRef(false);
+  useEffect(() => {
+    if (wasBusyRef.current && !busy && autoSpeak) {
+      const last = [...messages].reverse().find((m) => m.role !== "user" && m.content && m.content.trim());
+      if (last) {
+        speakText(last.content).catch(() => { /* 朗读失败静默：不打断聊天 */ });
+      }
+    }
+    wasBusyRef.current = busy;
+    // messages 依赖刻意省略：只在 busy 边沿触发，避免流式更新反复朗读
+  }, [busy, autoSpeak]);
+
+  // 自动朗读开关：写 localStorage；关闭时顺带停掉正在播的朗读
+  const toggleAutoSpeak = () => {
+    setAutoSpeak((v) => {
+      const next = !v;
+      localStorage.setItem("bit.autoSpeak", next ? "1" : "0");
+      if (!next) stopTts();
+      return next;
+    });
+  };
 
   // 计划栏派生：非放弃目标 + 归属待办；无目标待办的独立待办单独成组
   // 按会话隔离：带 session_id 的计划只在其归属会话显示，无归属（用户手建/旧数据）视为全局
@@ -803,6 +1414,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
   };
 
   const send = async () => {
+    if (recording) return; // 录音期间禁止发送（先停止录音）
     const text = input.trim();
     // 「停止 <job_id>」：直接取消对应后台长命令，不再发给 AI（AI 提示用户时可这么用）
     const stopM = text.match(/^(?:停止|stop)\s+(sh\d+)\s*$/i);
@@ -869,6 +1481,25 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     runTask(sid, item);
   };
 
+  // 免手对话：语音转写文本直接作为消息发送（绕过输入框草稿；会话忙时进等待队列）
+  const sendVoiceMessage = (text) => {
+    const sid = activeRef.current;
+    if (!sid) return;
+    const item = { composed: text, bubble: text, imgData: [] };
+    if (busyMap[sid] || runningRef.current.has(sid)) {
+      const next = { ...queuesRef.current, [sid]: [...(queuesRef.current[sid] || []), item] };
+      queuesRef.current = next;
+      setQueues(next);
+      if (activeRef.current === sid) setMessages((msgs) => [...msgs, { role: "user", content: item.bubble }]);
+      return;
+    }
+    if (activeRef.current === sid) {
+      setMessages((msgs) => [...msgs, { role: "user", content: item.bubble }]);
+    }
+    setPausedFor(sid, false);
+    runTask(sid, item);
+  };
+
   // 速度估算：CJK 字符 ≈1 token，其余每 4 字符 ≈1 token；每收到增量就刷新一次 tok/s
   const bumpSpeed = (sid, text) => {
     const t = speedRef.current[sid];
@@ -880,20 +1511,8 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
 
   // 实际执行一次对话任务（流式），结束时自动续发该会话的等待队列。
   // busy 标记统一在此设置：无论是直接发送还是队列续发，执行期间新消息都会正确排队
-  const runTask = async (sid, item) => {
-    if (runningRef.current.has(sid)) return; // 重入保护：同一会话绝不并发两个任务
-    runningRef.current.add(sid);
-    setBusyMap((m) => ({ ...m, [sid]: true }));
-    setLiveMap((m) => ({ ...m, [sid]: m[sid] || { text: "", think: "", cards: [] } }));
-    // 结束时移除该会话的运行/流式状态
-    const endLive = () =>
-      setLiveMap((m) => {
-        const n = { ...m };
-        delete n[sid];
-        return n;
-      });
-    try {
-      const res = await api.chatStream(sid, item.composed, null, (ev) => {
+  // 流式事件处理（chat_stream 与 regenerate_last 共用）：增量文本/思考/工具卡/用量/最终消息
+  const handleStreamEvent = (sid, endLive) => (ev) => {
         if (!ev || typeof ev !== "object") return;
         switch (ev.type) {
           case "round_start":
@@ -988,7 +1607,22 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
             console.warn("[BIT][chat] 未处理事件类型:", ev?.type || "(无 type)", ev);
             break;
         }
-      }, item.imgData);
+  };
+
+  const runTask = async (sid, item) => {
+    if (runningRef.current.has(sid)) return; // 重入保护：同一会话绝不并发两个任务
+    runningRef.current.add(sid);
+    setBusyMap((m) => ({ ...m, [sid]: true }));
+    setLiveMap((m) => ({ ...m, [sid]: m[sid] || { text: "", think: "", cards: [] } }));
+    // 结束时移除该会话的运行/流式状态
+    const endLive = () =>
+      setLiveMap((m) => {
+        const n = { ...m };
+        delete n[sid];
+        return n;
+      });
+    try {
+      const res = await api.chatStream(sid, item.composed, null, handleStreamEvent(sid, endLive), item.imgData);
       if (activeRef.current === sid && res?.messages) setMessages(res.messages);
       endLive();
       loadSessions();
@@ -1000,6 +1634,57 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     } finally {
       runningRef.current.delete(sid);
       delete speedRef.current[sid]; // 速度表随任务结束清零（页眉不再显示 tok/s）
+      setSpeedMap((m) => {
+        const n = { ...m };
+        delete n[sid];
+        return n;
+      });
+      setBusyMap((m) => {
+        const n = { ...m };
+        delete n[sid];
+        return n;
+      });
+      pumpQueue(sid);
+    }
+  };
+
+  // 重新生成 / 编辑重发：后端删尾 assistant（可选改写最后一条 user）后只跑模型回合。
+  // 本地同步移除尾部 assistant 气泡（编辑时改写最后一条 user 气泡），流式区接棒
+  const startRegenerate = async (editText) => {
+    const sid = activeRef.current;
+    if (!sid || runningRef.current.has(sid) || busyMap[sid]) return;
+    setEditResend(null);
+    setMessages((msgs) => {
+      const n = [...msgs];
+      while (n.length && n[n.length - 1].role === "assistant") n.pop();
+      if (editText != null) {
+        const u = n.map((m) => m.role).lastIndexOf("user");
+        if (u >= 0) n[u] = { ...n[u], content: editText };
+      }
+      return n;
+    });
+    runningRef.current.add(sid);
+    setBusyMap((m) => ({ ...m, [sid]: true }));
+    setLiveMap((m) => ({ ...m, [sid]: m[sid] || { text: "", think: "", cards: [] } }));
+    const endLive = () =>
+      setLiveMap((m) => {
+        const n = { ...m };
+        delete n[sid];
+        return n;
+      });
+    try {
+      const res = await api.regenerateStream(sid, null, handleStreamEvent(sid, endLive), editText ?? null);
+      if (activeRef.current === sid && res?.messages) setMessages(res.messages);
+      endLive();
+      loadSessions();
+      onStats?.();
+    } catch (e) {
+      console.error("regenerate failed:", e);
+      endLive();
+      loadMessages(sid); // 手术已提交而回合失败：以后端实际历史为准
+    } finally {
+      runningRef.current.delete(sid);
+      delete speedRef.current[sid];
       setSpeedMap((m) => {
         const n = { ...m };
         delete n[sid];
@@ -1416,6 +2101,9 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                   ? hm
                   : `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
               };
+              // 最后一条 assistant / user 的下标：重新生成、编辑重发按钮只挂在这两条上
+              const lastAssistantIdx = messages.map((m) => m.role).lastIndexOf("assistant");
+              const lastUserIdx = messages.map((m) => m.role).lastIndexOf("user");
               return messages.map((m, i) => {
                 // 对话开头（此前没有带时间戳的消息）不画线；间隔 ≥5 分钟才画
                 const showDivider =
@@ -1444,7 +2132,14 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                         <div className="h-px flex-1 bg-neutral-200 dark:bg-neutral-700" />
                       </div>
                     ) : (
-                      <MessageBubble message={m} onPreview={setPreviewFile} />
+                      <MessageBubble
+                        message={m}
+                        onPreview={setPreviewFile}
+                        canRegenerate={!busy && i === lastAssistantIdx}
+                        canEdit={!busy && i === lastUserIdx}
+                        onRegenerate={() => startRegenerate(null)}
+                        onEdit={() => setEditResend({ text: m.content })}
+                      />
                     )}
                   </Fragment>
                 );
@@ -1853,6 +2548,37 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
             </div>
           )}
 
+          {/* 语音输入状态行：录音 / 转写 / 模型下载进度条 / 唤醒监听 / 临时提示 */}
+          {(recording || transcribing || downloading || voiceHint || wakeOn) && (
+            <div className="flex flex-col gap-1 px-1 pb-1">
+              <p
+                className={`text-xs ${
+                  voiceHint?.kind === "err" ? "text-red-500" : "text-neutral-500 dark:text-neutral-400"
+                }`}
+              >
+                {voiceHint?.msg ||
+                  (recording
+                    ? t("chat.voiceRecording")
+                    : transcribing
+                    ? t("chat.voiceTranscribing")
+                    : downloading
+                    ? voiceDl.total
+                      ? t("voice.downloading", { p: Math.round((voiceDl.done / voiceDl.total) * 100) })
+                      : t("voice.downloadStart")
+                    : wakeOn
+                    ? t("voice.kwsOn")
+                    : "")}
+              </p>
+              {downloading && voiceDl.total > 0 && (
+                <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+                  <div
+                    className="h-full rounded-full bg-sky-500 transition-[width] duration-300"
+                    style={{ width: `${Math.min(100, Math.round((voiceDl.done / voiceDl.total) * 100))}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
           {/* 底部 pb-12 为工具栏/发送按钮预留独立一行：textarea 只在自己的区域滚动，永不进入按钮行 */}
           {/* panel-input：输入区专属背景（图片+透明度由外观页控制），textarea 本身透明可透出 */}
           <div className="panel-surface panel-input relative rounded-[var(--look-ui-radius,1rem)] border border-neutral-300 bg-white pb-12 transition-colors focus-within:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:focus-within:border-neutral-200">
@@ -2002,6 +2728,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                           <div className={`space-y-1 ${grp.goal ? "mt-1 pl-4" : ""}`}>
                             {grp.todos.map((td) => {
                               const done = td.status === "completed";
+                              const overdue = todoClock && isTodoOverdue(td);
                               return (
                                 <div
                                   key={td.id}
@@ -2018,6 +2745,22 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                                         : "border border-neutral-400 bg-white dark:border-neutral-400"
                                     }`}
                                   />
+                                  {/* 待办时钟：计划执行时间（到点未完成标红，沿用行文字中性色系） */}
+                                  {todoClock && td.scheduled_at && (
+                                    <span
+                                      className={`flex shrink-0 items-center gap-1 ${
+                                        overdue ? "text-red-500" : ""
+                                      }`}
+                                      title={
+                                        overdue
+                                          ? `${t("chat.todoOverdue")} · ${td.scheduled_at}`
+                                          : td.scheduled_at
+                                      }
+                                    >
+                                      <IconClock size={12} />
+                                      {todoHM(td.scheduled_at)}
+                                    </span>
+                                  )}
                                   <span className="min-w-0 truncate" title={td.content}>
                                     {td.content}
                                   </span>
@@ -2149,6 +2892,100 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
                 </div>
               )}
             </div>
+            {/* 语音输入：本地离线转写；是否显示由 localStorage bit.voiceInput 控制（设置页切换） */}
+            {voiceOn && (
+              <button
+                onClick={toggleVoice}
+                disabled={!activeId || transcribing || downloading}
+                title={
+                  recording
+                    ? t("chat.voiceStop")
+                    : transcribing
+                    ? t("chat.voiceTranscribing")
+                    : downloading
+                    ? voiceDl.total
+                      ? t("voice.downloading", { p: Math.round((voiceDl.done / voiceDl.total) * 100) })
+                      : t("voice.downloadStart")
+                    : t("chat.voiceStart")
+                }
+                className={`relative shrink-0 rounded-full p-2 transition-colors disabled:opacity-40 ${
+                  recording
+                    ? "bg-red-500/15 text-red-500 ring-1 ring-red-500/60"
+                    : "text-neutral-500 hover:bg-neutral-900/5 hover:text-neutral-900 dark:hover:bg-white/10 dark:hover:text-white"
+                }`}
+              >
+                {transcribing ? (
+                  <span className="block h-[18px] w-[18px] animate-spin rounded-full border-2 border-current border-t-transparent" />
+                ) : (
+                  <IconMic size={18} />
+                )}
+                {recording && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
+              </button>
+            )}
+            {/* 自动朗读：AI 回复完成后自动读出（TTS 引擎），开启时高亮 */}
+            <button
+              onClick={toggleAutoSpeak}
+              disabled={!activeId}
+              title={t("chat.autoSpeak")}
+              className={`shrink-0 rounded-full p-2 transition-colors disabled:opacity-40 ${
+                autoSpeak
+                  ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                  : "text-neutral-500 hover:bg-neutral-900/5 hover:text-neutral-900 dark:hover:bg-white/10 dark:hover:text-white"
+              }`}
+            >
+              {autoSpeak ? <IconSpeaker size={18} /> : <IconSpeakerOff size={18} />}
+            </button>
+            {/* 提示词模板：点选一键插入输入框（列表在 AI 设置维护） */}
+            <div className="relative shrink-0">
+              <button
+                onClick={() => {
+                  if (!tplOpen) api.promptTemplatesGet().then((r) => setTemplates(r?.templates || [])).catch(() => {});
+                  setTplOpen((v) => !v);
+                }}
+                disabled={!activeId}
+                title={t("chat.templates")}
+                className={`shrink-0 rounded-full p-2 transition-colors disabled:opacity-40 ${
+                  tplOpen
+                    ? "accent-solid"
+                    : "text-neutral-500 hover:bg-neutral-900/5 hover:text-neutral-900 dark:hover:bg-white/10 dark:hover:text-white"
+                }`}
+              >
+                <IconStar size={18} />
+              </button>
+              {tplOpen && (
+                <div className="card absolute bottom-11 left-0 z-20 max-h-80 w-72 overflow-y-auto p-1.5">
+                  {templates.length === 0 ? (
+                    <p className="px-2 py-3 text-center text-xs text-neutral-400">{t("chat.templatesEmpty")}</p>
+                  ) : (
+                    templates.map((tpl) => (
+                      <button
+                        key={tpl.id}
+                        onClick={() => {
+                          setInput((v) => (v ? v + (/\s$/.test(v) ? "" : " ") + tpl.text : tpl.text));
+                          setTplOpen(false);
+                          inputRef.current?.focus();
+                        }}
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-neutral-900/5 dark:hover:bg-white/10"
+                      >
+                        <span className="block truncate font-medium">{tpl.title}</span>
+                        {tpl.text && <span className="mt-0.5 block truncate text-neutral-400 dark:text-neutral-500">{tpl.text}</span>}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+            {/* 截图：macOS 原生框选 → 剪贴板 → 自动挂到输入框附件（Electron 专属） */}
+            {window.__BIT_ELECTRON__ && /Mac/i.test(navigator.platform || "") && (
+              <button
+                onClick={() => api.screenshotRegion().catch(() => {})}
+                disabled={!activeId}
+                title={t("chat.screenshot")}
+                className="shrink-0 rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-900/5 hover:text-neutral-900 disabled:opacity-40 dark:hover:bg-white/10 dark:hover:text-white"
+              >
+                <IconScissors size={18} />
+              </button>
+            )}
             {/* 后台运行任务状态：弹出 popover 查看长命令，可逐条停止 */}
             <div className="relative shrink-0">
               <button
@@ -2240,8 +3077,8 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
               onChange={(e) => setInput(e.target.value)}
               onPaste={onPasteInput}
               onKeyDown={(e) => {
-                // Enter 发送；Shift+Enter 换行；中文输入法选词回车不发送（isComposing 保护）
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                // Enter 发送；Shift+Enter 换行；中文输入法选词回车不发送（isComposing 保护）；录音期间不发送
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !recording) {
                   e.preventDefault();
                   send();
                 }
@@ -2260,7 +3097,7 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
               ) : (
                 <button
                   onClick={send}
-                  disabled={(!input.trim() && !hasAttachments) || !activeId}
+                  disabled={(!input.trim() && !hasAttachments) || !activeId || recording}
                   title={t("common.send")}
                   className="accent-solid flex h-10 w-10 items-center justify-center rounded-full shadow-sm transition-all duration-200 hover:brightness-110 active:scale-95 disabled:opacity-40"
                 >
@@ -2400,6 +3237,127 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
           onStop={() => shellJobs.stopJob(shellLogJob.job_id)}
         />
       )}
+      {/* 编辑重发弹窗：改写最后一条 user 消息后重新生成回复 */}
+      {editResend && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setEditResend(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="card flex w-[520px] max-w-[calc(100vw-24px)] flex-col gap-3 p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">{t("chat.editResendTitle")}</h3>
+            <textarea
+              autoFocus
+              className="input min-h-32 resize-y"
+              value={editResend.text}
+              onChange={(e) => setEditResend({ text: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && editResend.text.trim()) {
+                  startRegenerate(editResend.text.trim());
+                }
+              }}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button className="pill pill-hover text-xs" onClick={() => setEditResend(null)}>
+                {t("common.cancel")}
+              </button>
+              <button
+                className="pill pill-hover text-xs"
+                disabled={!editResend.text.trim()}
+                onClick={() => startRegenerate(editResend.text.trim())}
+              >
+                {t("chat.editResendConfirm")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 识别模型选择弹窗（多模型选一）：麦克风未就绪时触发；选中即 resolve(id) */}
+      {voicePicker && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-6"
+          onClick={() => {
+            voicePicker.resolve(null);
+            setVoicePicker(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="card w-[420px] max-w-[calc(100vw-24px)] max-h-[70vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {t("voice.pickTitle")}
+            </h3>
+            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{t("voice.pickBody")}</p>
+            <div className="mt-3 flex flex-col gap-1.5">
+              {voicePicker.variants.map((v) => {
+                const active = v.id === voicePicker.pickedId;
+                return (
+                  <button
+                    key={v.id}
+                    onClick={() => setVoicePicker({ ...voicePicker, pickedId: v.id })}
+                    className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
+                      active
+                        ? "border-neutral-900 bg-neutral-900/5 dark:border-neutral-200 dark:bg-white/10"
+                        : "border-neutral-200 hover:bg-neutral-100 dark:border-neutral-800 dark:hover:bg-neutral-800"
+                    }`}
+                  >
+                    <span
+                      className={`h-3.5 w-3.5 shrink-0 rounded-full border-2 ${
+                        active
+                          ? "border-neutral-900 bg-neutral-900 dark:border-neutral-100 dark:bg-neutral-100"
+                          : "border-neutral-300 dark:border-neutral-600"
+                      }`}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-neutral-900 dark:text-neutral-100">
+                        {v.label}
+                        {v.id === voicePicker.currentId && (
+                          <span className="ml-1.5 text-[10px] text-neutral-400">{t("voice.pickCurrent")}</span>
+                        )}
+                      </span>
+                      <span className="block truncate text-xs text-neutral-400">
+                        {v.sizeText} · {v.langText}
+                      </span>
+                    </span>
+                    {v.ready && (
+                      <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+                        {t("voice.pickReady")}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                className="pill pill-outline pill-hover"
+                onClick={() => {
+                  voicePicker.resolve(null);
+                  setVoicePicker(null);
+                }}
+              >
+                {t("dialog.cancel")}
+              </button>
+              <button
+                className="pill pill-hover"
+                onClick={() => {
+                  voicePicker.resolve(voicePicker.pickedId || voicePicker.currentId);
+                  setVoicePicker(null);
+                }}
+              >
+                {t("voice.pickConfirm")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2424,6 +3382,39 @@ function CopyBtn({ text }) {
       className="icon-btn h-6 w-6 rounded-full opacity-0 transition-opacity group-hover:opacity-100"
     >
       {done ? <IconCheck size={12} /> : <IconCopy size={12} />}
+    </button>
+  );
+}
+
+// 单条消息朗读按钮：空闲（悬停浮现）/合成中（脉冲）/播放中（点按停止）三态
+function SpeakBtn({ text }) {
+  const { t } = useLang();
+  const [phase, setPhase] = useState("idle"); // idle | busy | playing
+  useEffect(() => () => stopTts(), []); // 卸载时兜底停声
+  const speak = async () => {
+    if (phase === "playing") {
+      stopTts();
+      setPhase("idle");
+      return;
+    }
+    if (phase === "busy") return;
+    setPhase("busy");
+    try {
+      await speakText(text);
+      setPhase("idle");
+    } catch {
+      setPhase("idle"); // 合成/播放失败静默复位
+    }
+  };
+  return (
+    <button
+      onClick={speak}
+      title={phase === "playing" ? t("chat.speakStop") : phase === "busy" ? t("chat.speaking") : t("chat.speak")}
+      className={`icon-btn h-6 w-6 rounded-full transition-opacity ${
+        phase === "idle" ? "opacity-0 group-hover:opacity-100" : "text-amber-600 opacity-100 dark:text-amber-400"
+      }`}
+    >
+      {phase === "playing" ? <IconSpeakerOff size={12} /> : <IconSpeaker size={12} className={phase === "busy" ? "animate-pulse" : undefined} />}
     </button>
   );
 }
@@ -2599,7 +3590,8 @@ function DiagramCard({ diagram, dark }) {
   );
 }
 
-function MessageBubble({ message, onPreview }) {
+function MessageBubble({ message, onPreview, canRegenerate, canEdit, onRegenerate, onEdit }) {
+  const { t } = useLang();
   const isUser = message.role === "user";
   const dark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
   // 后台 shell 结束时由宿主注入的说明消息（用户没说话，别渲染成用户的气泡）。
@@ -2628,7 +3620,18 @@ function MessageBubble({ message, onPreview }) {
         <div className="accent-solid whitespace-pre-wrap rounded-[var(--look-ui-radius,1.5rem)] rounded-br-lg px-4 py-2.5 text-sm leading-relaxed">
           {message.content}
         </div>
-        <CopyBtn text={message.content || ""} />
+        <div className="flex items-center gap-1">
+          <CopyBtn text={message.content || ""} />
+          {canEdit && onEdit && (
+            <button
+              onClick={onEdit}
+              title={t("chat.editResend")}
+              className="icon-btn h-6 w-6 rounded-full opacity-0 transition-opacity group-hover:opacity-100"
+            >
+              <IconEdit size={12} />
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -2679,7 +3682,19 @@ function MessageBubble({ message, onPreview }) {
           <div className="rounded-[var(--look-ui-radius,1.5rem)] rounded-bl-lg border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900">
             <Markdown>{message.content}</Markdown>
           </div>
-          <CopyBtn text={message.content || ""} />
+          <div className="flex items-center gap-1">
+            <SpeakBtn text={message.content || ""} />
+            <CopyBtn text={message.content || ""} />
+            {canRegenerate && onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                title={t("chat.regenerate")}
+                className="icon-btn h-6 w-6 rounded-full opacity-0 transition-opacity group-hover:opacity-100"
+              >
+                <IconRefresh size={12} />
+              </button>
+            )}
+          </div>
         </div>
       )}
       {/* 文件卡片放在文字之后：先说话后发文件，如同聊天里收到附件 */}

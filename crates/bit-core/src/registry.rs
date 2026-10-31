@@ -50,7 +50,7 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         created_at: now.clone(),
         enabled: true,
     };
-    vec![
+    let mut list = vec![
         // 1. 命令行
         mk(
             "builtin.shell",
@@ -413,7 +413,30 @@ pub fn builtin_tools() -> Vec<ToolDef> {
             }),
             "ask_user",
         ),
-    ]
+    ];
+    // 8. schedule_task：为待办设置/清除计划执行时间（到点唤回会话执行）。
+    // 单独构造：mk 闭包恒 enabled:true，而本工具默认关闭——不进提示词节约上下文，
+    // 用户在工具页开启后由 set_enabled 持久化，重启后沿用磁盘状态（见 state.rs 合并逻辑）。
+    list.push(ToolDef {
+        id: "builtin.schedule_task".into(),
+        name: "schedule_task".into(),
+        description: "为待办设置/清除计划执行时间（到点唤回会话执行）".into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": { "type": "string", "enum": ["set", "clear"] },
+                "todo_id": { "type": "string" },
+                "scheduled_at": { "type": "string", "description": "计划执行时间，格式 YYYY-MM-DD HH:MM（本地时间），可选" },
+                "schedule": { "type": "string", "description": "重复规则，如 every 30m / daily 9:00，可选" }
+            },
+            "required": ["action", "todo_id"]
+        }),
+        kind: ToolKind::Builtin { handler: "schedule_task".into() },
+        created_by: "system".into(),
+        created_at: now.clone(),
+        enabled: false, // 默认关闭：按需开启，节约常驻上下文
+    });
+    list
 }
 
 /// 注册新工具。name 唯一；Remote 需要回调 URL。
@@ -679,6 +702,11 @@ mod relax_tests {
 pub fn reload_custom_tools(ctx: &Arc<crate::state::Ctx>) {
     let disk: Vec<ToolDef> = crate::store::get_json(&ctx.db.lock().unwrap(), "tools")
         .unwrap_or_default();
+    // 内置工具重建前先记下磁盘上的用户开关状态（按 name 对齐），
+    // 重建后沿用：用户关过的保持关、开过的保持开；磁盘没有的内置工具用代码默认值
+    // （新装的 schedule_task 默认关，其余内置默认开）。否则重启/刷新会把开关打回代码值。
+    let prev_enabled: std::collections::HashMap<String, bool> =
+        disk.iter().map(|t| (t.name.clone(), t.enabled)).collect();
     let builtin = builtin_tools();
     let builtin_names: std::collections::HashSet<String> =
         builtin.iter().map(|t| t.name.clone()).collect();
@@ -687,6 +715,11 @@ pub fn reload_custom_tools(ctx: &Arc<crate::state::Ctx>) {
         .filter(|t| !matches!(t.kind, ToolKind::Builtin { .. }) && !builtin_names.contains(&t.name))
         .collect();
     let mut merged = builtin;
+    for t in merged.iter_mut() {
+        if let Some(&en) = prev_enabled.get(&t.name) {
+            t.enabled = en;
+        }
+    }
     merged.extend(custom);
     *ctx.tools.lock().unwrap() = merged;
 }
@@ -1370,6 +1403,15 @@ async fn builtin_invoke(
             let written = crate::goal::rewrite_todos(ctx, goal_id, &items, actor, session)?;
             Ok(serde_json::json!({ "written": written }))
         }
+        // ── 3.7 设置/清除待办计划执行时间（默认关闭的子工具；invoke 入口已拦 disabled，无需 tool_gate）──
+        "schedule_task" => {
+            let action = params.get("action").and_then(|v| v.as_str()).ok_or("Missing parameter: action")?;
+            let todo_id = params.get("todo_id").and_then(|v| v.as_str()).ok_or("Missing parameter: todo_id")?;
+            let scheduled_at = params.get("scheduled_at").and_then(|v| v.as_str());
+            let schedule = params.get("schedule").and_then(|v| v.as_str());
+            let detail = crate::goal::schedule_task_set(ctx, todo_id, action, scheduled_at, schedule)?;
+            Ok(serde_json::json!({ "ok": true, "detail": detail }))
+        }
         // ── 4. edit：增量补丁（old_string 精确匹配 或 start_line/end_line 行范围）──
         "edit" => {
             let path_raw = params.get("path").and_then(|v| v.as_str()).ok_or("缺少参数 path")?;
@@ -1760,5 +1802,37 @@ async fn builtin_invoke(
             }
         }
         other => Err(format!("Unknown builtin handler `{other}`")),
+    }
+}
+
+#[cfg(test)]
+mod schedule_task_tests {
+    use super::*;
+
+    /// schedule_task 必须出厂关闭（不进系统提示词，节约上下文），且注册在内置工具表中
+    #[test]
+    fn schedule_task_defaults_disabled_and_registered() {
+        let list = builtin_tools();
+        let t = list
+            .iter()
+            .find(|t| t.name == "schedule_task")
+            .expect("schedule_task 应注册在内置工具表");
+        assert!(!t.enabled, "schedule_task 出厂必须默认关闭");
+        // schema 关键约束：action/todo_id 必填，action 限 set/clear
+        assert_eq!(t.parameters["required"], serde_json::json!(["action", "todo_id"]));
+        assert_eq!(
+            t.parameters["properties"]["action"]["enum"],
+            serde_json::json!(["set", "clear"])
+        );
+        // 默认关闭 → 不注入提示词（tool_visible 只认 enabled，无闸门字段干扰）
+        let cfg = crate::config::Config::default();
+        assert!(
+            !crate::ai::tool_visible(&cfg, t),
+            "默认关闭的 schedule_task 不应出现在提示词工具清单"
+        );
+        // 用户开启后即可见（工具页开关语义）
+        let mut on = t.clone();
+        on.enabled = true;
+        assert!(crate::ai::tool_visible(&cfg, &on));
     }
 }

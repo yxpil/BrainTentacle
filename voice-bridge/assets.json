@@ -1,0 +1,1235 @@
+{
+  "models": {
+    "int8": {
+      "name": "model.int8.onnx",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+      "bytes": 239233841,
+      "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+    },
+    "fp32": {
+      "name": "model.onnx",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.onnx",
+      "bytes": 937617178,
+      "sha256": "977016bd9c79f9eb343430b5cc305e07ab64d5212dff41b0dcfa1694bee9a8cb"
+    }
+  },
+  "variants": {
+    "sense-voice": {
+      "label": "SenseVoice（中/英/日/韩/粤，推荐）",
+      "dir": "sense-voice",
+      "engine": "senseVoice",
+      "languages": [
+        "auto",
+        "zh",
+        "en",
+        "yue",
+        "ja",
+        "ko"
+      ],
+      "files": [
+        {
+          "name": "model.int8.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master/model.int8.onnx",
+          "bytes": 239233841
+        },
+        {
+          "name": "tokens.txt",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master/tokens.txt",
+          "bytes": 315894
+        },
+        {
+          "name": "silero_vad.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/silero-vad/resolve/master/silero_vad.onnx",
+          "bytes": 2327524
+        }
+      ]
+    },
+    "paraformer-zh": {
+      "label": "Paraformer 中文（ModelScope）",
+      "dir": "paraformer-zh",
+      "engine": "paraformer",
+      "languages": [
+        "auto",
+        "zh"
+      ],
+      "files": [
+        {
+          "name": "model.int8.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-paraformer-zh/resolve/master/model.int8.onnx",
+          "bytes": 227330205
+        },
+        {
+          "name": "tokens.txt",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-paraformer-zh/resolve/master/tokens.txt",
+          "bytes": 75354
+        },
+        {
+          "name": "silero_vad.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/silero-vad/resolve/master/silero_vad.onnx",
+          "bytes": 2327524
+        }
+      ]
+    },
+    "whisper-tiny": {
+      "label": "Whisper tiny 多语（99MB）",
+      "dir": "whisper-tiny",
+      "engine": "whisper",
+      "languages": [
+        "auto",
+        "zh",
+        "en",
+        "ja",
+        "ko",
+        "yue"
+      ],
+      "files": [
+        {
+          "name": "encoder.int8.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-whisper-tiny/resolve/master/tiny-encoder.int8.onnx",
+          "bytes": 12937772
+        },
+        {
+          "name": "decoder.int8.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-whisper-tiny/resolve/master/tiny-decoder.int8.onnx",
+          "bytes": 89855401
+        },
+        {
+          "name": "tokens.txt",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-whisper-tiny/resolve/master/tiny-tokens.txt",
+          "bytes": 816730
+        },
+        {
+          "name": "silero_vad.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/silero-vad/resolve/master/silero_vad.onnx",
+          "bytes": 2327524
+        }
+      ]
+    },
+    "zipformer-zh-en": {
+      "label": "Zipformer 流式中英双语（189MB）",
+      "dir": "zipformer-zh-en",
+      "engine": "transducer",
+      "languages": [
+        "auto",
+        "zh",
+        "en"
+      ],
+      "files": [
+        {
+          "name": "encoder.int8.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-streaming-zipformer-bilingual-zh-en/resolve/master/encoder-epoch-99-avg-1.int8.onnx",
+          "bytes": 181895032
+        },
+        {
+          "name": "decoder.int8.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-streaming-zipformer-bilingual-zh-en/resolve/master/decoder-epoch-99-avg-1.int8.onnx",
+          "bytes": 13091040
+        },
+        {
+          "name": "joiner.int8.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-streaming-zipformer-bilingual-zh-en/resolve/master/joiner-epoch-99-avg-1.int8.onnx",
+          "bytes": 3228404
+        },
+        {
+          "name": "tokens.txt",
+          "url": "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-streaming-zipformer-bilingual-zh-en/resolve/master/tokens.txt",
+          "bytes": 56317
+        },
+        {
+          "name": "silero_vad.onnx",
+          "url": "https://www.modelscope.cn/models/pengzhendong/silero-vad/resolve/master/silero_vad.onnx",
+          "bytes": 2327524
+        }
+      ]
+    }
+  },
+  "tokens": {
+    "name": "tokens.txt",
+    "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+    "bytes": 315894,
+    "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+  },
+  "vad": {
+    "name": "silero_vad.onnx",
+    "url": "https://huggingface.co/csukuangfj/vad/resolve/fba88cd2e921609e7675c3aaf51e0b9b295da4bc/silero_vad.onnx",
+    "bytes": 1807522,
+    "sha256": "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28"
+  },
+  "tts": {
+    "engines": {
+      "supertonic": {
+        "label": "Supertonic 3（官方 int8，31 语种）",
+        "languages": [
+          "en",
+          "ko",
+          "ja",
+          "ar",
+          "bg",
+          "cs",
+          "da",
+          "de",
+          "el",
+          "es",
+          "et",
+          "fi",
+          "fr",
+          "hi",
+          "hr",
+          "hu",
+          "id",
+          "it",
+          "lt",
+          "lv",
+          "nl",
+          "pl",
+          "pt",
+          "ro",
+          "ru",
+          "sk",
+          "sl",
+          "sv",
+          "tr",
+          "uk",
+          "vi"
+        ],
+        "note": "31 语种，不含中文；voice.bin 共 10 个音色（sid 0-9）",
+        "archive": {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2",
+          "bytes": 128774318,
+          "sha256": "82fa96f91c4ef8abaae3a14a3f4153facf88bed821d1f7331cec2700f432c427"
+        },
+        "files": [
+          {
+            "name": "duration_predictor.int8.onnx",
+            "inner": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11/duration_predictor.int8.onnx",
+            "bytes": 3700147,
+            "sha256": "c3eb91414d5ff8a7a239b7fe9e34e7e2bf8a8140d8375ffb14718b1c639325db"
+          },
+          {
+            "name": "text_encoder.int8.onnx",
+            "inner": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11/text_encoder.int8.onnx",
+            "bytes": 36416150,
+            "sha256": "c7befd5ea8c3119769e8a6c1486c4edc6a3bc8365c67621c881bbb774b9902ff"
+          },
+          {
+            "name": "vector_estimator.int8.onnx",
+            "inner": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11/vector_estimator.int8.onnx",
+            "bytes": 78400833,
+            "sha256": "20cd86fa5c6effedfda0e7cffe5b0569ca401c440a0c3a1d72bf39286c0db3fd"
+          },
+          {
+            "name": "vocoder.int8.onnx",
+            "inner": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11/vocoder.int8.onnx",
+            "bytes": 25991073,
+            "sha256": "e923d60f53f95eb1ce235f1dc33ec56d9c057823c96fa6f8acf98f32b0da6152"
+          },
+          {
+            "name": "tts.json",
+            "inner": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11/tts.json",
+            "bytes": 8253,
+            "sha256": "42078d3aef1cd43ab43021f3c54f47d2d75ceb4e75f627f118890128b06a0d09"
+          },
+          {
+            "name": "unicode_indexer.bin",
+            "inner": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11/unicode_indexer.bin",
+            "bytes": 262144,
+            "sha256": "8402ca48e5189a8950138580b0fff64db6f072f24ac07cd54ba8b2fbb9883b30"
+          },
+          {
+            "name": "voice.bin",
+            "inner": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11/voice.bin",
+            "bytes": 517168,
+            "sha256": "67d5209b0ee8ce6c74105ffbe12fe6a7628aea3b4ba2fcb308a4a67938a93ce8"
+          }
+        ],
+        "args": [
+          {
+            "flag": "--supertonic-duration-predictor",
+            "file": "duration_predictor.int8.onnx"
+          },
+          {
+            "flag": "--supertonic-text-encoder",
+            "file": "text_encoder.int8.onnx"
+          },
+          {
+            "flag": "--supertonic-vector-estimator",
+            "file": "vector_estimator.int8.onnx"
+          },
+          {
+            "flag": "--supertonic-vocoder",
+            "file": "vocoder.int8.onnx"
+          },
+          {
+            "flag": "--supertonic-tts-json",
+            "file": "tts.json"
+          },
+          {
+            "flag": "--supertonic-unicode-indexer",
+            "file": "unicode_indexer.bin"
+          },
+          {
+            "flag": "--supertonic-voice-style",
+            "file": "voice.bin"
+          }
+        ],
+        "speed_flag": "--speed",
+        "tunables": [
+          {
+            "key": "lang",
+            "flag": "--lang",
+            "type": "select",
+            "options": [
+              "en",
+              "ko",
+              "ja",
+              "ar",
+              "bg",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "es",
+              "et",
+              "fi",
+              "fr",
+              "hi",
+              "hr",
+              "hu",
+              "id",
+              "it",
+              "lt",
+              "lv",
+              "nl",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sl",
+              "sv",
+              "tr",
+              "uk",
+              "vi"
+            ],
+            "default": "en",
+            "label": "语言"
+          },
+          {
+            "key": "num-steps",
+            "flag": "--num-steps",
+            "type": "range",
+            "min": 1,
+            "max": 16,
+            "step": 1,
+            "default": 8,
+            "label": "质量步数（越大越慢越稳）"
+          },
+          {
+            "key": "sid",
+            "flag": "--sid",
+            "type": "range",
+            "min": 0,
+            "max": 9,
+            "step": 1,
+            "default": 0,
+            "label": "音色（sid 0-9）"
+          },
+          {
+            "key": "silence-scale",
+            "flag": "--tts-silence-scale",
+            "type": "range",
+            "min": 0.01,
+            "max": 10,
+            "step": 0.01,
+            "default": 0.2,
+            "label": "停顿缩放"
+          },
+          {
+            "key": "num-threads",
+            "flag": "--num-threads",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "default": 1,
+            "label": "线程数"
+          }
+        ]
+      },
+      "kitten": {
+        "label": "KittenTTS nano v0.8（int8，英文）",
+        "languages": [
+          "en"
+        ],
+        "note": "8 个音色（sid 0-7），依赖共享 lexicon-en-us.txt",
+        "archive": {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kitten-nano-en-v0_8-int8.tar.bz2",
+          "bytes": 31220690,
+          "sha256": "6fa5be852612ce761094ba74ee6123b4fc4acfefa79bf64dc63acae4a83af2fd"
+        },
+        "files": [
+          {
+            "name": "model.int8.onnx",
+            "inner": "kitten-nano-en-v0_8-int8/model.int8.onnx",
+            "bytes": 24370878,
+            "sha256": "0ba1e21eda9c8bcc4a70ada7e0d27fefc9ba775aaa037547248ec71f9a3d9b7d"
+          },
+          {
+            "name": "voices.bin",
+            "inner": "kitten-nano-en-v0_8-int8/voices.bin",
+            "bytes": 3276800,
+            "sha256": "d520519c4a3519d44fcfcd943ed0b1e3c5da5cee0eea501d922fac1a93cd24dc"
+          },
+          {
+            "name": "tokens.txt",
+            "inner": "kitten-nano-en-v0_8-int8/tokens.txt",
+            "bytes": 1064,
+            "sha256": "934a4188addc7665dd3410256bb622169242357fbb99d840d9351209b486dabb"
+          },
+          {
+            "name": "lexicon-en-us.txt",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt",
+            "bytes": 6305773,
+            "sha256": "8b67ae549a465eee78f92ecb74644ad90c3c58ce65f19c68baf85878a10ef73a"
+          }
+        ],
+        "args": [
+          {
+            "flag": "--kitten-model",
+            "file": "model.int8.onnx"
+          },
+          {
+            "flag": "--kitten-voices",
+            "file": "voices.bin"
+          },
+          {
+            "flag": "--kitten-tokens",
+            "file": "tokens.txt"
+          },
+          {
+            "flag": "--kitten-lexicon",
+            "file": "lexicon-en-us.txt"
+          }
+        ],
+        "speed_flag": "--kitten-length-scale",
+        "tunables": [
+          {
+            "key": "length-scale",
+            "flag": "--kitten-length-scale",
+            "type": "range",
+            "min": 0.5,
+            "max": 2,
+            "step": 0.05,
+            "default": 1,
+            "label": "语速（越小越快）"
+          },
+          {
+            "key": "sid",
+            "flag": "--sid",
+            "type": "range",
+            "min": 0,
+            "max": 7,
+            "step": 1,
+            "default": 0,
+            "label": "音色（sid 0-7）"
+          },
+          {
+            "key": "silence-scale",
+            "flag": "--tts-silence-scale",
+            "type": "range",
+            "min": 0.01,
+            "max": 10,
+            "step": 0.01,
+            "default": 0.2,
+            "label": "停顿缩放"
+          },
+          {
+            "key": "num-threads",
+            "flag": "--num-threads",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "default": 1,
+            "label": "线程数"
+          }
+        ]
+      },
+      "matcha": {
+        "label": "matcha-icefall-zh-baker（中文）",
+        "languages": [
+          "zh"
+        ],
+        "note": "中文女声单说话人；vocoder 为 vocos-22khz-univ.onnx",
+        "archive": {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-baker.tar.bz2",
+          "bytes": 75463556,
+          "sha256": "8da2e113b85dfea37b11bcdc994506aa86b584ee3348c2065271fb6f75cb83b8"
+        },
+        "files": [
+          {
+            "name": "model-steps-3.onnx",
+            "inner": "matcha-icefall-zh-baker/model-steps-3.onnx",
+            "bytes": 75624188,
+            "sha256": "78a9fd17e9a6c20198dca4e69d18f941303f8ab39ec61dde04cfc7595262ddfd"
+          },
+          {
+            "name": "lexicon.txt",
+            "inner": "matcha-icefall-zh-baker/lexicon.txt",
+            "bytes": 1363705,
+            "sha256": "38b886d46aefa50da6322a64d72fd595d5f4fae1051adb160d647541b1e0a4a2"
+          },
+          {
+            "name": "tokens.txt",
+            "inner": "matcha-icefall-zh-baker/tokens.txt",
+            "bytes": 19591,
+            "sha256": "56209b2bf609d5ac1d66ede6dae7bf5254bd3f8aa24c4a6823713d5b884d87ba"
+          },
+          {
+            "name": "date.fst",
+            "inner": "matcha-icefall-zh-baker/date.fst",
+            "bytes": 59154,
+            "sha256": "eb8aa079ae3cb81d8f4404992f39d61a0cb990947512b5b8d1e54d1f6980e718"
+          },
+          {
+            "name": "number.fst",
+            "inner": "matcha-icefall-zh-baker/number.fst",
+            "bytes": 64482,
+            "sha256": "743f402181fcfebf76cc2f0546b71fa26476e626fbe4e460fb7b4c3a7a8bd5bd"
+          },
+          {
+            "name": "phone.fst",
+            "inner": "matcha-icefall-zh-baker/phone.fst",
+            "bytes": 88630,
+            "sha256": "1ac2b6fa56b1442320c4de7db08353bab8963a2b57f365eebcdd3a2d3562f8d7"
+          },
+          {
+            "name": "vocos-22khz-univ.onnx",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-22khz-univ.onnx",
+            "bytes": 53884024,
+            "sha256": "0574a135aa1db2de6e181050db2ec528496cacd4a4701fc5d7faf9f9804c0081"
+          }
+        ],
+        "args": [
+          {
+            "flag": "--matcha-acoustic-model",
+            "file": "model-steps-3.onnx"
+          },
+          {
+            "flag": "--matcha-vocoder",
+            "file": "vocos-22khz-univ.onnx"
+          },
+          {
+            "flag": "--matcha-lexicon",
+            "file": "lexicon.txt"
+          },
+          {
+            "flag": "--matcha-tokens",
+            "file": "tokens.txt"
+          },
+          {
+            "flag": "--tts-rule-fsts",
+            "files": [
+              "date.fst",
+              "number.fst",
+              "phone.fst"
+            ],
+            "join": ","
+          }
+        ],
+        "speed_flag": "--matcha-length-scale",
+        "tunables": [
+          {
+            "key": "length-scale",
+            "flag": "--matcha-length-scale",
+            "type": "range",
+            "min": 0.5,
+            "max": 2,
+            "step": 0.05,
+            "default": 1,
+            "label": "语速（越小越快）"
+          },
+          {
+            "key": "noise-scale",
+            "flag": "--matcha-noise-scale",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.05,
+            "default": 1,
+            "label": "随机度（音色抖动）"
+          },
+          {
+            "key": "silence-scale",
+            "flag": "--tts-silence-scale",
+            "type": "range",
+            "min": 0.01,
+            "max": 10,
+            "step": 0.01,
+            "default": 0.2,
+            "label": "停顿缩放"
+          },
+          {
+            "key": "num-threads",
+            "flag": "--num-threads",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "default": 1,
+            "label": "线程数"
+          }
+        ]
+      },
+      "zipvoice": {
+        "label": "ZipVoice distill（中英，零样本音色克隆）",
+        "languages": [
+          "zh",
+          "en"
+        ],
+        "note": "需要参考音频 + 参考文本；vocoder 为 vocos_24khz.onnx（文件名/体积待下载后复核）",
+        "archive": {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2",
+          "bytes": 109162785,
+          "sha256": ""
+        },
+        "files": [
+          {
+            "name": "encoder.int8.onnx",
+            "inner": "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/encoder.int8.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "decoder.int8.onnx",
+            "inner": "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/decoder.int8.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "lexicon.txt",
+            "inner": "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/lexicon.txt",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "tokens.txt",
+            "inner": "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/tokens.txt",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "test_wavs/leijun-1.wav",
+            "inner": "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/test_wavs/leijun-1.wav",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "vocos_24khz.onnx",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx",
+            "bytes": 54157409,
+            "sha256": "bcb3b970e384161c4d634f0bb9e999ff1c471b34c9bc0b1049a5014065ed3cc0"
+          },
+          {
+            "name": "lexicon-en-us.txt",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt",
+            "bytes": 6305773,
+            "sha256": "8b67ae549a465eee78f92ecb74644ad90c3c58ce65f19c68baf85878a10ef73a"
+          }
+        ],
+        "args": [
+          {
+            "flag": "--zipvoice-encoder",
+            "file": "encoder.int8.onnx"
+          },
+          {
+            "flag": "--zipvoice-decoder",
+            "file": "decoder.int8.onnx"
+          },
+          {
+            "flag": "--zipvoice-lexicon",
+            "files": [
+              "lexicon.txt",
+              "lexicon-en-us.txt"
+            ],
+            "join": ","
+          },
+          {
+            "flag": "--zipvoice-tokens",
+            "file": "tokens.txt"
+          },
+          {
+            "flag": "--zipvoice-vocoder",
+            "file": "vocos_24khz.onnx"
+          }
+        ],
+        "speed_flag": "--speed",
+        "tunables": [
+          {
+            "key": "num-steps",
+            "flag": "--num-steps",
+            "type": "range",
+            "min": 1,
+            "max": 16,
+            "step": 1,
+            "default": 4,
+            "label": "质量步数"
+          },
+          {
+            "key": "guidance-scale",
+            "flag": "--zipvoice-guidance-scale",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 0.1,
+            "default": 1,
+            "label": "CFG 引导强度"
+          },
+          {
+            "key": "t-shift",
+            "flag": "--zipvoice-t-shift",
+            "type": "range",
+            "min": 0.1,
+            "max": 1,
+            "step": 0.05,
+            "default": 0.5,
+            "label": "时间步偏移"
+          },
+          {
+            "key": "target-rms",
+            "flag": "--zipvoice-target-rms",
+            "type": "range",
+            "min": 0.01,
+            "max": 1,
+            "step": 0.01,
+            "default": 0.1,
+            "label": "目标音量 RMS"
+          },
+          {
+            "key": "reference-audio",
+            "flag": "--reference-audio",
+            "type": "text",
+            "default": "test_wavs/leijun-1.wav",
+            "label": "参考音频（音色克隆，可填本地路径）"
+          },
+          {
+            "key": "reference-text",
+            "flag": "--reference-text",
+            "type": "text",
+            "default": "那还是三十六年前, 一九八七年. 我呢考上了武汉大学的计算机系.",
+            "label": "参考文本（须与音频逐字一致）"
+          },
+          {
+            "key": "silence-scale",
+            "flag": "--tts-silence-scale",
+            "type": "range",
+            "min": 0.01,
+            "max": 10,
+            "step": 0.01,
+            "default": 0.2,
+            "label": "停顿缩放"
+          },
+          {
+            "key": "num-threads",
+            "flag": "--num-threads",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "default": 1,
+            "label": "线程数"
+          }
+        ]
+      },
+      "pocket": {
+        "label": "Pocket TTS int8（英文，零样本音色克隆）",
+        "languages": [
+          "en"
+        ],
+        "note": "需要参考音频（无需参考文本）；文件清单按官方示例，待下载后复核",
+        "archive": {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2",
+          "bytes": 98336520,
+          "sha256": ""
+        },
+        "files": [
+          {
+            "name": "lm_flow.int8.onnx",
+            "inner": "sherpa-onnx-pocket-tts-int8-2026-01-26/lm_flow.int8.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "lm_main.int8.onnx",
+            "inner": "sherpa-onnx-pocket-tts-int8-2026-01-26/lm_main.int8.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "encoder.onnx",
+            "inner": "sherpa-onnx-pocket-tts-int8-2026-01-26/encoder.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "decoder.int8.onnx",
+            "inner": "sherpa-onnx-pocket-tts-int8-2026-01-26/decoder.int8.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "text_conditioner.onnx",
+            "inner": "sherpa-onnx-pocket-tts-int8-2026-01-26/text_conditioner.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "vocab.json",
+            "inner": "sherpa-onnx-pocket-tts-int8-2026-01-26/vocab.json",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "token_scores.json",
+            "inner": "sherpa-onnx-pocket-tts-int8-2026-01-26/token_scores.json",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "test_wavs/bria.wav",
+            "inner": "sherpa-onnx-pocket-tts-int8-2026-01-26/test_wavs/bria.wav",
+            "bytes": 0,
+            "sha256": ""
+          }
+        ],
+        "args": [
+          {
+            "flag": "--pocket-lm-flow",
+            "file": "lm_flow.int8.onnx"
+          },
+          {
+            "flag": "--pocket-lm-main",
+            "file": "lm_main.int8.onnx"
+          },
+          {
+            "flag": "--pocket-encoder",
+            "file": "encoder.onnx"
+          },
+          {
+            "flag": "--pocket-decoder",
+            "file": "decoder.int8.onnx"
+          },
+          {
+            "flag": "--pocket-text-conditioner",
+            "file": "text_conditioner.onnx"
+          },
+          {
+            "flag": "--pocket-vocab-json",
+            "file": "vocab.json"
+          },
+          {
+            "flag": "--pocket-token-scores-json",
+            "file": "token_scores.json"
+          }
+        ],
+        "speed_flag": "--speed",
+        "tunables": [
+          {
+            "key": "num-steps",
+            "flag": "--num-steps",
+            "type": "range",
+            "min": 1,
+            "max": 16,
+            "step": 1,
+            "default": 2,
+            "label": "质量步数"
+          },
+          {
+            "key": "reference-audio",
+            "flag": "--reference-audio",
+            "type": "text",
+            "default": "test_wavs/bria.wav",
+            "label": "参考音频（音色克隆，可填本地路径）"
+          },
+          {
+            "key": "silence-scale",
+            "flag": "--tts-silence-scale",
+            "type": "range",
+            "min": 0.01,
+            "max": 10,
+            "step": 0.01,
+            "default": 0.2,
+            "label": "停顿缩放"
+          },
+          {
+            "key": "num-threads",
+            "flag": "--num-threads",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "default": 1,
+            "label": "线程数"
+          }
+        ]
+      },
+      "kokoro": {
+        "label": "Kokoro int8 en v0.19（英文，11 音色）",
+        "languages": [
+          "en"
+        ],
+        "note": "Apache-2.0；v0.19 共 11 音色（sid 0-10）；归档内文件名/体积待下载后复核",
+        "archive": {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-en-v0_19.tar.bz2",
+          "bytes": 103248205,
+          "sha256": ""
+        },
+        "files": [
+          {
+            "name": "model.int8.onnx",
+            "inner": "kokoro-int8-en-v0_19/model.int8.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "voices.bin",
+            "inner": "kokoro-int8-en-v0_19/voices.bin",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "tokens.txt",
+            "inner": "kokoro-int8-en-v0_19/tokens.txt",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "lexicon-en-us.txt",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt",
+            "bytes": 6305773,
+            "sha256": "8b67ae549a465eee78f92ecb74644ad90c3c58ce65f19c68baf85878a10ef73a"
+          }
+        ],
+        "args": [
+          {
+            "flag": "--kokoro-model",
+            "file": "model.int8.onnx"
+          },
+          {
+            "flag": "--kokoro-voices",
+            "file": "voices.bin"
+          },
+          {
+            "flag": "--kokoro-tokens",
+            "file": "tokens.txt"
+          },
+          {
+            "flag": "--kokoro-lexicon",
+            "file": "lexicon-en-us.txt"
+          }
+        ],
+        "speed_flag": "--kokoro-length-scale",
+        "tunables": [
+          {
+            "key": "length-scale",
+            "flag": "--kokoro-length-scale",
+            "type": "range",
+            "min": 0.5,
+            "max": 2,
+            "step": 0.05,
+            "default": 1,
+            "label": "语速（越小越快）"
+          },
+          {
+            "key": "lang",
+            "flag": "--kokoro-lang",
+            "type": "select",
+            "options": [
+              "en",
+              "es",
+              "fr",
+              "hi",
+              "it",
+              "pt-br"
+            ],
+            "default": "en",
+            "label": "语言（仅 v1.x 生效）"
+          },
+          {
+            "key": "sid",
+            "flag": "--sid",
+            "type": "range",
+            "min": 0,
+            "max": 10,
+            "step": 1,
+            "default": 0,
+            "label": "音色（sid 0-10）"
+          },
+          {
+            "key": "silence-scale",
+            "flag": "--tts-silence-scale",
+            "type": "range",
+            "min": 0.01,
+            "max": 10,
+            "step": 0.01,
+            "default": 0.2,
+            "label": "停顿缩放"
+          },
+          {
+            "key": "num-threads",
+            "flag": "--num-threads",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "default": 1,
+            "label": "线程数"
+          }
+        ]
+      },
+      "piper-zh": {
+        "label": "Piper zh_CN-huayan-medium（中文轻量）",
+        "languages": [
+          "zh"
+        ],
+        "note": "轻量中文女声；v2 需 lexicon（用 lexicon-zh-g2pw.txt）；归档内文件名/体积待下载后复核",
+        "archive": {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-zh_CN-huayan-medium.tar.bz2",
+          "bytes": 67255926,
+          "sha256": ""
+        },
+        "files": [
+          {
+            "name": "zh_CN-huayan-medium.onnx",
+            "inner": "vits-piper-zh_CN-huayan-medium/zh_CN-huayan-medium.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "tokens.txt",
+            "inner": "vits-piper-zh_CN-huayan-medium/tokens.txt",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "lexicon-zh-g2pw.txt",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-zh-g2pw.txt",
+            "bytes": 2064505,
+            "sha256": ""
+          }
+        ],
+        "args": [
+          {
+            "flag": "--vits-model",
+            "file": "zh_CN-huayan-medium.onnx"
+          },
+          {
+            "flag": "--vits-tokens",
+            "file": "tokens.txt"
+          },
+          {
+            "flag": "--vits-lexicon",
+            "file": "lexicon-zh-g2pw.txt"
+          }
+        ],
+        "speed_flag": "--vits-length-scale",
+        "tunables": [
+          {
+            "key": "length-scale",
+            "flag": "--vits-length-scale",
+            "type": "range",
+            "min": 0.5,
+            "max": 2,
+            "step": 0.05,
+            "default": 1,
+            "label": "语速（越小越快）"
+          },
+          {
+            "key": "noise-scale",
+            "flag": "--vits-noise-scale",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.05,
+            "default": 0.667,
+            "label": "随机度"
+          },
+          {
+            "key": "noise-scale-w",
+            "flag": "--vits-noise-scale-w",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.05,
+            "default": 0.8,
+            "label": "韵律随机度"
+          },
+          {
+            "key": "sid",
+            "flag": "--sid",
+            "type": "range",
+            "min": 0,
+            "max": 0,
+            "step": 1,
+            "default": 0,
+            "label": "音色（单说话人）"
+          },
+          {
+            "key": "silence-scale",
+            "flag": "--tts-silence-scale",
+            "type": "range",
+            "min": 0.01,
+            "max": 10,
+            "step": 0.01,
+            "default": 0.2,
+            "label": "停顿缩放"
+          },
+          {
+            "key": "num-threads",
+            "flag": "--num-threads",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "default": 1,
+            "label": "线程数"
+          }
+        ]
+      },
+      "piper-en": {
+        "label": "Piper en_US-amy-low（英文轻量）",
+        "languages": [
+          "en"
+        ],
+        "note": "轻量英文女声；v2 需 lexicon-en-us.txt；归档内文件名/体积待下载后复核",
+        "archive": {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-low.tar.bz2",
+          "bytes": 67095344,
+          "sha256": ""
+        },
+        "files": [
+          {
+            "name": "en_US-amy-low.onnx",
+            "inner": "vits-piper-en_US-amy-low/en_US-amy-low.onnx",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "tokens.txt",
+            "inner": "vits-piper-en_US-amy-low/tokens.txt",
+            "bytes": 0,
+            "sha256": ""
+          },
+          {
+            "name": "lexicon-en-us.txt",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt",
+            "bytes": 6305773,
+            "sha256": "8b67ae549a465eee78f92ecb74644ad90c3c58ce65f19c68baf85878a10ef73a"
+          }
+        ],
+        "args": [
+          {
+            "flag": "--vits-model",
+            "file": "en_US-amy-low.onnx"
+          },
+          {
+            "flag": "--vits-tokens",
+            "file": "tokens.txt"
+          },
+          {
+            "flag": "--vits-lexicon",
+            "file": "lexicon-en-us.txt"
+          }
+        ],
+        "speed_flag": "--vits-length-scale",
+        "tunables": [
+          {
+            "key": "length-scale",
+            "flag": "--vits-length-scale",
+            "type": "range",
+            "min": 0.5,
+            "max": 2,
+            "step": 0.05,
+            "default": 1,
+            "label": "语速（越小越快）"
+          },
+          {
+            "key": "noise-scale",
+            "flag": "--vits-noise-scale",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.05,
+            "default": 0.667,
+            "label": "随机度"
+          },
+          {
+            "key": "noise-scale-w",
+            "flag": "--vits-noise-scale-w",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.05,
+            "default": 0.8,
+            "label": "韵律随机度"
+          },
+          {
+            "key": "sid",
+            "flag": "--sid",
+            "type": "range",
+            "min": 0,
+            "max": 0,
+            "step": 1,
+            "default": 0,
+            "label": "音色（单说话人）"
+          },
+          {
+            "key": "silence-scale",
+            "flag": "--tts-silence-scale",
+            "type": "range",
+            "min": 0.01,
+            "max": 10,
+            "step": 0.01,
+            "default": 0.2,
+            "label": "停顿缩放"
+          },
+          {
+            "key": "num-threads",
+            "flag": "--num-threads",
+            "type": "range",
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "default": 1,
+            "label": "线程数"
+          }
+        ]
+      }
+    }
+  },
+  "kws": {
+    "label": "关键词唤醒（中文8词，5MB）",
+    "files": [
+      {
+        "name": "encoder.int8.onnx",
+        "url": "https://www.modelscope.cn/models/pkufool/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01/resolve/master/encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+        "bytes": 4807159
+      },
+      {
+        "name": "decoder.onnx",
+        "url": "https://www.modelscope.cn/models/pkufool/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01/resolve/master/decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+        "bytes": 181025
+      },
+      {
+        "name": "joiner.int8.onnx",
+        "url": "https://www.modelscope.cn/models/pkufool/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01/resolve/master/joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+        "bytes": 65208
+      },
+      {
+        "name": "tokens.txt",
+        "url": "https://www.modelscope.cn/models/pkufool/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01/resolve/master/tokens.txt",
+        "bytes": 1627
+      }
+    ]
+  }
+}

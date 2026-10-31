@@ -367,6 +367,15 @@ pub async fn dispatch(
             .await
         }
         "chat_interrupt" => bit_core::commands_api::chat_interrupt(ctx, a_str(&args, "session_id")?).await,
+        "regenerate_last" => {
+            bit_core::commands_api::regenerate_last(
+                ctx,
+                a_str(&args, "session_id")?,
+                a_str(&args, "event_name")?,
+                args.get("edit_text").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            )
+            .await
+        }
         "tool_approve" => bit_core::commands_api::tool_approve(ctx, a_str(&args, "id")?, a_bool(&args, "allow")?).await,
         "ask_answer" => bit_core::commands_api::ask_answer(ctx, a_str(&args, "id")?, a_str_vec(&args, "choices")?, a_str(&args, "supplement")?).await,
         "set_tool_approval" => bit_core::commands_api::set_tool_approval(ctx, a_str(&args, "mode")?).await,
@@ -413,7 +422,22 @@ pub async fn dispatch(
         "workwith_logs" => bit_core::commands_api::workwith_logs(a_str(&args, "id")?, opt_u64(&args, "tail")),
 
         // ---------- 会话 ----------
-        "compress_session" => bit_core::commands_api::compress_session(ctx, a_str(&args, "session_id")?).await,
+        "compress_session" => {
+            let provider = args.get("provider_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+            bit_core::commands_api::compress_session(ctx, a_str(&args, "session_id")?, provider).await
+        }
+        "compact_config_get" => bit_core::commands_api::compact_config_get(ctx),
+        "compact_config_set" => bit_core::commands_api::compact_config_set(
+            ctx,
+            a_bool(&args, "auto")?,
+            args.get("chars").and_then(|v| v.as_u64()),
+            args.get("provider").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        ),
+        "prompt_templates_get" => bit_core::commands_api::prompt_templates_get(ctx),
+        "prompt_templates_set" => bit_core::commands_api::prompt_templates_set(
+            ctx,
+            args.get("templates").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+        ),
         "list_sessions" => bit_core::commands_api::list_sessions(ctx),
         "get_session" => bit_core::commands_api::get_session(ctx, a_str(&args, "session_id")?),
         "create_session" => bit_core::commands_api::create_session(ctx, a_str(&args, "title")?),
@@ -499,6 +523,64 @@ pub async fn dispatch(
 
         // ---------- 更新 ----------
         "update_download" => bit_core::commands_api::update_download(ctx).await,
+
+        // ---------- DeepSeek Harness（dsh）插件兼容 ----------
+        "dsh_import_skills" => bit_core::api::dsh_import_skills(ctx),
+        "dsh_status" => bit_core::api::dsh_status(ctx),
+        "dsh_toggle_plugin" => {
+            bit_core::api::dsh_toggle_plugin(ctx, a_str(&args, "name")?, a_bool(&args, "enabled")?)
+        }
+        "dsh_setup_bridge" => bit_core::api::dsh_setup_bridge(ctx).await,
+
+        // ---------- 语音输入（多模型选一，本地离线识别） ----------
+        "voice_status" => bit_core::commands_api::voice_status(ctx),
+        "voice_select" => {
+            bit_core::commands_api::voice_select(ctx, a_str(&args, "variant")?.to_string())
+        }
+        "voice_prepare" => bit_core::commands_api::voice_prepare(ctx).await,
+        "voice_kws_set" => {
+            let score = args
+                .get("score")
+                .and_then(|v| v.as_f64());
+            let keywords = match args.get("keywords") {
+                Some(v) if !v.is_null() => Some(
+                    serde_json::from_value::<Vec<bit_core::voice::KwsWord>>(v.clone())
+                        .map_err(|e| format!("keywords 参数无效: {e}"))?,
+                ),
+                _ => None,
+            };
+            bit_core::commands_api::voice_kws_set(ctx, a_bool(&args, "enabled")?, score, keywords).await
+        }
+        "voice_kws_prepare" => bit_core::commands_api::voice_kws_prepare(ctx).await,
+        "voice_transcribe" => {
+            bit_core::commands_api::voice_transcribe(
+                ctx,
+                a_str(&args, "wav_base64")?,
+                opt_str(&args, "language"),
+            )
+            .await
+        }
+
+        // ---------- 语音合成（本地 sherpa CLI + 在线四家） ----------
+        "tts_status" => {
+            // 可选设置补丁：对象才透传（其余视为只查询）
+            let patch = arg(&args, "patch").cloned().filter(|v| v.is_object());
+            bit_core::commands_api::tts_status(ctx, patch)
+        }
+        "tts_prepare" => {
+            let engine = arg(&args, "engine")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            bit_core::commands_api::tts_prepare(ctx, engine).await
+        }
+        "tts_speak" => {
+            let opts = arg(&args, "opts").cloned().filter(|v| v.is_object());
+            bit_core::commands_api::tts_speak(ctx, a_str(&args, "text")?, opts).await
+        }
+        "tts_voices" => {
+            // 在线引擎音色列表（仅 EdgeTTS 动态拉取）
+            bit_core::commands_api::tts_voices(ctx, a_str(&args, "engine")?).await
+        }
 
         _ => Err(format!("未知命令: {cmd}")),
     }

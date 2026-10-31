@@ -1195,6 +1195,26 @@ pub async fn chat_turn_stream(
     event_name: &str,
     images: Vec<String>,
 ) -> Result<Vec<ChatMessage>, String> {
+    chat_turn_stream_inner(ctx, session_id, Some(user_input), event_name, images).await
+}
+
+/// 只跑回合不写 user 消息（重新生成 / 编辑重发用）：最后一条 user 消息已在历史里，
+/// 直接从现有历史跑一轮完整模型回合，流式事件与 chat_stream 同款。
+pub async fn respond_only_stream(
+    ctx: &Arc<Ctx>,
+    session_id: &str,
+    event_name: &str,
+) -> Result<Vec<ChatMessage>, String> {
+    chat_turn_stream_inner(ctx, session_id, None, event_name, Vec::new()).await
+}
+
+async fn chat_turn_stream_inner(
+    ctx: &Arc<Ctx>,
+    session_id: &str,
+    user_input: Option<&str>,
+    event_name: &str,
+    images: Vec<String>,
+) -> Result<Vec<ChatMessage>, String> {
     let ev = event_name.to_string();
     // 闭包专用克隆：emit 闭包长活（跨越整个回合），不能把主 ctx 移进去
     let emit_ctx = ctx.clone();
@@ -1218,27 +1238,29 @@ pub async fn chat_turn_stream(
     if first_turn {
         crate::workwith::ensure_auto_started(ctx);
     }
-    // 1) 追加用户消息
-    {
-        let mut store = ctx.sessions.lock().unwrap();
-        let sess = if session_id.is_empty() {
-            store.active_mut()
-        } else {
-            store.get_mut(session_id).ok_or("会话不存在")?
-        };
-        // 首条用户消息用于自动命名会话（仅当仍是默认标题：不覆盖 sub_agent 传入的标题与用户手动改名）
-        if sess.title.trim().is_empty() || sess.title == "新对话" {
-            let title: String = user_input.chars().take(20).collect();
-            sess.title = title.replace('\n', " ");
+    // 1) 追加用户消息（重生成路径 user_input=None：历史已就位，直接跑回合不写消息）
+    if let Some(ui) = user_input {
+        {
+            let mut store = ctx.sessions.lock().unwrap();
+            let sess = if session_id.is_empty() {
+                store.active_mut()
+            } else {
+                store.get_mut(session_id).ok_or("会话不存在")?
+            };
+            // 首条用户消息用于自动命名会话（仅当仍是默认标题：不覆盖 sub_agent 传入的标题与用户手动改名）
+            if sess.title.trim().is_empty() || sess.title == "新对话" {
+                let title: String = ui.chars().take(20).collect();
+                sess.title = title.replace('\n', " ");
+            }
+            sess.messages.push(ChatMessage::user(ui));
+            sess.touch();
+            if sess.messages.len() > CHAT_MAX {
+                let drop_n = sess.messages.len() - CHAT_MAX;
+                sess.messages.drain(0..drop_n);
+            }
         }
-        sess.messages.push(ChatMessage::user(user_input));
-        sess.touch();
-        if sess.messages.len() > CHAT_MAX {
-            let drop_n = sess.messages.len() - CHAT_MAX;
-            sess.messages.drain(0..drop_n);
-        }
+        crate::session::persist(ctx);
     }
-    crate::session::persist(ctx);
 
     let iflag = register_interrupt(ctx, &target);
 

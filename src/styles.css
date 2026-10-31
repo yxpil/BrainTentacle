@@ -431,7 +431,7 @@ div.fixed.inset-0 > .card {
 .dark #root::before {
   background-color: var(--look-bg-color-dark, transparent);
 }
-/* 半透明黑遮罩，确保背景图上的文字可读 */
+/* 可调黑纱（默认 0 = 原图原色）：外观页「遮罩浓度」控制，背景图过亮影响文字可读时再调 */
 #root::after {
   content: "";
   position: fixed;
@@ -441,10 +441,7 @@ div.fixed.inset-0 > .card {
   pointer-events: none;
 }
 html.has-bg-image #root::after {
-  background: rgba(0, 0, 0, 0.35);
-}
-html.dark.has-bg-image #root::after {
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, var(--look-bg-scrim, 0));
 }
 
 /* ========== 输入框 / 聊天框专属背景（图片 + 独立透明度） ========== */

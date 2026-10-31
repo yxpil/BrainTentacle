@@ -111,6 +111,31 @@ export const api = {
     invoke("list_provider_models", { protocol, baseUrl: base_url, apiKey: api_key }),
   chat: (session_id, message, images) =>
     invoke("chat", { sessionId: session_id, message, images: images || null }),
+  // 重新生成 / 编辑重发：删尾 assistant（edit_text 非空时先改写最后一条 user），只跑模型回合。
+  // 流式事件与 chat_stream 同款；返回最终完整消息列表
+  regenerateStream: async (session_id, event_name, onEvent, edit_text) => {
+    const ev = event_name || `regen-${Date.now()}`;
+    const unlisten = await listen(ev, (e) => onEvent?.(e.payload));
+    try {
+      return await invoke("regenerate_last", {
+        sessionId: session_id,
+        eventName: ev,
+        editText: edit_text ?? null,
+      });
+    } finally {
+      unlisten();
+    }
+  },
+  // 提示词模板：[{id,title,text}]；get 未保存过时返回内置默认，set 空数组=恢复默认
+  promptTemplatesGet: () => invoke("prompt_templates_get"),
+  promptTemplatesSet: (templates) => invoke("prompt_templates_set", { templates }),
+  // 应用级扩展快捷键（Electron 宿主拦截）：截图提问 / 全局语音听写（空串=关闭）
+  getAppHotkeys: () => invoke("get_app_hotkeys"),
+  // 聊天工具栏剪刀按钮：macOS screencapture 框选 → 剪贴板 → 挂输入框附件（Electron 专属）
+  screenshotRegion: () => invoke("screenshot_region"),
+  setAppHotkeys: (screenshot, voice) => invoke("set_app_hotkeys", { screenshot: screenshot ?? null, voice: voice ?? null }),
+  // 全局语音转写结果粘贴回原前台应用（macOS osascript；需辅助功能权限）
+  pasteTextToForeground: (text, bundleId) => invoke("paste_text_to_foreground", { text, bundleId: bundleId || null }),
   // 流式对话：过程通过 Tauri 事件 event_name 推送增量，onEvent 收到 {type, ...} payload。
   // images 为可选的图片 base64 data URL 数组，仅随当前用户轮发给多模态模型。
   // 返回一个 Promise，resolve 为最终完整消息列表；调用方应先订阅事件再 await。
@@ -139,7 +164,10 @@ export const api = {
   // 端口冲突检测：返回 { available, addr, reason? }
   checkPort: (host, port) => invoke("check_port", { host, port }),
   // 手动压缩会话：AI 总结全部历史为一条摘要，返回新消息列表
-  compressSession: (session_id) => invoke("compress_session", { sessionId: session_id || "" }),
+  // providerId: 指定压缩用模型 id（空 = 当前激活模型）；compact*：自动压缩配置
+  compressSession: (session_id, providerId) => invoke("compress_session", { sessionId: session_id || "", providerId: providerId || null }),
+  compactConfigGet: () => invoke("compact_config_get"),
+  compactConfigSet: (auto, chars, provider) => invoke("compact_config_set", { auto, chars: chars ?? null, provider: provider ?? null }),
 
   // ── MCP（Model Context Protocol）接入 ──
   mcpDiscover: (host, start, end) => invoke("mcp_discover", { host, start, end }),
@@ -150,6 +178,43 @@ export const api = {
   mcpToggle: (id, enabled) => invoke("mcp_toggle", { id, enabled }),
   mcpRemove: (id) => invoke("mcp_remove", { id }),
   mcpImport: (id) => invoke("mcp_import", { id }),
+
+  // ── DeepSeek Harness (dsh) 插件桥 ──
+  // 状态：插件列表 + MCP 桥注册情况 + 技能根目录
+  dshStatus: () => invoke("dsh_status"),
+  // 把 dsh 插件生态里的技能一键导入本机技能库
+  dshImportSkills: () => invoke("dsh_import_skills"),
+  // 启用桥接：确保目录存在 + 注册 MCP 桥，成功即代表插件工具可经 MCP 接入
+  dshSetupBridge: () => invoke("dsh_setup_bridge"),
+  // 单个 dsh 插件的启用 / 停用
+  dshTogglePlugin: (name, enabled) => invoke("dsh_toggle_plugin", { name, enabled }),
+
+  // ── 语音输入（多模型选一，本地离线识别）──
+  // 状态：当前模型 variant + 全变体清单（含就绪/体积）+ 下载进度（voice-progress 事件）+ 识别进程状态 + 错误
+  voiceStatus: () => invoke("voice_status"),
+  // 选择识别模型：写配置并热切换识别进程；未下载时返回状态（前端引导先下载）
+  voiceSelect: (variant) => invoke("voice_select", { variant }),
+  // 下载/校验离线识别模型到数据目录 voice/<variant>/（幂等，进度走 voice-progress 事件）
+  voicePrepare: () => invoke("voice_prepare"),
+  // 语音唤醒：开关/灵敏度（写配置并重建识别进程）；下载唤醒模型（幂等）
+  // keywords: [{word,pinyin}] 自定义唤醒词（null=不改，[]=清空回内置词表）
+  voiceKwsSet: (enabled, score, keywords) => invoke("voice_kws_set", { enabled, score: score ?? null, keywords: keywords ?? null }),
+  voiceKwsPrepare: () => invoke("voice_kws_prepare"),
+  // WAV（base64）转写 → { text, audioSeconds, inferenceSeconds}；language 可省略（auto/zh/en/yue/ja/ko）
+  voiceTranscribe: (wavBase64, language) =>
+    invoke("voice_transcribe", { wavBase64, language: language || null }),
+
+  // ── 语音合成（本地 sherpa 8 引擎 + 在线四家）──
+  // 状态：逐引擎就绪/体积/缺失文件 + key 配置 + 下载进度（tts-progress 事件）+ 错误。
+  // patch 可选：{engine, voice, speed, pitch, volume, extra, keys:{siliconflow, openai}}，传入即保存
+  ttsStatus: (patch) => invoke("tts_status", { patch: patch || null }),
+  // 准备引擎：本地引擎后台下载该引擎全部文件（幂等，进度走 tts-progress）；在线直接返回就绪
+  ttsPrepare: (engine) => invoke("tts_prepare", { engine }),
+  // 合成语音：text + opts {engine?, voice?, speed?, pitch?, volume?, extra?{...tunables}}
+  // → { audioBase64, sampleRate, format }（本地 wav / 在线 mp3）
+  ttsSpeak: (text, opts) => invoke("tts_speak", { text, opts: opts || null }),
+  // 在线引擎音色列表（仅 EdgeTTS）：{engine, groups:[{language, label, voices:[{name, label}]}]}
+  ttsVoices: (engine) => invoke("tts_voices", { engine: engine || "edge" }),
 
   // ── WorkWith 本地服务托管 ──
   listWorkwith: () => invoke("list_workwith"),
