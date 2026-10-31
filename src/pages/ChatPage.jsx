@@ -111,6 +111,31 @@ const bytesToBase64 = (bytes) => {
   return btoa(bin);
 };
 
+// 宿主系统判定（Electron UA 一定带平台串）：麦克风失败的成因和补救路径按系统不同，
+// 只报"检查系统权限"在三端都只是猜测
+const hostOs = () => {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+  if (/Windows NT/i.test(ua)) return "win";
+  if (/Macintosh|Mac OS X/i.test(ua)) return "mac";
+  return "linux";
+};
+
+// 麦克风错误 → 该平台可执行的下一步（DOMException.name 是唯一可靠的分类依据）
+const micErrText = (err, tt) => {
+  const name = String(err?.name || "");
+  const os = hostOs();
+  if (/NotAllowedError|PermissionDenied|SecurityError/i.test(name)) {
+    return tt(os === "mac" ? "chat.micDeniedMac" : os === "win" ? "chat.micDeniedWin" : "chat.micDeniedLinux");
+  }
+  if (/NotFoundError|DevicesNotFoundError/i.test(name)) return tt("chat.micNotFound");
+  if (/NotReadableError|TrackStartError|AbortError/i.test(name)) {
+    return tt(os === "linux" ? "chat.micBusyLinux" : os === "win" ? "chat.micBusyWin" : "chat.micBusyMac");
+  }
+  if (/OverconstrainedError/i.test(name)) return tt("chat.micOverconstrained");
+  const raw = err?.message || name || String(err);
+  return `${tt("chat.voiceMicError")}：${raw}`;
+};
+
 // ---------- 消息朗读（TTS 进聊天）----------
 // 模块级音频句柄：手动朗读与自动朗读共用，任何新朗读先停掉上一次
 let ttsAudio = null;
@@ -640,8 +665,8 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
       procRef.current = proc;
       setVoiceHint(null);
       setRecording(true);
-    } catch {
-      flashVoiceHint(t("chat.voiceMicError"), "err");
+    } catch (e) {
+      flashVoiceHint(micErrText(e, t), "err");
     }
   };
 
@@ -762,8 +787,8 @@ export default function ChatPage({ onStats, visible, sidebarOpen, onToggleSideba
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      flashVoiceHint(t("chat.voiceMicError"), "err");
+    } catch (e) {
+      flashVoiceHint(micErrText(e, t), "err");
       return;
     }
     const Ctx = window.AudioContext || window.webkitAudioContext;

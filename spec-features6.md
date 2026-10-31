@@ -25,14 +25,21 @@ i18n：src/i18n.js（zh+en 双份）。图标：src/components/Icons.jsx（描�
 - 朗读（speaking）期间 KWS 命中唤醒词 → stopTts() + 停朗读状态（不开新麦，避免误触；用户再按麦克风或下轮唤醒继续）。
 - ChatPage kws 命中回调里先判 speaking。语音 worker 侧无需改（KWS 在朗读期间不暂停）。
 
-## F6 截图提问（v1 macOS）
-- Electron 主进程：globalShortcut（复用 hotkey 机制模式）注册「截图提问」快捷键（设置页加配置，默认 Ctrl+Shift+A 之类）→ `screencapture -i -c`（框选到剪贴板）→ clipboard.readImage().toDataURL() → webContents.send("screenshot-capture", dataUrl)。
+## F6 截图提问（三端）
+- Electron 主进程：globalShortcut（复用 hotkey 机制模式）注册「截图提问」快捷键（设置页配置）→ 框选图 → `webContents.send("screenshot-capture", dataUrl)`；后端按平台探测一次并缓存（`screenshotBackend()`）：
+  - macOS：`screencapture -i` 落临时 PNG（先查/请求屏幕录制权限）
+  - Windows：`ms-screenclip:` 唤起系统截取 + 轮询剪贴板读回 PNG（与截图前比对，判取消）
+  - Linux：Wayland 走 `grim + slurp`（KDE 回落 spectacle）；X11 依次 gnome-screenshot / spectacle / flameshot / scrot / ImageMagick `import`
+  - 缺工具时不静默：回传可执行安装指引（各桌面套件名不同），前端 toast 显示
 - ChatPage 监听事件：dataUrl 挂进图片附件预览（已有 images 通道），聚焦输入框。
-- Linux：留 TODO（gnome-screenshot/xwd 后续）。
 
-## F3 全局语音快捷键（v1 macOS）
-- 快捷键注册同 F6 机制。触发=模拟按麦克风按钮（webContents.send("global-voice")→ChatPage toggleVoice）。
-- 转写完成后写入当前前台应用：文本放剪贴板 → `osascript -e 'tell application "System Events" to keystroke "v" using command down'`（需辅助功能权限，失败 toast 提示授权）。保留并恢复原剪贴板内容。
+## F3 全局语音快捷键（三端）
+- 快捷键注册同 F6 机制。触发=模拟按麦克风按钮（webContents.send("global-voice")→ChatPage toggleVoice）；非 macOS 用 `showInactive()` 让本窗拿输入又不抢焦点。
+- 转写完成后写入原前台应用：文本放剪贴板 → 模拟粘贴 → 800ms 后恢复原剪贴板（含图片）。
+  - macOS：osascript 按 bundleId 激活目标 app + `keystroke "v" using command down`（需辅助功能权限，失败提示授权）
+  - Windows：PowerShell P/Invoke `user32!keybd_event` 按 Ctrl+V（免装第三方、免提权）
+  - Linux：`xdotool key ctrl+v`（X11）→ 回落 `wtype`（Wayland），两者都缺时报可执行指引
+- 能力位随 `get_app_hotkeys`/`set_app_hotkeys` 回传（`caps.screenshot_backend / screenshot_supported / paste_supported`），设置页据此标注死键风险。
 
 ## 顺序与验证
 F4 → F5 → F1+F2（同改 ChatPage 语音流）→ F6 → F3。每项完成即 cargo build（重签）+ vite build + eslint；最后一次性重启 Electron 供用户验收。e2e：F4 用 API 直调 regenerate_last；F5 get/set 往返；F1-F3 以 UI 验收为主（需要真实麦克风/权限）。

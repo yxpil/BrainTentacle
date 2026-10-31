@@ -136,6 +136,54 @@ fn bridge_script() -> Result<PathBuf, String> {
         .ok_or_else(|| "找不到语音识别桥脚本（voice-bridge/voice-worker.mjs）".to_string())
 }
 
+/// sherpa 平台原生包的 npm 命名（`sherpa-onnx-<os>-<arch>`）：包名用 Node 的
+/// os.platform()/os.arch() 口径，与 Rust 的 std::env::consts 不同，需要转换。
+fn sherpa_pkg_stem(os: &str, arch: &str) -> String {
+    let os = match os {
+        "macos" => "darwin",
+        "windows" => "win",
+        other => other,
+    };
+    let arch = match arch {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        "x86" => "ia32",
+        "arm" => "arm",
+        other => other,
+    };
+    format!("sherpa-onnx-{os}-{arch}")
+}
+
+/// worker 里 sherpa-onnx-node 的平台原生包目录（含 sherpa-onnx.node 与同级动态库）。
+fn sherpa_native_dir(script: &Path) -> Option<PathBuf> {
+    let dir = script
+        .parent()?
+        .join("node_modules")
+        .join(sherpa_pkg_stem(std::env::consts::OS, std::env::consts::ARCH));
+    dir.is_dir().then_some(dir)
+}
+
+/// 给 worker 子进程补动态库搜索路径。
+/// 原生包里 sherpa-onnx.node 与 libsherpa-onnx-c-api / libonnxruntime 同目录发布：
+/// Linux 的 .node 带 `RUNPATH $ORIGIN`，但 RUNPATH 只对自身直接依赖生效，
+/// 而 libsherpa-onnx-c-api.so 没有任何 RPATH，它再找 libonnxruntime.so 时
+/// 只认 LD_LIBRARY_PATH / 系统缓存——不设就会 dlopen 失败。
+/// Windows 同理把目录并进 PATH，覆盖 DLL 隐式加载的搜索顺序。
+/// macOS 的 dylib 自带 `LC_RPATH @loader_path`，链条自洽（签名进程也会被系统剥掉 DYLD_*），故不设。
+fn apply_native_lib_paths(cmd: &mut tokio::process::Command, script: &Path) {
+    let Some(native) = sherpa_native_dir(script) else {
+        return;
+    };
+    let s = native.to_string_lossy().to_string();
+    if cfg!(target_os = "linux") {
+        let old = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        cmd.env("LD_LIBRARY_PATH", if old.is_empty() { s } else { format!("{s}:{old}") });
+    } else if cfg!(windows) {
+        let old = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", if old.is_empty() { s } else { format!("{s};{old}") });
+    }
+}
+
 /// 读取并解析 assets.json（与桥脚本同目录）
 fn load_manifest(script: &Path) -> Result<AssetsManifest, String> {
     let p = script.with_file_name("assets.json");
@@ -899,6 +947,7 @@ async fn start_worker(ctx: &Arc<Ctx>) -> Result<(), String> {
     // Electron 主程序配此变量即以纯 Node 运行（免依赖用户机器上的 Node）
     cmd.env("ELECTRON_RUN_AS_NODE", "1");
     cmd.env("DSH_SPEECH_TOKEN", &token);
+    apply_native_lib_paths(&mut cmd, &script);
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -1309,6 +1358,39 @@ mod tests {
         assert!(script.with_file_name("assets.json").is_file());
     }
 
+    /// 原生包名的 Node 口径转换（与 sherpa-onnx-node/addon.js 的查找路径一致）
+    #[test]
+    fn sherpa_pkg_stem_uses_node_naming() {
+        assert_eq!(sherpa_pkg_stem("macos", "aarch64"), "sherpa-onnx-darwin-arm64");
+        assert_eq!(sherpa_pkg_stem("macos", "x86_64"), "sherpa-onnx-darwin-x64");
+        assert_eq!(sherpa_pkg_stem("linux", "x86_64"), "sherpa-onnx-linux-x64");
+        assert_eq!(sherpa_pkg_stem("linux", "aarch64"), "sherpa-onnx-linux-arm64");
+        assert_eq!(sherpa_pkg_stem("windows", "x86_64"), "sherpa-onnx-win-x64");
+        assert_eq!(sherpa_pkg_stem("windows", "x86"), "sherpa-onnx-win-ia32");
+    }
+
+    /// 原生包目录定位：只认实际存在的目标架构目录（缺架构时返回 None，
+    /// worker 仍能起，只是靠 .node 自身 rpath，不设额外环境变量）
+    #[test]
+    fn sherpa_native_dir_requires_actual_package() {
+        let root = std::env::temp_dir().join(format!("bit-voice-native-{}", std::process::id()));
+        let nm = root.join("node_modules").join(sherpa_pkg_stem(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&nm).unwrap();
+        let script = root.join("voice-worker.mjs");
+        std::fs::write(&script, "").unwrap();
+
+        let found = sherpa_native_dir(&script).expect("已就位的目标架构包应被定位");
+        assert_eq!(found, nm);
+
+        std::fs::remove_dir_all(&nm).unwrap();
+        assert!(sherpa_native_dir(&script).is_none(), "缺包时不应给出路径");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     // ---------- 端到端（需网络 + macOS say，手动触发） ----------
 
     /// 把任意 WAV 的 data 段重排成与前端 encodeWav16k 完全一致的 44 字节规范头。
@@ -1443,6 +1525,7 @@ mod tests {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        apply_native_lib_paths(&mut cmd, &script);
         let mut child = cmd.spawn().expect("node 启动 worker 失败");
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();

@@ -63,9 +63,9 @@
 | `src/api.js` | `ttsStatus` / `ttsPrepare` / `ttsSpeak` |
 | `voice-bridge/tts-worker.mjs` | 新建。stdout `{"port":N}` + `POST /synthesize`（Bearer）：**在线四分支**（edge=node-edge-tts+退避；gtts=fetch translate TTS；siliconflow/openai=fetch v1/audio/speech+key）+ `GET /voices`（edge 音色拉取/缓存）；本地引擎不走 worker（直接 CLI） |
 | `voice-bridge/package.json` | 加 `node-edge-tts@1.2.12`（MIT） |
-| `voice-bridge/assets.json` | 8 本地引擎分区：每文件 name/url/bytes/sha256 + **`tunables` 可调参数模板**（flag/类型/范围/默认，含 zipvoice·pocket 的 reference-text/audio 克隆项） |
-| `voice-bridge/tts-bin/`（新） | sherpa 预编译 `bin/sherpa-onnx-offline-tts` + `lib/` 落位（osx-arm64 20MB 包；win-x64 同源预编译打包时取用） |
-| `electron-builder.yml` + `package.json` | tts-bin、`node_modules`（node-edge-tts）进 files/asarUnpack |
+| `voice-bridge/assets.json` | 8 本地引擎分区：每文件 name/url/bytes/sha256 + **`tunables` 可调参数模板**（flag/类型/范围/默认，含 zipvoice·pocket 的 reference-text/audio 克隆项）；顶层 `tts_bin` 分区：sherpa-onnx v1.13.8 合成内核按 `os-arch` 给候选包（7 平台 9 包，exe/archive 两类，全部 bytes+sha256 对齐官方 release 元数据） |
+| 合成内核落位 | 不再随包分发 `voice-bridge/tts-bin/`（旧做法只带 osx-arm64 一份，其它系统必挂）：`tts::ensure_cli` 在首启下载引擎模型时同链路拉取本机架构内核，解包到数据目录 `tts/cli/<os-arch>/`，`cli_ready` 兜 Unix 执行位 |
+| `electron-builder.yml` + `package.json` | `node_modules`（node-edge-tts）进 files/asarUnpack；`beforePack: scripts/before-pack.cjs` 按目标平台补齐识别原生包 |
 
 ### 前端
 
@@ -88,7 +88,7 @@
 - 不 commit、不重打包 `/Applications/BIT.app`（等用户指示）
 - **gTTS 与 OpenAI 端点本机网络超时不可达**：集成可做但本机无法 e2e 验证；SiliconFlow 通但需用户 key 才能验
 - 在线引擎均为非官方/直连 API 使用，微软/谷歌/厂商侧限流（Edge 429 已实测）与协议变化风险不可控
-- sherpa 预编译仅 macOS arm64 实测；Windows 用同源 win-x64 预编译（未本机验证，与语音输入同口径）
+- 合成内核改按需下载后，**只有 macOS arm64 实测跑通**（下载→解档→选名→执行 `--help`）：Windows/Linux 走同一条 `ensure_cli` 链路、清单里 bytes+sha256 已对齐官方 release 元数据，但需在目标系统上各跑一次才算验；`windows-aarch64` 只有归档（无单文件 exe），`linux-aarch64` 同理
+- 本地合成 CLI 的内核下载依赖 GitHub Release 直连；不可达时该引擎判「未就绪」，UI 走在线引擎（截图/全局语音同口径：Windows/Linux 分支已写，缺工具时给可执行指引而非静默失败）
 - 体积红线 300MB：kokoro-multi-lang（350MB）砍掉 → Kokoro 仅英文；中文本地 = matcha/Piper-huayan
 - CLI 每次合成重载模型（约数秒），试听场景可接受；模型不默认内置、按需下载
-- sherpa CLI 在 win arm64/x64 的预编译包存在但未本机验证

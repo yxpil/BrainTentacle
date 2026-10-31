@@ -1207,6 +1207,89 @@
       }
     }
   },
+  "tts_bin": {
+    "version": "1.13.8",
+    "_comment": "本地合成内核（sherpa-onnx offline-tts CLI）按 os-arch 的候选包，键与 Rust std::env::consts 的 OS/ARCH 对齐；kind=exe 单文件落位到 bin/，kind=archive 整包解到平台目录后递归找 bin/sherpa-onnx-offline-tts。逐个尝试，装完找不到可执行即换下一个候选。bytes/sha256 取自官方 release 资产摘要。",
+    "platforms": {
+      "macos-aarch64": [
+        {
+          "kind": "archive",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared.tar.bz2",
+          "bytes": 20314448,
+          "sha256": "b10e5c7e2c30ea03de9c442655d14860d9edc475c6251d58a8f5f06e913a1d56",
+          "note": "arm64 shared 归档含 TTS CLI；lib/ 提供 dylib，运行时走 DYLD_LIBRARY_PATH"
+        }
+      ],
+      "macos-x86_64": [
+        {
+          "kind": "archive",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-x64-shared.tar.bz2",
+          "bytes": 22846038,
+          "sha256": "54aad64acee9d2d596535a6080d6f22602a720af5460e1d50461b1e1b06bee40",
+          "note": "Intel macOS"
+        }
+      ],
+      "linux-x86_64": [
+        {
+          "kind": "archive",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-x64-shared.tar.bz2",
+          "bytes": 28156791,
+          "sha256": "c0bdb7907d3a74bba1d55d22bf4d9fa75586cf1530614ebe88a27b9118e015c4",
+          "note": "glibc x64；带 -no-tts 后缀的归档不含合成 CLI，勿改用"
+        }
+      ],
+      "linux-aarch64": [
+        {
+          "kind": "archive",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-aarch64-shared-cpu.tar.bz2",
+          "bytes": 28091778,
+          "sha256": "4e3734f82bc1379fd91f219f5869c7e9d03b7a4f7561907d8abca4849c51a789",
+          "note": "ARM64 CPU 版（树莓派 / 飞腾 / 麒麟）"
+        }
+      ],
+      "windows-x86_64": [
+        {
+          "kind": "exe",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-non-streaming-tts-x64-v1.13.8.exe",
+          "bytes": 22974464,
+          "sha256": "79e9cb94df59b8baaa1abd31c31afbe5fbe4cad8c0d5438650cb60133b7aa946",
+          "note": "官方单文件 TTS CLI，落位为 sherpa-onnx-offline-tts.exe"
+        },
+        {
+          "kind": "archive",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release.tar.bz2",
+          "bytes": 24805859,
+          "sha256": "6dffdc715a4465b989446a6105265d2cb345e7101591a17d35534b6758f6e8df",
+          "note": "MT=静态 CRT，免装 VC 运行库；单文件 exe 缺库时的兜底"
+        }
+      ],
+      "windows-i686": [
+        {
+          "kind": "exe",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-non-streaming-tts-x86-v1.13.8.exe",
+          "bytes": 19872256,
+          "sha256": "4c326ff6e5f11b43677d660bfb752571942a1ed552c0bd44e3d1103a35466bcf",
+          "note": "32 位 Windows"
+        },
+        {
+          "kind": "archive",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x86-shared-MT-Release.tar.bz2",
+          "bytes": 21105780,
+          "sha256": "78bac9926a7fb77042171d60db53aad71e813deb2d04e9853937d7ac357e01f2",
+          "note": "兜底归档"
+        }
+      ],
+      "windows-aarch64": [
+        {
+          "kind": "archive",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-arm64-shared-MT-Release.tar.bz2",
+          "bytes": 23341583,
+          "sha256": "455ea18dc44aea188b4f7976037dea3d77e3f8d7afe0760f34244a7a0db53c4c",
+          "note": "骁龙本；官方未提供 arm64 单文件 TTS CLI，只有归档"
+        }
+      ]
+    }
+  },
   "kws": {
     "label": "关键词唤醒（中文8词，5MB）",
     "files": [

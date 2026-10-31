@@ -632,43 +632,87 @@ async function hostCommand(cmd, args) {
     }
     case 'get_app_hotkeys': {
       // 应用级扩展快捷键（截图提问 / 全局语音）：Electron userData JSON，空串=未启用
-      return { screenshot: appHotkeys.screenshot || '', voice: appHotkeys.voice || '' };
+      // caps 一并回传：非 macOS 的截图后端、粘贴通道、辅助功能权限各有缺口，UI 需要能力位
+      return { screenshot: appHotkeys.screenshot || '', voice: appHotkeys.voice || '', caps: hotkeyCaps() };
     }
     case 'set_app_hotkeys': {
       if (args.screenshot !== null && args.screenshot !== undefined) appHotkeys.screenshot = String(args.screenshot || '').trim();
       if (args.voice !== null && args.voice !== undefined) appHotkeys.voice = String(args.voice || '').trim();
       saveAppHotkeys();
       registerAppShortcuts();
-      return { screenshot: appHotkeys.screenshot || '', voice: appHotkeys.voice || '' };
+      return { screenshot: appHotkeys.screenshot || '', voice: appHotkeys.voice || '', caps: hotkeyCaps() };
     }
     case 'paste_text_to_foreground': {
-      // 全局语音转写结果落到原前台应用：激活目标 app → 写剪贴板 → 模拟 Cmd+V → 恢复剪贴板
-      if (process.platform !== 'darwin') throw new Error('全局语音粘贴目前仅支持 macOS');
+      // 全局语音转写结果落到原前台应用：写剪贴板 → 模拟粘贴 → 恢复剪贴板。
+      // macOS 额外用 bundleId 激活目标 app 并走辅助功能 keystroke；
+      // Windows 用 keybd_event（免装第三方），Linux 用 xdotool（X11）/ wtype（Wayland）。
       const text = String(args.text ?? '');
       if (!text) return { ok: false };
-      const { execFile } = require('child_process');
-      const run = (cmd, a) => new Promise((resolve, reject) =>
-        execFile(cmd, a, { timeout: 5000 }, (err) => (err ? reject(err) : resolve())));
-      try {
-        if (args.bundleId) {
-          await run('osascript', ['-e', `tell application id "${String(args.bundleId)}" to activate`]);
-          await new Promise((r) => setTimeout(r, 400));
-        }
-        const oldText = clipboard.readText();
-        const oldImg = clipboard.readImage();
-        clipboard.writeText(text);
-        await run('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down']);
-        // 粘贴完成（目标 app 已读到剪贴板）后恢复原内容
+      const oldText = clipboard.readText();
+      const oldImg = clipboard.readImage();
+      clipboard.writeText(text);
+      // 目标应用读到剪贴板后再还原，避免覆盖用户原有内容
+      const restore = () =>
         setTimeout(() => {
           try {
             clipboard.writeText(oldText);
             if (!oldImg.isEmpty()) clipboard.writeImage(oldImg);
           } catch { /* 恢复失败不影响主流程 */ }
         }, 800);
-        return { ok: true };
-      } catch {
-        throw new Error('需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能');
+      if (process.platform === 'darwin') {
+        const { execFile } = require('child_process');
+        const run = (cmd, a) => new Promise((resolve, reject) =>
+          execFile(cmd, a, { timeout: 5000 }, (err) => (err ? reject(err) : resolve())));
+        try {
+          if (args.bundleId) {
+            await run('osascript', ['-e', `tell application id "${String(args.bundleId)}" to activate`]);
+            await sleep(400);
+          }
+          await run('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down']);
+          restore();
+          return { ok: true };
+        } catch {
+          throw new Error('需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能');
+        }
       }
+      if (process.platform === 'win32') {
+        // Ctrl+V 用 user32 keybd_event 直接注入：SendKeys 在部分应用（走原始输入的）会失效
+        const script = [
+          'Add-Type -Namespace BIT -Name Kb -MemberDefinition \'@([System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void keybd_event(byte b, byte s, uint f, System.UIntPtr e);)@',
+          '[BIT.Kb]::keybd_event(0x11, 0, 0, [System.UIntPtr]::Zero)',
+          '[BIT.Kb]::keybd_event(0x56, 0, 0, [System.UIntPtr]::Zero)',
+          '[BIT.Kb]::keybd_event(0x56, 0, 2, [System.UIntPtr]::Zero)',
+          '[BIT.Kb]::keybd_event(0x11, 0, 2, [System.UIntPtr]::Zero)',
+        ].join('\n');
+        const r = await execShot('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
+        if (r.err) {
+          clipboard.writeText(oldText);
+          throw new Error('模拟粘贴失败（PowerShell keybd_event）：' + lastLine(r.err));
+        }
+        restore();
+        return { ok: true };
+      }
+      // Linux：X11 走 xdotool，Wayland 走 wtype（ydotool 需常驻守护进程，不自动尝试）
+      const tools = [];
+      if (hasCmd('xdotool')) tools.push(['xdotool', ['key', 'ctrl+v']]);
+      if (hasCmd('wtype')) tools.push(['wtype', ['-M', 'ctrl', 'v', '-m', 'ctrl']]);
+      if (!tools.length) {
+        clipboard.writeText(oldText);
+        throw new Error(
+          isWayland()
+            ? 'Wayland 模拟粘贴需要安装 wtype（或 xdotool 走 XWayland）；未装时转写结果留在对话草稿'
+            : '缺少 xdotool，无法模拟粘贴；请安装 xdotool，转写结果已留在对话草稿',
+        );
+      }
+      for (const [bin, a] of tools) {
+        const r = await execShot(bin, a);
+        if (!r.err) {
+          restore();
+          return { ok: true };
+        }
+      }
+      clipboard.writeText(oldText);
+      throw new Error('模拟粘贴失败：需 xdotool（X11）或 wtype（Wayland）');
     }
     case 'screenshot_region': {
       // 聊天工具栏剪刀按钮：与全局截图提问同一管线（screencapture 框选 → 剪贴板 → 挂附件）
@@ -721,57 +765,229 @@ function sendToMain(event, payload) {
   if (!win || win.isDestroyed()) return;
   win.webContents.send('bit:core-event', { event, payload });
 }
-// 截图提问：screencapture 交互框选 → 临时文件 → dataURL 推给对话页挂附件（v1 macOS；Linux/Windows TODO）
-// 走临时文件而非剪贴板：避开剪贴板读取时序/占用问题，Esc 未生成文件视为取消
-function doScreenshotQuestion() {
-  if (process.platform !== 'darwin') return; // TODO: gnome-screenshot / PowerShell 截图方案
-  const { execFile } = require('child_process');
-  const file = path.join(app.getPath('temp'), `bit-shot-${Date.now()}.png`);
-  // 屏幕录制权限预检：未决定时主动弹系统授权框；被拒时给出精确指引
-  // （screencapture 报 "could not create image from rect" 即权限缺失的典型症状）
-  const perm = systemPreferences.getMediaAccessStatus('screen');
-  const go = (granted) => {
-    if (!granted) {
-      const msg = '需要屏幕录制权限：系统设置 → 隐私与安全性 → 屏幕录制 → 勾选 Electron（BIT）后重启应用';
-      console.warn('[BIT][shot] 权限不足（' + perm + '）');
-      sendToMain('screenshot-capture-error', { message: msg });
-      return;
-    }
-    execFile('screencapture', ['-i', file], (err) => {
-      if (err) {
-        const permHint = /could not create image from rect/i.test(err.message)
-          ? '（多为屏幕录制权限未授予：系统设置 → 隐私与安全性 → 屏幕录制）'
-          : '';
-        console.warn('[BIT][shot] screencapture 失败:', err.message);
-        sendToMain('screenshot-capture-error', { message: '截图失败：' + err.message + permHint });
-        return;
-      }
-      try {
-        if (!fs.existsSync(file)) {
-          console.log('[BIT][shot] 未生成文件（用户 Esc 取消）');
-          return;
-        }
-        const buf = fs.readFileSync(file);
-        fs.unlinkSync(file);
-        if (!buf.length) return;
-        console.log(`[BIT][shot] 已捕获 ${buf.length} 字节 → 推送 screenshot-capture`);
-        showWindow();
-        sendToMain('screenshot-capture', { dataUrl: 'data:image/png;base64,' + buf.toString('base64') });
-      } catch (e) {
-        console.warn('[BIT][shot] 读取失败:', e.message);
-        sendToMain('screenshot-capture-error', { message: '截图读取失败：' + e.message });
-      }
-    });
-  };
-  if (perm === 'not-determined') {
-    systemPreferences.askForMediaAccess('screen').then(go).catch(() => go(false));
-  } else {
-    go(perm === 'granted' || perm === 'unknown');
+// ── 截图提问（跨平台）────────────────────────────────────────────
+// 统一管线：交互框选 → PNG 字节 → dataURL → screenshot-capture 事件挂到对话页附件；
+// 没有产出图片一律视为用户取消（Esc / 关掉选区），不报错。
+//   macOS   ：screencapture -i（需"屏幕录制"权限，未决定时主动申请）
+//   Linux   ：slurp+grim（Wayland）/ gnome-screenshot -a / spectacle -r / flameshot / scrot -s / import
+//   Windows ：ms-screenclip:（Win10 1809+ 系统截图工具）→ 轮询 Electron 剪贴板拿到新图
+//             它只写剪贴板不落文件，故先记旧图、再等剪贴板变化
+const cp = require('child_process');
+const shotTmpPath = () => path.join(app.getPath('temp'), `bit-shot-${Date.now()}.png`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const lastLine = (e) => String((e && e.message) || e || '').trim().split('\n').filter(Boolean).slice(-1)[0] || '未知错误';
+function hasCmd(name) {
+  try {
+    cp.execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
   }
 }
+const isWayland = () =>
+  process.platform === 'linux' &&
+  (!!process.env.WAYLAND_DISPLAY || (process.env.XDG_SESSION_TYPE || '').toLowerCase() === 'wayland');
+// 子进程跑外部截图工具（300 秒上限：交互框选要留给用户）
+function execShot(bin, args, opts = {}) {
+  return new Promise((resolve) => {
+    cp.execFile(
+      bin,
+      args,
+      { timeout: 300000, encoding: opts.binary ? 'buffer' : 'utf8' },
+      (err, stdout, stderr) => resolve({ err, stdout: stdout || (opts.binary ? Buffer.alloc(0) : ''), stderr: String(stderr || '') }),
+    );
+  });
+}
+// 截图后端探测：which 要起子进程，结果按进程缓存一次
+let _shotBackend = null;
+function screenshotBackend() {
+  if (_shotBackend !== null) return _shotBackend;
+  let id = '';
+  if (process.platform === 'darwin') id = 'screencapture';
+  else if (process.platform === 'win32') id = 'ms-screenclip';
+  else if (process.platform === 'linux') {
+    if (isWayland()) {
+      if (hasCmd('grim') && hasCmd('slurp')) id = 'grim+slurp';
+      else if (hasCmd('spectacle')) id = 'spectacle';
+    } else if (hasCmd('gnome-screenshot')) id = 'gnome-screenshot';
+    else if (hasCmd('spectacle')) id = 'spectacle';
+    else if (hasCmd('flameshot')) id = 'flameshot';
+    else if (hasCmd('scrot')) id = 'scrot';
+    else if (hasCmd('import')) id = 'imagemagick';
+  }
+  _shotBackend = id;
+  return id;
+}
+// 缺工具时的可执行指引（Linux 各桌面套件名不同，笼统提示等于没提示）
+function shotMissingHint() {
+  if (process.platform === 'linux') {
+    return isWayland()
+      ? '缺少 Wayland 截图工具：请安装 grim + slurp（KDE 可用 spectacle）'
+      : '缺少截图工具：GNOME 装 gnome-screenshot、KDE 装 spectacle，或安装 flameshot / scrot / imagemagick';
+  }
+  return `当前系统（${process.platform}）暂不支持截图提问`;
+}
+// 全局能力位：快捷键面板据此标注「本机能不能用 / 缺什么」，避免用户设完快捷键才发现是死键
+function hotkeyCaps() {
+  const backend = screenshotBackend();
+  let paste = false;
+  if (process.platform === 'darwin') {
+    // false 参数：只查询辅助功能信任状态，不弹授权框
+    try {
+      paste = systemPreferences.isTrustedAccessibilityClient(false);
+    } catch {
+      paste = false;
+    }
+  } else if (process.platform === 'win32') {
+    paste = true; // keybd_event 走系统 API，无需额外权限或第三方工具
+  } else {
+    paste = hasCmd('xdotool') || hasCmd('wtype');
+  }
+  const pasteHint = paste
+    ? ''
+    : process.platform === 'darwin'
+      ? '需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能'
+      : '缺少粘贴工具：X11 装 xdotool，Wayland 装 wtype';
+  return {
+    os: process.platform,
+    screenshot_backend: backend,
+    screenshot_supported: !!backend,
+    screenshot_hint: backend ? '' : shotMissingHint(),
+    paste_supported: paste,
+    paste_hint: pasteHint,
+  };
+}
+// 剪贴板图片 → base64 PNG（Windows 截图回读通道；空剪贴板/非图片返回空串）
+function clipboardPngBase64() {
+  try {
+    const img = clipboard.readImage();
+    if (!img || img.isEmpty()) return '';
+    const buf = img.toPNG();
+    return buf && buf.length ? buf.toString('base64') : '';
+  } catch {
+    return '';
+  }
+}
+// macOS：权限预检 + screencapture -i 落临时文件
+async function captureDarwin() {
+  const perm = systemPreferences.getMediaAccessStatus('screen');
+  const granted = await new Promise((resolve) => {
+    if (perm === 'not-determined') {
+      systemPreferences.askForMediaAccess('screen').then(resolve).catch(() => resolve(false));
+    } else {
+      resolve(perm === 'granted' || perm === 'unknown');
+    }
+  });
+  if (!granted) {
+    console.warn('[BIT][shot] 权限不足（' + perm + '）');
+    return { message: '需要屏幕录制权限：系统设置 → 隐私与安全性 → 屏幕录制 → 勾选 Electron（BIT）后重启应用' };
+  }
+  const file = shotTmpPath();
+  const r = await execShot('screencapture', ['-i', file]);
+  if (r.err) {
+    const hint = /could not create image from rect/i.test(r.err.message || '')
+      ? '（多为屏幕录制权限未授予：系统设置 → 隐私与安全性 → 屏幕录制）'
+      : '';
+    return { message: '截图失败：' + lastLine(r.err) + hint };
+  }
+  try {
+    if (!fs.existsSync(file)) return {}; // Esc 取消
+    const buf = fs.readFileSync(file);
+    fs.unlinkSync(file);
+    return { png: buf.length ? buf.toString('base64') : '' };
+  } catch (e) {
+    return { message: '截图读取失败：' + e.message };
+  }
+}
+// Linux：按桌面套件挑一个能框选的工具
+async function captureLinux() {
+  const backend = screenshotBackend();
+  const file = shotTmpPath();
+  let r;
+  if (backend === 'grim+slurp') {
+    // 两步走（不经 shell 拼串）：slurp 出选区几何 → grim 按选区抓；空输出即取消
+    const sel = await execShot('slurp', []);
+    const geom = String(sel.stdout || '').trim();
+    if (sel.err) return { message: '选区失败：' + lastLine(sel.err) };
+    if (!geom) return {};
+    r = await execShot('grim', ['-g', geom, file]);
+  } else if (backend === 'gnome-screenshot') {
+    r = await execShot('gnome-screenshot', ['-a', '-f', file]);
+  } else if (backend === 'spectacle') {
+    r = await execShot('spectacle', ['-r', '-n', '-o', file]);
+  } else if (backend === 'flameshot') {
+    const raw = await execShot('flameshot', ['gui', '-r'], { binary: true });
+    if (raw.err) return { message: '截图失败：' + lastLine(raw.err) };
+    return { png: raw.stdout && raw.stdout.length ? raw.stdout.toString('base64') : '' };
+  } else if (backend === 'scrot') {
+    r = await execShot('scrot', ['-s', file]);
+  } else if (backend === 'imagemagick') {
+    r = await execShot('import', [file]);
+  } else {
+    return { message: shotMissingHint() };
+  }
+  if (r.err) return { message: '截图失败：' + lastLine(r.err) };
+  try {
+    if (!fs.existsSync(file)) return {};
+    const buf = fs.readFileSync(file);
+    fs.unlinkSync(file);
+    return { png: buf.length ? buf.toString('base64') : '' };
+  } catch (e) {
+    return { message: '截图读取失败：' + e.message };
+  }
+}
+// Windows：唤起系统截图工具，等剪贴板出现"新"图片（用户不截就超时，按取消处理）
+async function captureWindows() {
+  const before = clipboardPngBase64();
+  try {
+    await shell.openExternal('ms-screenclip:');
+  } catch (e) {
+    return { message: '打不开系统截图工具（Win10 1809+ 的"截图"）：' + e.message };
+  }
+  for (let waited = 0; waited < 120000; waited += 600) {
+    await sleep(600);
+    const png = clipboardPngBase64();
+    if (png && png !== before) return { png };
+  }
+  return {};
+}
+// 截图提问总入口：快捷键与对话页剪刀按钮共用
+async function doScreenshotQuestion() {
+  const backend = screenshotBackend();
+  if (!backend) {
+    sendToMain('screenshot-capture-error', { message: shotMissingHint() });
+    return;
+  }
+  console.log(`[BIT][shot] 后端=${backend} platform=${process.platform}`);
+  const r =
+    process.platform === 'darwin'
+      ? await captureDarwin()
+      : process.platform === 'win32'
+        ? await captureWindows()
+        : await captureLinux();
+  if (r.message) {
+    console.warn('[BIT][shot] 失败:', r.message);
+    sendToMain('screenshot-capture-error', { message: r.message });
+    return;
+  }
+  if (!r.png) {
+    console.log('[BIT][shot] 未产出图片（视为取消）');
+    return;
+  }
+  console.log(`[BIT][shot] 已捕获 ${r.png.length} 字节 base64 → 推送 screenshot-capture`);
+  showWindow();
+  sendToMain('screenshot-capture', { dataUrl: 'data:image/png;base64,' + r.png });
+}
 // 全局语音：记住当前前台应用（转写完粘贴回去）→ 弹窗 → 通知对话页开录
+// macOS 用 osascript 拿 bundleId 并在粘贴前激活；Windows/Linux 拿不到"上一个前台应用"
+// 且不该抢焦点（抢了就粘到自己身上），故改为不夺焦点地显示，粘贴落在用户原焦点窗口。
 function doGlobalVoice() {
-  if (process.platform !== 'darwin') return;
+  if (process.platform !== 'darwin') {
+    if (win && !win.isDestroyed() && !win.isFocused()) win.showInactive();
+    else if (!win || win.isDestroyed()) createWindow();
+    sendToMain('global-voice', { bundleId: '' });
+    return;
+  }
   const { execFile } = require('child_process');
   execFile('osascript', ['-e', 'tell application "System Events" to get bundle identifier of first process whose frontmost is true'],
     (err, stdout) => {

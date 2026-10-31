@@ -551,6 +551,18 @@ function TtsCard({ t }) {
         </div>
       )}
 
+      {/* 合成内核（sherpa CLI，按 os-arch 首启下载，多引擎共用一份）状态行：
+          跨平台适配的主要差异点，未收录的架构在此如实说明并引导改用在线引擎 */}
+      {isLocal && status?.cli && (
+        <div className="rounded-2xl border border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+          {status.cli.supported
+            ? status.cli.ready
+              ? t("settings.ttsCliReady", { v: status.cli.version, p: status.cli.platform })
+              : t("settings.ttsCliMissing", { mb: Math.round((status.cli.bytes || 0) / 1048576) })
+            : t("settings.ttsCliUnsupported", { p: status.cli.platform })}
+        </div>
+      )}
+
       {/* SiliconFlow / OpenAI 需 API key */}
       {cfg.needsKey && (
         <div className="flex flex-col gap-2 rounded-2xl border border-neutral-200 px-3 py-2 dark:border-neutral-800">
@@ -750,6 +762,7 @@ export default function AiSettingsPage({ onStats, stats }) {
   const [voiceHotkey, setVoiceHotkey] = useState("");
   const [appHkSaved, setAppHkSaved] = useState(""); // "screenshot" | "voice" | ""
   const [appHkErr, setAppHkErr] = useState("");
+  const [appCaps, setAppCaps] = useState(null); // 主进程能力位：截图后端 / 粘贴通道是否可用
   // 提示词模板库：列表增/删/改，保存走 prompt_templates_set（清空保存 = 恢复内置默认）
   const [templates, setTemplates] = useState(null); // null=加载中
   const [tplSaved, setTplSaved] = useState(false);
@@ -963,7 +976,7 @@ export default function AiSettingsPage({ onStats, stats }) {
     api.compactConfigGet().then((r) => setCompact({ auto: !!r?.auto, chars: Number(r?.chars) || 24000, provider: r?.provider || "" })).catch(() => {});
     api.getAutostart().then((r) => setAutostart(!!r?.enabled)).catch(() => setAutostart(false));
     api.getHotkey().then((r) => setHotkey(r?.hotkey || "")).catch(() => {});
-    api.getAppHotkeys().then((r) => { setShotHotkey(r?.screenshot || ""); setVoiceHotkey(r?.voice || ""); }).catch(() => {});
+    api.getAppHotkeys().then((r) => { setShotHotkey(r?.screenshot || ""); setVoiceHotkey(r?.voice || ""); setAppCaps(r?.caps || null); }).catch(() => {});
     api.promptTemplatesGet().then((r) => setTemplates(r?.templates || [])).catch(() => setTemplates([]));
     api.getDesktopTools().then((r) => setDeskTools({ screen: !!r?.screen, mouse: !!r?.mouse, keyboard: !!r?.keyboard, diagram: !!r?.diagram, viewimage: !!r?.viewimage })).catch(() => {});
     api.getElevation().then((r) => setElevation({ active: !!r?.active, enabled: !!r?.enabled })).catch(() => setElevation({ active: false, enabled: false }));
@@ -996,7 +1009,8 @@ export default function AiSettingsPage({ onStats, stats }) {
     setAppHkErr("");
     api
       .setAppHotkeys(next.screenshot, next.voice)
-      .then(() => {
+      .then((r) => {
+        setAppCaps(r?.caps || appCaps);
         setAppHkSaved(patch.screenshot !== undefined ? "screenshot" : "voice");
         setTimeout(() => setAppHkSaved(""), 1500);
       })
@@ -2153,11 +2167,14 @@ export default function AiSettingsPage({ onStats, stats }) {
       </div>
       {hotkeyErr && <p className="-mt-2 text-xs text-red-500 dark:text-red-400">{hotkeyErr}</p>}
 
-      {/* 截图提问：任意应用里框选截图，自动附到对话输入框（macOS screencapture） */}
+      {/* 截图提问：任意应用里框选截图，自动附到对话输入框（mac screencapture / win 截图快捷键 / linux grim 等） */}
       <div className="card flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium">{t("ai.hotkeyScreenshot")}</p>
           <p className="mt-0.5 text-xs text-neutral-500">{t("ai.hotkeyScreenshotDesc")}</p>
+          {appCaps && !appCaps.screenshot_supported && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{t("ai.hotkeyShotUnavailable")}</p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <input
@@ -2181,11 +2198,14 @@ export default function AiSettingsPage({ onStats, stats }) {
         </div>
       </div>
 
-      {/* 全局语音：其他应用里按键说话，转写后粘贴回原前台应用（osascript Cmd+V） */}
+      {/* 全局语音：其他应用里按键说话，转写后粘贴回原前台应用（mac osascript / win keybd_event / linux xdotool） */}
       <div className="card flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium">{t("ai.hotkeyVoice")}</p>
           <p className="mt-0.5 text-xs text-neutral-500">{t("ai.hotkeyVoiceDesc")}</p>
+          {appCaps && !appCaps.paste_supported && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{t("ai.hotkeyPasteUnavailable")}</p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <input

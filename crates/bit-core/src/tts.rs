@@ -248,10 +248,39 @@ struct TtsSection {
     engines: HashMap<String, EngineDef>,
 }
 
+/// 合成内核（sherpa-onnx CLI）的一个候选发行包。
+/// `kind`：`archive` = tar.bz2（内含 bin/ 可执行 + lib/ 依赖库），
+/// `exe` = 单个自包含可执行文件直接落位（官方为 Windows 单独打包的 TTS CLI）。
+#[derive(Clone, Deserialize)]
+struct CliPkgDef {
+    #[serde(default)]
+    kind: String,
+    url: String,
+    #[serde(default)]
+    bytes: u64,
+    #[serde(default)]
+    sha256: String,
+    /// 人工标注（体积/依赖说明），前端 tooltip 用
+    #[serde(default)]
+    note: String,
+}
+
+/// assets.json 顶层 `tts_bin` 分区：按 `std::env::consts` 的 "os-arch" 给候选包列表，
+/// 逐个尝试（装完能在目录里找到 CLI 才算成功），避免单一包的内部结构假设失效
+#[derive(Clone, Deserialize)]
+struct CliSection {
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    platforms: HashMap<String, Vec<CliPkgDef>>,
+}
+
 #[derive(Deserialize)]
 struct TtsManifest {
     #[serde(default)]
     tts: Option<TtsSection>,
+    #[serde(default)]
+    tts_bin: Option<CliSection>,
 }
 
 /// 三段路径探测（仿 voice.rs find_worker_script）：
@@ -290,14 +319,17 @@ fn manifest_path() -> Result<PathBuf, String> {
 
 /// 读取并解析清单的 tts 分区
 fn load_manifest() -> Result<HashMap<String, EngineDef>, String> {
+    manifest_doc()?
+        .tts
+        .ok_or_else(|| "语音合成清单缺少 tts 分区".to_string())
+        .map(|s| s.engines)
+}
+
+/// 清单全文（引擎分区 + 内核分区一次读盘）
+fn manifest_doc() -> Result<TtsManifest, String> {
     let p = manifest_path()?;
     let raw = std::fs::read_to_string(&p).map_err(|e| format!("读取语音合成清单失败: {e}"))?;
-    let m: TtsManifest =
-        serde_json::from_str(&raw).map_err(|e| format!("语音合成清单损坏: {e}"))?;
-    let section = m
-        .tts
-        .ok_or_else(|| "语音合成清单缺少 tts 分区".to_string())?;
-    Ok(section.engines)
+    serde_json::from_str(&raw).map_err(|e| format!("语音合成清单损坏: {e}"))
 }
 
 /// 在线桥脚本（tts-worker.mjs）
@@ -306,22 +338,246 @@ fn worker_script() -> Result<PathBuf, String> {
         .ok_or_else(|| "找不到语音合成桥脚本（voice-bridge/tts-worker.mjs）".to_string())
 }
 
-/// 本地 CLI：tts-bin/bin/sherpa-onnx-offline-tts（Windows 带 .exe）
-fn tts_cli() -> Result<PathBuf, String> {
-    let exe = if cfg!(windows) {
+/// 本机在内核清单里的键：与 `std::env::consts` 对齐（macos-aarch64 / windows-x86_64 / …）
+fn platform_key() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// 内核可执行文件名（Windows 带 .exe）
+fn cli_exe_name() -> &'static str {
+    if cfg!(windows) {
         "sherpa-onnx-offline-tts.exe"
     } else {
         "sherpa-onnx-offline-tts"
-    };
-    for rel in [
-        format!("voice-bridge/tts-bin/bin/{exe}"),
-        format!("voice-bridge/tts-bin/{exe}"),
-    ] {
-        if let Some(p) = find_in_bridge(&rel) {
-            return Ok(p);
+    }
+}
+
+/// 合成内核安装根目录：数据目录下 tts/cli/<platform>/
+/// 按平台分目录，便于同一数据目录被多架构复用（如 Rosetta / 移动机器）
+fn cli_root(ctx: &Ctx) -> PathBuf {
+    ctx.data_dir.join("tts").join("cli").join(platform_key())
+}
+
+/// 在已解包的内核目录里找 CLI 可执行文件：归档带一层包名目录
+/// （`<pkg>/bin/xxx`），故递归找而不是写死路径。
+/// 同一 bin 目录里全是兄弟程序（`-play` / `-microphone` / `-websocket-server`…），
+/// 它们参数不同（`-play` 要抢音频设备），所以只认精确名或「名-版本号」，
+/// 绝不能按前缀匹配——实测 osx-arm64 归档里 read_dir 先给出 -play 就会装错内核。
+fn find_cli_exe(root: &Path) -> Option<PathBuf> {
+    fn hit(name: &str) -> bool {
+        let want = cli_exe_name();
+        if name == want {
+            return true;
+        }
+        // 兜底：容忍 sherpa-onnx-offline-tts-1.13.8 这类「名字后面直接跟版本号」的改名
+        match name.strip_prefix(want).and_then(|rest| rest.strip_prefix('-')) {
+            Some(v) => v.chars().next().map_or(false, |c| c.is_ascii_digit()),
+            None => false,
         }
     }
-    Err("找不到本地语音合成程序（voice-bridge/tts-bin）".into())
+    fn walk(dir: &Path, depth: u32) -> Option<PathBuf> {
+        if depth > 3 {
+            return None;
+        }
+        let entries = std::fs::read_dir(dir).ok()?;
+        let mut subdirs = Vec::new();
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name();
+            let name = name.to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            if p.is_file() && hit(&name) {
+                return Some(p);
+            }
+            if p.is_dir() {
+                subdirs.push(p);
+            }
+        }
+        subdirs.into_iter().find_map(|d| walk(&d, depth + 1))
+    }
+    walk(root, 0)
+}
+
+/// 本平台的内核候选包（清单未收录该架构时返回空列表，如 linux-riscv64）
+fn cli_pkg_list() -> (String, Vec<CliPkgDef>) {
+    let key = platform_key();
+    match manifest_doc().ok().and_then(|m| m.tts_bin) {
+        Some(s) => {
+            let list = s.platforms.get(&key).cloned().unwrap_or_default();
+            (s.version, list)
+        }
+        None => (String::new(), Vec::new()),
+    }
+}
+
+/// 内核包总体积（用于进度分母；取首个候选，各候选体积接近）
+fn cli_pkg_bytes() -> u64 {
+    cli_pkg_list()
+        .1
+        .first()
+        .map(|p| p.bytes)
+        .unwrap_or(0)
+}
+
+/// 内核就位判定 + 权限自愈：tar 解出的可执行位在少数文件系统上会丢
+fn cli_ready(ctx: &Ctx) -> Option<PathBuf> {
+    let exe = find_cli_exe(&cli_root(ctx))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&exe) {
+            if meta.permissions().mode() & 0o111 == 0 {
+                let _ = std::fs::set_permissions(
+                    &exe,
+                    std::fs::Permissions::from_mode(0o755),
+                );
+            }
+        }
+    }
+    Some(exe)
+}
+
+/// 内核状态（tts_status 的 cli 字段，供前端做能力位与文案）
+fn cli_status(ctx: &Ctx) -> Value {
+    let (version, pkgs) = cli_pkg_list();
+    let exe = cli_ready(ctx);
+    let ready = exe.is_some();
+    json!({
+        "platform": platform_key(),
+        "supported": !pkgs.is_empty(),
+        "ready": ready,
+        "version": version,
+        "bytes": pkgs.first().map(|p| p.bytes).unwrap_or(0),
+        "path": exe.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        "note": match (!pkgs.is_empty(), ready) {
+            (false, _) => "当前系统架构没有对应的本地合成内核，请改用在线引擎",
+            (true, false) => "本地合成内核尚未安装，下载该引擎时会自动一并获取",
+            (true, true) => "",
+        },
+    })
+}
+
+/// 下载并安装本平台合成内核到 tts/cli/<platform>/（幂等：已就位直接返回）。
+/// 清单给了多个候选包时逐个尝试，装完能在目录里找到 CLI 才算成功。
+/// done/total 由调用方给出（与模型下载共用一条进度线）。
+async fn ensure_cli(ctx: &Arc<Ctx>, done: u64, total: u64) -> Result<PathBuf, String> {
+    if let Some(exe) = cli_ready(ctx) {
+        return Ok(exe);
+    }
+    let key = platform_key();
+    let (_, pkgs) = cli_pkg_list();
+    if pkgs.is_empty() {
+        return Err(format!(
+            "本系统（{key}）没有可用的本地合成内核包，请改用在线引擎（edge / gtts）"
+        ));
+    }
+    let root = cli_root(ctx);
+    std::fs::create_dir_all(&root).map_err(|e| format!("创建内核安装目录失败: {e}"))?;
+    let mut last_err = String::new();
+    for pkg in pkgs {
+        let installed = if pkg.kind == "exe" {
+            install_cli_exe(ctx, &root, &pkg, done, total).await
+        } else {
+            install_cli_archive(ctx, &root, &pkg, done, total).await
+        };
+        match installed {
+            Ok(()) => {
+                if let Some(exe) = cli_ready(ctx) {
+                    return Ok(exe);
+                }
+                last_err = format!("内核安装后未找到 {}", cli_exe_name());
+            }
+            Err(e) => last_err = e,
+        }
+    }
+    Err(format!("本地合成内核安装失败：{last_err}"))
+}
+
+/// 候选一：单个自包含可执行文件直接落位到 bin/<exe>
+async fn install_cli_exe(
+    ctx: &Arc<Ctx>,
+    root: &Path,
+    pkg: &CliPkgDef,
+    done: u64,
+    total: u64,
+) -> Result<(), String> {
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).map_err(|e| format!("创建内核 bin 目录失败: {e}"))?;
+    download_one(
+        ctx,
+        &bin,
+        &AssetEntry {
+            name: cli_exe_name().to_string(),
+            url: pkg.url.clone(),
+            bytes: pkg.bytes,
+            sha256: pkg.sha256.clone(),
+        },
+        done,
+        total,
+        "tts-progress",
+    )
+    .await
+}
+
+/// 候选二：tar.bz2 归档整包解出（bin/ 可执行 + lib/ 依赖库同层）
+async fn install_cli_archive(
+    ctx: &Arc<Ctx>,
+    root: &Path,
+    pkg: &CliPkgDef,
+    done: u64,
+    total: u64,
+) -> Result<(), String> {
+    let name = pkg
+        .url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("sherpa-tts-cli.tar.bz2")
+        .to_string();
+    let cache = archive_cache_dir(ctx);
+    std::fs::create_dir_all(&cache).map_err(|e| format!("创建内核缓存目录失败: {e}"))?;
+    download_one(
+        ctx,
+        &cache,
+        &AssetEntry {
+            name: name.clone(),
+            url: pkg.url.clone(),
+            bytes: pkg.bytes,
+            sha256: pkg.sha256.clone(),
+        },
+        done,
+        total,
+        "tts-progress",
+    )
+    .await?;
+    extract_all(&cache.join(&name), root).await
+}
+
+/// 整包解档：`tar -xf archive -C dest`（macOS/BSD tar、Windows 10+ bsdtar、Linux GNU tar 均支持）
+async fn extract_all(archive: &Path, dest: &Path) -> Result<(), String> {
+    let mut cmd = tokio::process::Command::new("tar");
+    cmd.arg("-x")
+        .arg("-j")
+        .arg("-f")
+        .arg(archive)
+        .arg("-C")
+        .arg(dest)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    crate::registry::no_window_tokio(&mut cmd);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(300), cmd.output())
+        .await
+        .map_err(|_| "解包合成内核超时（300 秒）".to_string())?
+        .map_err(|e| format!("解包合成内核失败（找不到 tar 命令）: {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let msg = err.lines().rev().take(3).collect::<Vec<_>>().join(" / ");
+        return Err(format!("解包合成内核失败：{msg}"));
+    }
+    Ok(())
 }
 
 /// CLI 依赖库目录（mac/linux 的 dylib/so；Windows 的 dll 与 exe 同目录）
@@ -425,7 +681,7 @@ fn stderr_snippet(buf: &Arc<Mutex<String>>) -> String {
 // ---------- tts_status ----------
 
 /// 本地引擎状态：就绪 / 目录 / 已下字节 / 总字节 / 缺失文件
-fn local_engine_status(dir: &Path, def: &EngineDef) -> Value {
+fn local_engine_status(dir: &Path, def: &EngineDef, cli_ok: bool) -> Value {
     let total = engine_total_bytes(def);
     let mut bytes = 0u64;
     let mut missing: Vec<String> = Vec::new();
@@ -436,8 +692,12 @@ fn local_engine_status(dir: &Path, def: &EngineDef) -> Value {
             missing.push(f.name.clone());
         }
     }
+    let models_ready = missing.is_empty() && !def.files.is_empty();
     json!({
-        "ready": missing.is_empty() && !def.files.is_empty(),
+        // 可用 = 模型齐 + 本平台合成内核已装（内核只装一次，多引擎共用）
+        "ready": models_ready && cli_ok,
+        "modelsReady": models_ready,
+        "cliReady": cli_ok,
         "dir": dir.to_string_lossy(),
         "bytes": bytes,
         "totalBytes": total,
@@ -481,18 +741,22 @@ pub fn status_impl(ctx: &Arc<Ctx>, patch: Option<Value>) -> Result<Value, String
             HashMap::new()
         }
     };
+    let cli = cli_status(ctx);
+    let cli_ok = cli.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
     let mut engines = serde_json::Map::new();
     for id in LOCAL_ENGINES {
         match engines_manifest.get(*id) {
             Some(def) => {
                 let dir = engine_dir(ctx, id);
-                engines.insert((*id).to_string(), local_engine_status(&dir, def));
+                engines.insert((*id).to_string(), local_engine_status(&dir, def, cli_ok));
             }
             None => {
                 engines.insert(
                     (*id).to_string(),
                     json!({
                         "ready": false,
+                        "modelsReady": false,
+                        "cliReady": cli_ok,
                         "dir": engine_dir(ctx, id).to_string_lossy(),
                         "bytes": 0,
                         "totalBytes": 0,
@@ -514,6 +778,7 @@ pub fn status_impl(ctx: &Arc<Ctx>, patch: Option<Value>) -> Result<Value, String
     Ok(json!({
         "engine": settings.engine,
         "engines": engines,
+        "cli": cli,
         "keys": {
             "siliconflow": !settings.keys.siliconflow.is_empty(),
             "openai": !settings.keys.openai.is_empty(),
@@ -578,7 +843,7 @@ pub async fn prepare_impl(ctx: &Arc<Ctx>, engine: Value) -> Result<Value, String
         .ok_or_else(|| format!("语音合成清单缺少引擎：{engine_id}"))?;
     let dir = engine_dir(ctx, &engine_id);
 
-    if engine_ready(&dir, def) {
+    if engine_ready(&dir, def) && cli_ready(ctx).is_some() {
         DL_ERROR.lock().unwrap().take();
         return status_impl(ctx, None);
     }
@@ -589,7 +854,7 @@ pub async fn prepare_impl(ctx: &Arc<Ctx>, engine: Value) -> Result<Value, String
     DL_BUSY.store(true, Ordering::SeqCst);
     *DL_ENGINE.lock().unwrap() = Some(engine_id.clone());
     *DL_ERROR.lock().unwrap() = None;
-    *PROGRESS.lock().unwrap() = Some((0, engine_total_bytes(def)));
+    *PROGRESS.lock().unwrap() = Some((0, local_bundle_bytes(ctx, def)));
 
     let c = ctx.clone();
     let id = engine_id.clone();
@@ -605,6 +870,15 @@ pub async fn prepare_impl(ctx: &Arc<Ctx>, engine: Value) -> Result<Value, String
     status_impl(ctx, None)
 }
 
+/// 一个本地引擎的完整下载体积：模型 + （未安装时的）本平台合成内核
+fn local_bundle_bytes(ctx: &Ctx, def: &EngineDef) -> u64 {
+    let mut total = engine_total_bytes(def);
+    if cli_ready(ctx).is_none() {
+        total += cli_pkg_bytes();
+    }
+    total
+}
+
 /// 更新进度静态量并广播 tts-progress（download.rs 内部另有 200ms 节流的逐块事件）
 fn report_progress(ctx: &Arc<Ctx>, engine: &str, done: u64, total: u64, file: &str) {
     *PROGRESS.lock().unwrap() = Some((done, total));
@@ -614,7 +888,8 @@ fn report_progress(ctx: &Arc<Ctx>, engine: &str, done: u64, total: u64, file: &s
     );
 }
 
-/// 下载一个本地引擎的全部文件：归档成员先下归档再解包，独立文件直下（全部幂等）
+/// 下载一个本地引擎的全部文件：先补齐本平台合成内核（一次安装多引擎共用），
+/// 再走模型（归档成员先下归档再解包，独立文件直下；全部幂等）
 async fn download_engine(
     ctx: &Arc<Ctx>,
     engine: &str,
@@ -622,8 +897,14 @@ async fn download_engine(
     dir: &Path,
 ) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("创建模型目录失败: {e}"))?;
-    let total = engine_total_bytes(def);
+    let total = local_bundle_bytes(ctx, def);
     let mut done: u64 = 0;
+    if cli_ready(ctx).is_none() {
+        report_progress(ctx, engine, done, total, "tts-cli");
+        ensure_cli(ctx, done, total).await?;
+        done += cli_pkg_bytes();
+        report_progress(ctx, engine, done, total, "tts-cli");
+    }
     // 同一个归档内的成员只下载/解包一次
     let mut fetched_archive: Option<PathBuf> = None;
     for f in &def.files {
@@ -975,7 +1256,12 @@ async fn local_speak(
             "本地语音模型尚未就绪，请先下载该引擎模型（{engine}）"
         ));
     }
-    let cli = tts_cli()?;
+    let cli = cli_ready(ctx).ok_or_else(|| {
+        format!(
+            "本地合成内核未安装（{}），请先下载该引擎模型（会一并获取内核）",
+            platform_key()
+        )
+    })?;
     let tmp_dir = ctx.data_dir.join("tts").join("tmp");
     std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建合成临时目录失败: {e}"))?;
     let out = tmp_dir.join(format!(
@@ -1438,5 +1724,201 @@ mod tests {
         wav[24..28].copy_from_slice(&24000u32.to_le_bytes());
         assert_eq!(wav_sample_rate(&wav), 24000);
         assert_eq!(wav_sample_rate(&[]), 22050);
+    }
+
+    /// 合成内核清单：桌面架构全覆盖。bytes 是续传的权威长度、sha256 是落位校验，
+    /// 缺任何一个都会让多端联调时的半包/坏包静默通过。
+    #[test]
+    fn cli_manifest_covers_desktop_platforms() {
+        let doc = manifest_doc().expect("清单读取失败");
+        let sec = doc.tts_bin.expect("语音合成清单缺少 tts_bin 分区");
+        assert!(!sec.version.is_empty(), "tts_bin.version 缺失");
+        for key in [
+            "macos-aarch64",
+            "macos-x86_64",
+            "linux-x86_64",
+            "linux-aarch64",
+            "windows-x86_64",
+            "windows-i686",
+            "windows-aarch64",
+        ] {
+            let list = sec
+                .platforms
+                .get(key)
+                .unwrap_or_else(|| panic!("内核清单缺少架构 {key}"));
+            assert!(!list.is_empty(), "{key} 候选包为空");
+            for p in list {
+                assert!(p.url.starts_with("https://"), "{key} 非 https 源");
+                assert!(p.bytes > 0, "{key} 未给权威字节数");
+                assert!(
+                    p.sha256.len() == 64 && p.sha256.chars().all(|c| c.is_ascii_hexdigit()),
+                    "{key} 的 sha256 不是 64 位十六进制"
+                );
+                assert!(
+                    matches!(p.kind.as_str(), "exe" | "archive"),
+                    "{key} 的内核包类型未知：{}",
+                    p.kind
+                );
+            }
+        }
+    }
+
+    /// 内核选名的边界：精确名 > 「名-版本号」改名，兄弟程序（-play / -microphone）一律不选
+    #[test]
+    fn find_cli_exe_ignores_sibling_binaries() {
+        let root = std::env::temp_dir().join(format!("bit-tts-cli-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bin = root.join("pkg").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for name in ["sherpa-onnx-offline-tts-play", "sherpa-onnx-offline-tts-microphone"] {
+            std::fs::write(bin.join(name), b"x").unwrap();
+        }
+        assert!(find_cli_exe(&root).is_none(), "只有兄弟程序时不应误判内核");
+
+        // 官方改名带版本号后缀时仍要认（这是 hit() 唯一的兜底分支）
+        let want = cli_exe_name();
+        let renamed = match want.strip_suffix(".exe") {
+            Some(base) => format!("{base}-1.13.8.exe"),
+            None => format!("{want}-1.13.8"),
+        };
+        std::fs::write(bin.join(&renamed), b"x").unwrap();
+        let got = find_cli_exe(&root).expect("版本号后缀的内核应被识别");
+        assert_eq!(got.file_name().unwrap().to_string_lossy(), renamed);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 内核安装链路（Windows/Linux 联调走的就是这条路，本机先验证）：
+    /// 合成归档 → 整包解档 → 跨一层包名目录找到 CLI → 可执行位自愈 → 真的能跑。
+    #[tokio::test]
+    async fn cli_install_extracts_and_self_heals_exec_bit() {
+        let root = std::env::temp_dir().join(format!("bit-tts-cli-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let ctx = Arc::new(crate::state::Ctx::load(crate::state::LoadOpts {
+            data_dir: root.clone(),
+            emitter: Arc::new(crate::emitter::NoopEmitter),
+            host: Arc::new(crate::emitter::NoopHost),
+            app_version: "test".into(),
+            worker_exe: None,
+            app_exe: None,
+            app_args: vec![],
+        }));
+
+        // 造一个与官方同结构的归档：<pkg>/bin/<exe> + <pkg>/lib/<依赖库>
+        let stage = root.join("stage");
+        let pkg = stage.join("sherpa-onnx-v1.13.8-fake-shared");
+        std::fs::create_dir_all(pkg.join("bin")).unwrap();
+        std::fs::create_dir_all(pkg.join("lib")).unwrap();
+        let exe = pkg.join("bin").join(cli_exe_name());
+        std::fs::write(&exe, "#!/bin/sh\necho fake-tts-ok\n").unwrap();
+        // 兄弟程序干扰项：官方归档的 bin 里真有 -play（参数不同、会抢音频设备），
+        // 且 read_dir 顺序不保证——选内核必须按精确名，不能前缀匹配
+        std::fs::write(
+            pkg.join("bin").join("sherpa-onnx-offline-tts-play"),
+            "#!/bin/sh\necho WRONG-PLAY-BINARY\n",
+        )
+        .unwrap();
+        std::fs::write(pkg.join("lib").join("libsherpa-onnx-c-api.so"), b"dep").unwrap();
+        let arch = stage.join("fake.tar.bz2");
+        let packed = std::process::Command::new("tar")
+            .args(["-c", "-j", "-f"])
+            .arg(&arch)
+            .arg("-C")
+            .arg(&stage)
+            .arg(".")
+            .output()
+            .expect("打包测试归档失败（需要 tar）");
+        assert!(
+            packed.status.success(),
+            "测试归档打包失败: {}",
+            String::from_utf8_lossy(&packed.stderr)
+        );
+
+        // 解档到内核目录，并确认 lib 与 exe 的相对关系满足 cli_lib_dir 的约定
+        let dest = cli_root(&ctx);
+        std::fs::create_dir_all(&dest).unwrap();
+        extract_all(&arch, &dest).await.expect("整包解档失败");
+        let found = find_cli_exe(&dest).expect("解档后未找到合成 CLI");
+        assert_eq!(found.file_name().unwrap().to_string_lossy(), cli_exe_name());
+        let lib = cli_lib_dir(&found).expect("依赖库目录未按 ../lib 约定解析");
+        assert!(lib.join("libsherpa-onnx-c-api.so").is_file());
+
+        // 可执行位丢失时自愈（部分文件系统/解压链路会丢掉 +x）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&found, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let ready = cli_ready(&ctx).expect("可执行位自愈后仍未判定就绪");
+            assert_eq!(ready, found);
+            let mode = std::fs::metadata(&ready).unwrap().permissions().mode();
+            assert_ne!(mode & 0o111, 0, "可执行位未补回");
+            let run = std::process::Command::new(&ready).output().expect("内核不可执行");
+            assert!(
+                String::from_utf8_lossy(&run.stdout).contains("fake-tts-ok"),
+                "解档出的 CLI 未能运行"
+            );
+        }
+        // 只剩兄弟程序时不得当成内核（-play 参数不同、会去抢音频设备）
+        std::fs::remove_file(&found).unwrap();
+        assert!(find_cli_exe(&dest).is_none(), "只留 -play 时不应被当成内核");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 真实联网安装本平台合成内核（约 20MB）并让它跑一次 `--help`：
+    /// 校验 assets.json 的 tts_bin 包 → SHA-256 → 解档 → 动态库能装载 → CLI 可执行。
+    /// 多端联调时在各自主机上手动触发一次，比只看单测更能确认该平台可用。
+    ///
+    /// 触发：cargo test -p bit-core --lib tts::tests::e2e -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "需联网下载约 20MB 合成内核"]
+    async fn e2e_cli_install_real_and_runs() {
+        // 固定目录：内核只下一次，重复跑直接命中幂等分支
+        let root = std::env::temp_dir().join("bit-tts-e2e-cli");
+        std::fs::create_dir_all(&root).unwrap();
+        let ctx = Arc::new(crate::state::Ctx::load(crate::state::LoadOpts {
+            data_dir: root.clone(),
+            emitter: Arc::new(crate::emitter::NoopEmitter),
+            host: Arc::new(crate::emitter::NoopHost),
+            app_version: "test".into(),
+            worker_exe: None,
+            app_exe: None,
+            app_args: vec![],
+        }));
+        let total = cli_pkg_bytes().max(1);
+        let exe = ensure_cli(&ctx, 0, total)
+            .await
+            .unwrap_or_else(|e| panic!("{} 平台内核安装失败：{e}", platform_key()));
+        println!("内核就位：{}", exe.display());
+
+        let mut cmd = tokio::process::Command::new(&exe);
+        cmd.arg("--help");
+        // 与 local_speak 同样的依赖库环境兜底（rpath 之外再指一次 lib/）
+        if let Some(lib) = cli_lib_dir(&exe) {
+            #[cfg(target_os = "macos")]
+            cmd.env("DYLD_LIBRARY_PATH", &lib);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            cmd.env("LD_LIBRARY_PATH", &lib);
+            #[cfg(windows)]
+            cmd.env("PATH", {
+                let old = std::env::var("PATH").unwrap_or_default();
+                format!("{};{}", lib.display(), old)
+            });
+        }
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| format!("内核无法启动（多半是依赖库没找到）: {e}"))
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            text.contains("offline-tts") || text.contains("--output-filename"),
+            "内核 --help 输出异常：{}",
+            text.chars().take(400).collect::<String>()
+        );
+        println!("内核可执行（{} 字节帮助文本）", text.len());
     }
 }
