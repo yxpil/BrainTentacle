@@ -42,8 +42,12 @@ function say(...parts) {
 // ── 小工具 ───────────────────────────────────────────────────────
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: opts.timeout || 15000, env: process.env }, (err, stdout, stderr) =>
-      resolve({ err, stdout: String(stdout || ""), stderr: String(stderr || "") })
+    // windowsHide：Windows 上拉控制台程序会新开窗口抢前台焦点，后续 keybd_event 就粘错地方
+    execFile(
+      cmd,
+      args,
+      { timeout: opts.timeout || 15000, env: process.env, windowsHide: true },
+      (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ""), stderr: String(stderr || "") })
     );
   });
 }

@@ -788,12 +788,14 @@ const isWayland = () => caps.isWayland(process.platform, process.env);
 const screenshotBackend = caps.screenshotBackend;
 const shotMissingHint = () => caps.shotMissingHint({ platform: process.platform, env: process.env });
 // 子进程跑外部截图工具（300 秒上限：交互框选要留给用户）
+// windowsHide：GUI 进程拉控制台程序会新开一个控制台窗口，那窗口会抢前台焦点，
+// 紧接着的 keybd_event Ctrl+V 就粘到黑框里去了。
 function execShot(bin, args, opts = {}) {
   return new Promise((resolve) => {
     cp.execFile(
       bin,
       args,
-      { timeout: 300000, encoding: opts.binary ? 'buffer' : 'utf8' },
+      { timeout: 300000, encoding: opts.binary ? 'buffer' : 'utf8', windowsHide: true },
       (err, stdout, stderr) => resolve({ err, stdout: stdout || (opts.binary ? Buffer.alloc(0) : ''), stderr: String(stderr || '') }),
     );
   });
