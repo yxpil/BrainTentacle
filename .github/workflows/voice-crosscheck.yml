@@ -51,7 +51,8 @@ jobs:
   crosscheck:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    # Windows runner 上 bit-core 那棵依赖树要编译很久（这一趟 40 分钟被吃掉在编译上），留出余量
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +88,18 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # 只缓存 crate 下载（registry + git），不缓存 target/：位核编译每次重来，
+      # 但省掉几百个 crate 的拉取，且不会因增量编译的陈旧产物给出假绿。
+      - name: 缓存 cargo 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.name }}-
+
       # 只装 voice-bridge：识别原生包（sherpa-onnx-<os>-<arch>）由 npm 按 runner 自身平台落位。
       # 不跑根 npm ci——根 postinstall 会嵌套调用 npm，Windows runner 上 cmd.exe 里
       # 「'npm' is not recognized」直接失败；且根依赖（electron/vite/esbuild）这条自检用不到：
@@ -110,8 +123,10 @@ jobs:
       - name: 本机真实探测结果（三端对照）
         run: node e2e/capabilities-probe.cjs
 
-      # ↓ 端到端与单测必须排在 beforePack 检查之前：beforePack 会改写并（CI 环境下）
-      # 剪掉 voice-bridge/node_modules 里的识别原生包，跑完再动它们就来不及了。
+      # ↓ 顺序约束：端到端要用 runner 自己那一份识别原生包，beforePack 检查会往里装 foreign 包
+      # 并（CI=true 时）pruneForeign 删掉本机那份，所以 beforePack 必须排在端到端之后；
+      # 而它又不影响 Rust 单测（单测只用临时目录构造原生包路径），故放在单测之前，
+      # 免得某个单测红了把 beforePack 的结论一起挡掉。
       # push 事件下 inputs.* 恒为空，直接写 if: inputs.x 会让端到端在自动触发里静默跳过，
       # 所以只在手动触发时才看开关。
       - name: 内核端到端（真下载 + 解档 + 执行）
@@ -122,19 +137,6 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.with_asr }}
         run: cargo test -p bit-core --lib voice::tests::e2e_download_and_transcribe -- --ignored --nocapture
 
-      - name: 相关单测（tts）
-        run: "cargo test -p bit-core --lib tts::"
-
-      - name: 相关单测（voice，含下载续传与就绪判定）
-        run: "cargo test -p bit-core --lib voice::"
-
-      # 全量单测仅作参考：既有的 Windows 路径/工具门控用例在非 Windows 上本就红
-      - name: 全量单测（信息性，不作为闸门）
-        continue-on-error: true
-        run: cargo test -p bit-core --lib
-
-      # 跨架构补装检查放最后：它会往 voice-bridge/node_modules 装 foreign 包并删掉
-      # runner 自身的包（pruneForeign 只在 CI=true 时生效），属于「用完即弃」的步骤。
       - name: beforePack 跨架构补装（存在的目标包）
         env:
           BIT_XCHECK_PLATFORM: ${{ matrix.xcheck_platform }}
@@ -148,3 +150,14 @@ jobs:
           BIT_XCHECK_ARCH: ${{ matrix.skip_arch }}
           BIT_XCHECK_EXPECT: skip
         run: node e2e/before-pack-check.cjs
+
+      - name: 相关单测（tts）
+        run: "cargo test -p bit-core --lib tts::"
+
+      - name: 相关单测（voice，含下载续传与就绪判定）
+        run: "cargo test -p bit-core --lib voice::"
+
+      # 全量单测仅作参考：既有的 Windows 路径/工具门控用例在非 Windows 上本就红
+      - name: 全量单测（信息性，不作为闸门）
+        continue-on-error: true
+        run: cargo test -p bit-core --lib

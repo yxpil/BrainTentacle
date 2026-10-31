@@ -1819,7 +1819,9 @@ mod tests {
         )
         .unwrap();
         std::fs::write(pkg.join("lib").join("libsherpa-onnx-c-api.so"), b"dep").unwrap();
-        let arch = stage.join("fake.tar.bz2");
+        // 归档必须落在被打包的树之外：GNU tar（Linux）一边写归档一边扫目录会判
+        // 「file changed as we read it」并以退出码 1 失败，BSD tar（macOS）则容忍。
+        let arch = root.join("fake.tar.bz2");
         let packed = std::process::Command::new("tar")
             .args(["-c", "-j", "-f"])
             .arg(&arch)
