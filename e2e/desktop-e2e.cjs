@@ -1,13 +1,18 @@
-// yxpil · 整应用无头端到端（Linux / Xvfb）
+// yxpil · 整应用端到端（Linux / Xvfb、Windows 真桌面）
 //! 起真的 Electron + 真的渲染层，用 Chromium 的假麦克风喂固定素材，把「语音输入 → 转写 →
-//! 粘回原应用」「框选截图 → 挂附件」「在线合成」「全局语音事件通路」在 CI 里真跑一遍。
+//! 粘回原应用」「框选截图 → 挂附件」「在线合成」「全局语音事件通路」真跑一遍。
 //! 覆盖的是任何单测都摸不到的那一层：renderer 取流/编码/调 core、主进程 hostCommand、
-//! 剪贴板 → xdotool 注入、截图工具真被调用、事件回渲染层并落到 DOM。
+//! 剪贴板 → xdotool/keybd_event 注入、截图工具真被调用、事件回渲染层并落到 DOM。
+//!
+//! 平台差异：
+//!   Linux   截图走 scrot + xdotool 画选区；粘贴走 xdotool（P1b/P3b/P4/P4b）
+//!   Windows 截图走 ms-screenclip（交互式，CI 里不点）；粘贴走 keybd_event；
+//!           P4b 额外用 PowerShell 从外部读回剪贴板，验证图片/文本被原样还原
 //!
 //! 前置（由 .github/workflows/desktop-e2e.yml 提供）：
 //!   - dist/（vite 产物）、crates/bit-napi/bit_napi.node（cargo 产物改名落位）
-//!   - voice-bridge 依赖 + 系统里的 Xvfb / openbox / scrot / xdotool
-//! 用法：xvfb-run -a node e2e/desktop-e2e.cjs
+//!   - voice-bridge 依赖 + Linux 系统里的 Xvfb / openbox / scrot / xdotool
+//! 用法：xvfb-run -a node e2e/desktop-e2e.cjs   /   node e2e/desktop-e2e.cjs（Windows）
 //! 环境：BIT_E2E_KEEP=1 保留数据目录；BIT_E2E_DISPLAY 指定 DISPLAY；
 //!       BIT_E2E_SKIP_SCREENSHOT=1 / BIT_E2E_SKIP_VOICE=1 跳过对应探针（本机调试用）。
 const { spawn, execFile } = require("child_process");
@@ -42,6 +47,82 @@ function run(cmd, args, opts = {}) {
     );
   });
 }
+
+// Windows：剪贴板与前台窗口都只能借 PowerShell 操作。
+// -STA 是硬要求：System.Windows.Forms 的 Clipboard 在 MTA 线程上会抛 ThreadStateException。
+function psRun(script, timeout = 30000) {
+  return run("powershell.exe", ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script], { timeout });
+}
+
+// 读剪贴板：优先读 Windows 的 PNG 自定义格式（Electron 写图片时一定有），
+// 退到 CF_BITMAP。返回 { formats, png, pngLen, color:"R,G,B", text }
+// 这是「另一只手」读：被测应用自称还原成功不算数，要外部程序真的读得回来。
+const PS_CLIP_READ = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+function Read-Clip {
+  $do = [System.Windows.Forms.Clipboard]::GetDataObject()
+  if ($null -eq $do) { return @{ formats = @(); png = $false; pngLen = 0; color = $null; text = $null } }
+  $o = @{ formats = @($do.GetFormats()); png = $false; pngLen = 0; color = $null; text = $null }
+  if ($do.GetDataPresent('PNG')) {
+    $raw = $do.GetData('PNG')
+    if ($raw -is [System.IO.MemoryStream]) { $bytes = $raw.ToArray() } else { $bytes = [byte[]]$raw }
+    if ($bytes.Length -gt 8) {
+      $o.png = $true
+      $o.pngLen = $bytes.Length
+      $ms = New-Object System.IO.MemoryStream(,$bytes)
+      $bmp = New-Object System.Drawing.Bitmap($ms)
+      $c = $bmp.GetPixel(5,5)
+      $o.color = "$($c.R),$($c.G),$($c.B)"
+      $bmp.Dispose()
+    }
+  } elseif ($do.GetDataPresent('Bitmap')) {
+    $img = [System.Windows.Forms.Clipboard]::GetImage()
+    if ($img) {
+      $c = $img.GetPixel(5,5)
+      $o.color = "$($c.R),$($c.G),$($c.B)"
+      $img.Dispose()
+    }
+  }
+  if ($do.GetDataPresent([System.Windows.Forms.DataFormats]::UnicodeText)) {
+    $o.text = [string]$do.GetData([System.Windows.Forms.DataFormats]::UnicodeText)
+  }
+  return $o
+}
+$ok = $false
+$res = $null
+for ($i = 0; $i -lt 12 -and -not $ok; $i++) {
+  try { $res = Read-Clip; $ok = $true } catch { Start-Sleep -Milliseconds 250 }
+}
+if (-not $ok) { throw '剪贴板被占用，读取失败' }
+$res | ConvertTo-Json -Compress`;
+
+const PS_CLIP_SET_IMAGE = (r, g, b) => `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bmp = New-Object System.Drawing.Bitmap 40,40
+$gfx = [System.Drawing.Graphics]::FromImage($bmp)
+$gfx.Clear([System.Drawing.Color]::FromArgb(255,${r},${g},${b}))
+$gfx.Dispose()
+$ok = $false
+for ($i = 0; $i -lt 12 -and -not $ok; $i++) {
+  try { [System.Windows.Forms.Clipboard]::SetImage($bmp); $ok = $true } catch { Start-Sleep -Milliseconds 250 }
+}
+$bmp.Dispose()
+if (-not $ok) { throw '剪贴板被占用，写入图片失败' }
+'ok'`;
+
+const PS_CLIP_SET_TEXT = (text) => `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+$ok = $false
+for ($i = 0; $i -lt 12 -and -not $ok; $i++) {
+  try { [System.Windows.Forms.Clipboard]::SetText(${JSON.stringify(text)}); $ok = $true } catch { Start-Sleep -Milliseconds 250 }
+}
+if (-not $ok) { throw '剪贴板被占用，写入文本失败' }
+'ok'`;
 
 async function portOpen(port) {
   return new Promise((resolve) => {
@@ -246,6 +327,13 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
   app.on("exit", (c) => say(`(electron 退出 code=${c})`));
   // 外部中断也要把应用带走，否则下一趟会连到残留实例
   const sweep = () => {
+    if (process.platform === "win32") {
+      // Windows 没有进程组信号：taskkill /T 按父子树收掉 Electron 与它的 worker
+      try {
+        require("child_process").execFileSync("taskkill", ["/PID", String(app.pid), "/T", "/F"], { stdio: "ignore" });
+      } catch {}
+      return;
+    }
     try {
       process.kill(-app.pid, "SIGKILL");
     } catch {}
@@ -287,6 +375,12 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
         if (!caps.screenshot_supported) throw new Error(`截图后端不可用：${caps.screenshot_hint || "无提示"}`);
         if (!caps.paste_supported) throw new Error(`粘贴工具不可用：${caps.paste_hint || "无提示"}`);
       }
+      if (process.platform === "win32") {
+        // Windows 的截图走 ms-screenclip、粘贴走 keybd_event，两者都无外部依赖：
+        // 能力位为假说明选择矩阵/平台判断写错了
+        if (!caps.screenshot_supported) throw new Error(`截图后端不可用：${caps.screenshot_hint || "无提示"}`);
+        if (!caps.paste_supported) throw new Error(`粘贴通道不可用：${caps.paste_hint || "无提示"}`);
+      }
       return `title=${st.title} tools=${ov.tool_count} 截图=${caps.screenshot_backend || "-"} 粘贴=${caps.paste_tool || "-"}`;
     });
 
@@ -302,6 +396,28 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
         ]);
         if (r.err) throw new Error(`osascript 聚焦失败：${r.err.message}`);
         return String(app.pid);
+      }
+      if (process.platform === "win32") {
+        // user32 SetForegroundWindow；被前台锁挡住时退到 WScript.Shell AppActivate。
+        // 必须确认真的成了前台窗口：keybd_event 的 Ctrl+V 只会落到当前前台。
+        const r = await psRun(`
+$ErrorActionPreference = 'Stop'
+Add-Type -Namespace BIT -Name W -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int c); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();'
+$p = Get-Process -Id ${app.pid}
+$p.Refresh()
+$h = $p.MainWindowHandle
+if ($h -eq [System.IntPtr]::Zero) { throw '主窗口句柄为空（窗口可能还没显示）' }
+[BIT.W]::ShowWindow($h, 9) | Out-Null
+[BIT.W]::SetForegroundWindow($h) | Out-Null
+Start-Sleep -Milliseconds 300
+if ([BIT.W]::GetForegroundWindow() -ne $h) {
+  (New-Object -ComObject WScript.Shell).AppActivate(${app.pid}) | Out-Null
+  Start-Sleep -Milliseconds 300
+}
+if ([BIT.W]::GetForegroundWindow() -ne $h) { throw '窗口未能成为前台窗口' }
+$h.ToString()`);
+        if (r.err) throw new Error(`PowerShell 聚焦失败：${(r.stderr || r.err.message).trim().split("\n").filter(Boolean).slice(-2).join(" ")}`);
+        return r.stdout.trim();
       }
       let r = await run("xdotool", ["search", "--onlyvisible", "--name", title]);
       let ids = r.stdout.split("\n").filter(Boolean);
@@ -320,6 +436,19 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
     const DRAFT_SEL = "textarea.rounded-t-2xl";
     const draftValue = () => cdp.js(`(document.querySelector(${JSON.stringify(DRAFT_SEL)}) || {}).value || ""`);
     const toastText = () => cdp.js(`document.body.innerText || ""`);
+    // Windows 专用：外部视角读剪贴板（见 PS_CLIP_READ）
+    const clipState = async () => {
+      const r = await psRun(PS_CLIP_READ);
+      if (r.err) {
+        throw new Error(`读剪贴板失败：${(r.stderr || r.err.message).trim().split("\n").filter(Boolean).slice(-2).join(" ")}`);
+      }
+      try {
+        return JSON.parse(r.stdout.trim());
+      } catch {
+        throw new Error(`剪贴板状态不是 JSON：${r.stdout.slice(0, 200)}`);
+      }
+    };
+    const psErr = (r) => (r.stderr || r.err.message).trim().split("\n").filter(Boolean).slice(-2).join(" ");
 
     // ── P1a 附件事件通路（不依赖截图工具，三端都跑）───────────
     // 与主进程 sendToMain('screenshot-capture') 落到渲染层是同一个入口：
@@ -481,6 +610,56 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
         },
         { hard: capsNow.paste_supported }
       );
+    }
+
+    // ── P4b 剪贴板还原（Windows）：粘贴借走剪贴板后，原图片/原文本要还回去 ──
+    // 与截图提问共用同一条「图片回读」通道：captureWindows 靠 clipboardPngBase64
+    // 从剪贴板取 ms-screenclip 的图，图片还原则走 clipboardWritePng。Electron 44
+    // 删掉同步 readImage/writeImage 后，这里曾是静默失效且没有任何自动验证的角落。
+    if (process.platform === "win32") {
+      await probe("P4b 剪贴板还原：图片/文本粘贴后原内容回位（截图回读同一通道）", async () => {
+        const COLOR = [12, 34, 56];
+        const want = COLOR.join(",");
+        const pasteAndWait = async (marker) => {
+          await focusWindow();
+          await cdp.js(`(() => { const t = document.querySelector(${JSON.stringify(DRAFT_SEL)}); t.focus(); return true; })()`);
+          const r = await cdp.invoke("paste_text_to_foreground", { text: marker });
+          if (!r?.ok) throw new Error(`hostCommand 返回：${JSON.stringify(r)}`);
+          await until("标记文本进入输入框", async () => (await draftValue()).includes(marker), 15000, 300);
+        };
+
+        // ① 原剪贴板是一张图片
+        const setImg = await psRun(PS_CLIP_SET_IMAGE(...COLOR));
+        if (setImg.err) throw new Error(`写剪贴板图片失败：${psErr(setImg)}`);
+        const pre = await clipState();
+        if (pre.color !== want) throw new Error(`图片未按预期落到剪贴板：${JSON.stringify(pre).slice(0, 300)}`);
+        await pasteAndWait(`贴图还原${Date.now()}`);
+        const imgBack = await until(
+          "剪贴板图片还原",
+          async () => {
+            const s = await clipState();
+            return s.color === want ? s : null;
+          },
+          20000,
+          700
+        );
+
+        // ② 原剪贴板是文本（图片场景下 writeText 与 write 的先后顺序也要正确）
+        const txt = "BIT-CLIP-ORIGINAL";
+        const setTxt = await psRun(PS_CLIP_SET_TEXT(txt));
+        if (setTxt.err) throw new Error(`写剪贴板文本失败：${psErr(setTxt)}`);
+        await pasteAndWait(`文本还原${Date.now()}`);
+        await until(
+          "剪贴板文本还原",
+          async () => {
+            const s = await clipState();
+            return s.text === txt ? s : null;
+          },
+          20000,
+          700
+        );
+        return `图片 ${want}（${imgBack.png ? `PNG ${imgBack.pngLen}B` : "DIB"}）+ 文本 ${txt} 均已还原`;
+      });
     }
 
     // ── P5 热键注册（信息性）：注册表能写、宿主能读回 ──────────

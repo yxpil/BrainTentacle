@@ -1,13 +1,14 @@
 name: desktop-e2e
 
-# 整应用无头端到端：在 Xvfb 里把真的 Electron 跑起来（不是只跑 Rust/napi），
-# 用 Chromium 的假麦克风回放固定素材，验证「任何单测都摸不到的那一层」：
+# 整应用端到端：在 Xvfb（Linux）或真桌面会话（Windows）里把真的 Electron 跑起来
+# （不是只跑 Rust/napi），用 Chromium 的假麦克风回放固定素材，验证「任何单测都摸不到的那一层」：
 #   启动 → preload shim → 渲染树 → core 命令通路
-#   框选截图：真调 scrot → 主进程事件 → 渲染层挂附件
-#   语音输入：全局语音事件 → 渲染层录音(假麦克风) → 本地识别 → 剪贴板 + xdotool 粘回
+#   框选截图：真调截图工具 → 主进程事件 → 渲染层挂附件（Linux 真框选；Windows 交互式不点）
+#   语音输入：全局语音事件 → 渲染层录音(假麦克风) → 本地识别 → 剪贴板 + 注入粘回
 #   在线合成：tts_speak(edge) 拿回可解码音频
+#   Windows 追加：粘贴后剪贴板图片/文本原样还原（截图回读与 Electron 44 剪贴板重写的同一条通道）
 # 仍然：不打 tag、不出安装包、不上传任何产物。
-# 交互式的部分（macOS 辅助功能授权、Windows UAC / ms-screenclip、真实唤醒词）在这里验不了。
+# 交互式的部分（macOS 辅助功能授权、Windows UAC / ms-screenclip 框选、真实唤醒词）在这里验不了。
 on:
   workflow_dispatch:
   push:
@@ -38,7 +39,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  desktop:
+  desktop-linux:
     name: linux-x64-xvfb
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -100,3 +101,47 @@ jobs:
         run: |
           xvfb-run -a --server-args="-screen 0 1280x800x24" \
             node e2e/desktop-e2e.cjs
+
+  desktop-windows:
+    name: windows-x64
+    # windows-latest 是带桌面会话的真机：Electron 窗口真的在屏，前台焦点、keybd_event、
+    # PowerShell 剪贴板 IO 都是真语义。交互式的 ms-screenclip 框选仍需人手，这里不点。
+    # 时限放宽到 120：冷缓存的 bit-core 依赖树在 Windows 上编译就要 40 分钟上下
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-desktop-e2e-win-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-desktop-e2e-win-
+
+      - name: 依赖安装（根 + 两个 bridge）
+        run: npm ci --no-audit --no-fund
+
+      - name: 前端构建产物（dist/）
+        run: npm run build
+
+      - name: 编译 napi 核心并落位
+        run: |
+          cargo build --locked -p bit-napi
+          Copy-Item target/debug/bit_napi.dll crates/bit-napi/bit_napi.node -Force
+          Get-Item crates/bit-napi/bit_napi.node, dist/index.html | Format-Table Name,Length
+
+      - name: 整应用端到端（真窗口 + 剪贴板还原）
+        env:
+          BIT_E2E_WAIT_MODEL: "900000"
+        run: node e2e/desktop-e2e.cjs
