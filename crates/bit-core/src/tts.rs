@@ -1631,6 +1631,35 @@ pub async fn voices_impl(ctx: &Arc<Ctx>, engine: String) -> Result<Value, String
 mod tests {
     use super::*;
 
+    /// 内核起不来时的现场：exe 大小 + bin/ 与 lib/ 的内容（Windows 单文件内核没有 lib/，
+    /// 缺什么库只能靠这份清单判断）
+    fn cli_diag(exe: &Path) -> String {
+        let mut s = format!(
+            "内核：{}（{} 字节）",
+            exe.display(),
+            std::fs::metadata(exe).map(|m| m.len()).unwrap_or(0)
+        );
+        let list = |dir: &Path| -> Vec<String> {
+            let mut v: Vec<String> = std::fs::read_dir(dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            v.sort();
+            v
+        };
+        if let Some(bin) = exe.parent() {
+            s.push_str(&format!("\nbin/：{}", list(bin).join(", ")));
+        }
+        match cli_lib_dir(exe) {
+            Some(lib) => s.push_str(&format!("\nlib/：{}", list(&lib).join(", "))),
+            None => s.push_str("\nlib/：不存在（单文件内核，依赖需自带）"),
+        }
+        s
+    }
+
     fn settings_with_extra(extra: Value) -> TtsSettings {
         let mut s = TtsSettings::default();
         s.extra = extra.as_object().unwrap().clone().into_iter().collect();
@@ -1894,6 +1923,9 @@ mod tests {
 
         let mut cmd = tokio::process::Command::new(&exe);
         cmd.arg("--help");
+        // 与 local_speak 同样的子进程卫生：不接管测试进程的 stdin、Windows 不弹控制台窗口
+        cmd.stdin(std::process::Stdio::null());
+        crate::registry::no_window_tokio(&mut cmd);
         // 与 local_speak 同样的依赖库环境兜底（rpath 之外再指一次 lib/）
         if let Some(lib) = cli_lib_dir(&exe) {
             #[cfg(target_os = "macos")]
@@ -1906,11 +1938,15 @@ mod tests {
                 format!("{};{}", lib.display(), old)
             });
         }
-        let out = cmd
-            .output()
-            .await
-            .map_err(|e| format!("内核无法启动（多半是依赖库没找到）: {e}"))
-            .unwrap();
+        // 必须自带超时：Windows 真机上曾出现 --help 永不返回（缺依赖 DLL 时系统会弹框等用户
+        // 点确定，CI 里没人点 → 子进程和整个 job 一起挂到超时）。超时时把内核目录内容打出来，
+        // 下一趟就能直接判断是缺库还是别的。
+        let out = match tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await {
+            Err(_) => panic!("内核 --help 120 秒未返回\n{}", cli_diag(&exe)),
+            Ok(r) => r
+                .map_err(|e| format!("内核无法启动（多半是依赖库没找到）: {e}"))
+                .unwrap(),
+        };
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
