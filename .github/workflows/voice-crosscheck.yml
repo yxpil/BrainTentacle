@@ -5,9 +5,11 @@ name: voice-crosscheck
 #   2) 本地合成内核按平台真下载 → 解档 → 选名 → 执行（含 Windows DLL / Linux .so 加载）
 #   3) 跨架构识别原生包补装（electron-builder beforePack 的同一段逻辑）
 #   4) 识别 worker 起停 + 固定素材 WAV 转写（含 Linux LD_LIBRARY_PATH / Windows PATH）
+#   5) 在线合成桥真出声（edge 音频非空可解码 + 无 Key/非法引擎的错误分支）
 # 触发：手动 dispatch + 语音相关文件变更时自动跑（见下方 on: 说明）。
 # 不打 tag、不出包、不上传任何产物，也不接进发布链。
-# 交互部分（真实框选、抢焦点粘贴、辅助功能/UAC 弹窗）在这里验不了，仍需目标机器人工点一遍。
+# 交互部分（真实框选、抢焦点粘贴、辅助功能/UAC 弹窗）在这里验不了：
+# 框选与粘贴注入改由 desktop-e2e 在 Xvfb 里真跑，辅助功能/UAC 弹窗仍需目标机器人工点一遍。
 # 触发说明：workflow_dispatch 要求工作流文件存在于**默认分支**才会在 Actions 里注册；
 # 本文件只在 windows 分支上，光有 dispatch 是点不起来的。故再加一个按路径收窄的 push 触发——
 # 只有语音/桌面能力相关代码变更才会跑这条自检，且它不出包、不上传产物、不参与发布链。
@@ -122,6 +124,13 @@ jobs:
 
       - name: 本机真实探测结果（三端对照）
         run: node e2e/capabilities-probe.cjs
+
+      # 在线引擎此前只有「node_modules 里有没有包」这一条状态位断言，从没真出过声音。
+      # 这一步拉起出厂同一条 tts-worker 桥，edge 合成必须拿回可解码音频；
+      # 排在 beforePack 之前：那两步会 pruneForeign 掉本机识别包，桥依赖虽不受影响，
+      # 但顺序统一成「所有要用本机依赖的步骤在前」更省心。
+      - name: 在线合成真出声（edge / 错误分支）
+        run: node e2e/tts-online-check.cjs
 
       # ↓ 顺序约束：端到端要用 runner 自己那一份识别原生包，beforePack 检查会往里装 foreign 包
       # 并（CI=true 时）pruneForeign 删掉本机那份，所以 beforePack 必须排在端到端之后；

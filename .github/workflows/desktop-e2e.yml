@@ -1,0 +1,102 @@
+name: desktop-e2e
+
+# 整应用无头端到端：在 Xvfb 里把真的 Electron 跑起来（不是只跑 Rust/napi），
+# 用 Chromium 的假麦克风回放固定素材，验证「任何单测都摸不到的那一层」：
+#   启动 → preload shim → 渲染树 → core 命令通路
+#   框选截图：真调 scrot → 主进程事件 → 渲染层挂附件
+#   语音输入：全局语音事件 → 渲染层录音(假麦克风) → 本地识别 → 剪贴板 + xdotool 粘回
+#   在线合成：tts_speak(edge) 拿回可解码音频
+# 仍然：不打 tag、不出安装包、不上传任何产物。
+# 交互式的部分（macOS 辅助功能授权、Windows UAC / ms-screenclip、真实唤醒词）在这里验不了。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - windows
+    paths:
+      - "electron/**"
+      - "src/**"
+      - "crates/bit-napi/**"
+      - "crates/bit-core/src/voice.rs"
+      - "crates/bit-core/src/tts.rs"
+      - "crates/bit-core/src/download.rs"
+      - "voice-bridge/**"
+      - "e2e/desktop-e2e.cjs"
+      - "e2e/fixtures/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/desktop-e2e.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  desktop:
+    name: linux-x64-xvfb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-desktop-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-desktop-e2e-
+
+      # Xvfb + 窗口管理器 + 产品实际会挑中的截图/注入工具（scrot 在 X11 顺序里先于 import）
+      # bit-core 在 Linux 链接 -lxcb / -lxdo（截图与模拟按键），缺 dev 包编译期就红
+      - name: 系统依赖（Xvfb / 截图 / 注入 / Electron 运行库）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb openbox scrot xdotool \
+            libxcb1-dev libxdo-dev pkg-config libssl-dev \
+            libnss3 libgbm1 libasound2t64 libgtk-3-0 libxss1 libxtst6 libxkbcommon0 \
+            libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxcomposite1 libxdamage1 libxrandr2 \
+            fonts-noto-cjk
+          # runner 没有声卡：给 ALSA 一个空设备，Chromium 的 AudioContext 才有输出端，
+          # 录音用的 ScriptProcessor 才会被音频线程拉动（否则拿不到 PCM）
+          printf 'pcm.!default { type null }\nctl.!default { type null }\n' > "$HOME/.asoundrc"
+
+      # 根依赖：electron 本体（跑应用）+ vite（出 dist 产物）；postinstall 会顺带装
+      # dsh-bridge / voice-bridge，识别与合成的 worker 依赖就位。
+      - name: 依赖安装（根 + 两个 bridge）
+        run: npm ci --no-audit --no-fund
+
+      - name: 前端构建产物（dist/）
+        run: npm run build
+
+      # 主进程按固定文件名 dlopen：Windows=bit_napi.dll / mac=libbit_napi.dylib / Linux=libbit_napi.so
+      # 这里只要功能验证，用 debug 产物即可（省掉 release 的编译时间）。
+      - name: 编译 napi 核心并落位
+        run: |
+          cargo build --locked -p bit-napi
+          cp target/debug/libbit_napi.so crates/bit-napi/bit_napi.node
+          ls -l crates/bit-napi/bit_napi.node dist/index.html
+
+      # 假麦克风素材固定 16k 单声道；Chromium 会循环回放，录音时长由脚本控制
+      - name: 整应用无头端到端
+        env:
+          BIT_E2E_WAIT_MODEL: "900000"
+        run: |
+          xvfb-run -a --server-args="-screen 0 1280x800x24" \
+            node e2e/desktop-e2e.cjs
