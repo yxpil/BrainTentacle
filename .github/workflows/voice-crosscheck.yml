@@ -103,9 +103,8 @@ jobs:
             cargo-${{ matrix.name }}-
 
       # 只装 voice-bridge：识别原生包（sherpa-onnx-<os>-<arch>）由 npm 按 runner 自身平台落位。
-      # 不跑根 npm ci——根 postinstall 会嵌套调用 npm，Windows runner 上 cmd.exe 里
-      # 「'npm' is not recognized」直接失败；且根依赖（electron/vite/esbuild）这条自检用不到：
-      # 能力单测、探针、beforePack 检查都只 require 仓库内 .cjs，不读根 node_modules。
+      # 不跑根 npm ci——这条自检用不到根依赖（electron/vite/esbuild）：能力单测、探针、
+      # beforePack 检查都只 require 仓库内 .cjs，不读根 node_modules。
       - name: 依赖安装（voice-bridge）
         working-directory: voice-bridge
         run: npm ci --no-audit --no-fund
