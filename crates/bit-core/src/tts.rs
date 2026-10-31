@@ -369,11 +369,21 @@ fn find_cli_exe(root: &Path) -> Option<PathBuf> {
         if name == want {
             return true;
         }
-        // 兜底：容忍 sherpa-onnx-offline-tts-1.13.8 这类「名字后面直接跟版本号」的改名
-        match name.strip_prefix(want).and_then(|rest| rest.strip_prefix('-')) {
-            Some(v) => v.chars().next().map_or(false, |c| c.is_ascii_digit()),
-            None => false,
-        }
+        // 兜底：容忍 sherpa-onnx-offline-tts-1.13.8 这类「名字后面直接跟版本号」的改名。
+        // Windows 上版本号插在扩展名之前（…-1.13.8.exe），所以先拆掉扩展名再比。
+        let (stem, ext) = match want.rsplit_once('.') {
+            Some((s, e)) => (s, format!(".{e}")),
+            None => (want, String::new()),
+        };
+        let rest = match name.strip_prefix(stem).and_then(|r| r.strip_prefix('-')) {
+            Some(r) => r,
+            None => return false,
+        };
+        let rest = match rest.strip_suffix(ext.as_str()) {
+            Some(r) => r,
+            None => return false,
+        };
+        rest.chars().next().map_or(false, |c| c.is_ascii_digit())
     }
     fn walk(dir: &Path, depth: u32) -> Option<PathBuf> {
         if depth > 3 {
