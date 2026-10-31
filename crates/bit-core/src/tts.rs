@@ -431,8 +431,27 @@ fn cli_pkg_bytes() -> u64 {
         .unwrap_or(0)
 }
 
+/// 内核版本戳：目录里的内核对不上当前清单版本时当没装。
+/// 0.7.1 的 Windows 就踩过这个坑——误装的 GUI exe 一直在目录里，
+/// 不校验版本就永远「已就位」，换了正确包也不会重下。
+fn cli_stamp(ctx: &Ctx) -> PathBuf {
+    cli_root(ctx).join(".installed")
+}
+
+fn write_cli_stamp(ctx: &Ctx, version: &str) {
+    let _ = std::fs::write(cli_stamp(ctx), version);
+}
+
 /// 内核就位判定 + 权限自愈：tar 解出的可执行位在少数文件系统上会丢
 fn cli_ready(ctx: &Ctx) -> Option<PathBuf> {
+    let (version, _) = cli_pkg_list();
+    if version.is_empty() {
+        return None;
+    }
+    let stamp = std::fs::read_to_string(cli_stamp(ctx)).unwrap_or_default();
+    if stamp.trim() != version {
+        return None;
+    }
     let exe = find_cli_exe(&cli_root(ctx))?;
     #[cfg(unix)]
     {
@@ -477,13 +496,16 @@ async fn ensure_cli(ctx: &Arc<Ctx>, done: u64, total: u64) -> Result<PathBuf, St
         return Ok(exe);
     }
     let key = platform_key();
-    let (_, pkgs) = cli_pkg_list();
+    let (version, pkgs) = cli_pkg_list();
     if pkgs.is_empty() {
         return Err(format!(
             "本系统（{key}）没有可用的本地合成内核包，请改用在线引擎（edge / gtts）"
         ));
     }
     let root = cli_root(ctx);
+    // 能走到这里说明目录里没有可用内核（缺版本戳或版本对不上），旧文件先清掉：
+    // 否则 find_cli_exe 会先命中残留的旧 exe，新包解出来也用不上。
+    let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).map_err(|e| format!("创建内核安装目录失败: {e}"))?;
     let mut last_err = String::new();
     for pkg in pkgs {
@@ -494,6 +516,8 @@ async fn ensure_cli(ctx: &Arc<Ctx>, done: u64, total: u64) -> Result<PathBuf, St
         };
         match installed {
             Ok(()) => {
+                // 先落版本戳再判定就位（cli_ready 就靠它认账）
+                write_cli_stamp(ctx, &version);
                 if let Some(exe) = cli_ready(ctx) {
                     return Ok(exe);
                 }
@@ -1826,6 +1850,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// 版本戳：目录里有内核对不上版本（0.7.1 误装的那个 GUI exe 就是这种）时不算就位，
+    /// 否则换对了包也永远命中旧文件，老用户一直停在坏内核上。
+    #[test]
+    fn cli_ready_requires_matching_version_stamp() {
+        let root = std::env::temp_dir().join(format!("bit-tts-cli-stamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ctx = Arc::new(crate::state::Ctx::load(crate::state::LoadOpts {
+            data_dir: root.clone(),
+            emitter: Arc::new(crate::emitter::NoopEmitter),
+            host: Arc::new(crate::emitter::NoopHost),
+            app_version: "test".into(),
+            worker_exe: None,
+            app_exe: None,
+            app_args: vec![],
+        }));
+        let dest = cli_root(&ctx);
+        std::fs::create_dir_all(dest.join("bin")).unwrap();
+        let exe = dest.join("bin").join(cli_exe_name());
+        std::fs::write(&exe, b"x").unwrap();
+        assert!(cli_ready(&ctx).is_none(), "没有版本戳不应判定就位");
+        write_cli_stamp(&ctx, "0.0.1-旧版本");
+        assert!(cli_ready(&ctx).is_none(), "版本戳对不上不应判定就位");
+        write_cli_stamp(&ctx, &cli_pkg_list().0);
+        assert_eq!(cli_ready(&ctx).as_deref(), Some(exe.as_path()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// 内核安装链路（Windows/Linux 联调走的就是这条路，本机先验证）：
     /// 合成归档 → 整包解档 → 跨一层包名目录找到 CLI → 可执行位自愈 → 真的能跑。
     #[tokio::test]
@@ -1888,6 +1939,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            // ensure_cli 解档成功后写版本戳；这里手动补上，就绪判定才认账
+            write_cli_stamp(&ctx, &cli_pkg_list().0);
             std::fs::set_permissions(&found, std::fs::Permissions::from_mode(0o644)).unwrap();
             let ready = cli_ready(&ctx).expect("可执行位自愈后仍未判定就绪");
             assert_eq!(ready, found);
