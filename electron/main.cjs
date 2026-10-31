@@ -776,17 +776,13 @@ const cp = require('child_process');
 const shotTmpPath = () => path.join(app.getPath('temp'), `bit-shot-${Date.now()}.png`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const lastLine = (e) => String((e && e.message) || e || '').trim().split('\n').filter(Boolean).slice(-1)[0] || '未知错误';
-function hasCmd(name) {
-  try {
-    cp.execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-const isWayland = () =>
-  process.platform === 'linux' &&
-  (!!process.env.WAYLAND_DISPLAY || (process.env.XDG_SESSION_TYPE || '').toLowerCase() === 'wayland');
+// 探测逻辑本体在 desktop-capabilities.cjs（纯函数 + 可注入 which），
+// 这里只绑定真实环境；选择矩阵由 e2e/capabilities-test.cjs 单测覆盖。
+const caps = require('./desktop-capabilities.cjs');
+const hasCmd = caps.realHasCmd;
+const isWayland = () => caps.isWayland(process.platform, process.env);
+const screenshotBackend = caps.screenshotBackend;
+const shotMissingHint = () => caps.shotMissingHint({ platform: process.platform, env: process.env });
 // 子进程跑外部截图工具（300 秒上限：交互框选要留给用户）
 function execShot(bin, args, opts = {}) {
   return new Promise((resolve) => {
@@ -798,63 +794,36 @@ function execShot(bin, args, opts = {}) {
     );
   });
 }
-// 截图后端探测：which 要起子进程，结果按进程缓存一次
-let _shotBackend = null;
-function screenshotBackend() {
-  if (_shotBackend !== null) return _shotBackend;
-  let id = '';
-  if (process.platform === 'darwin') id = 'screencapture';
-  else if (process.platform === 'win32') id = 'ms-screenclip';
-  else if (process.platform === 'linux') {
-    if (isWayland()) {
-      if (hasCmd('grim') && hasCmd('slurp')) id = 'grim+slurp';
-      else if (hasCmd('spectacle')) id = 'spectacle';
-    } else if (hasCmd('gnome-screenshot')) id = 'gnome-screenshot';
-    else if (hasCmd('spectacle')) id = 'spectacle';
-    else if (hasCmd('flameshot')) id = 'flameshot';
-    else if (hasCmd('scrot')) id = 'scrot';
-    else if (hasCmd('import')) id = 'imagemagick';
-  }
-  _shotBackend = id;
-  return id;
-}
-// 缺工具时的可执行指引（Linux 各桌面套件名不同，笼统提示等于没提示）
-function shotMissingHint() {
-  if (process.platform === 'linux') {
-    return isWayland()
-      ? '缺少 Wayland 截图工具：请安装 grim + slurp（KDE 可用 spectacle）'
-      : '缺少截图工具：GNOME 装 gnome-screenshot、KDE 装 spectacle，或安装 flameshot / scrot / imagemagick';
-  }
-  return `当前系统（${process.platform}）暂不支持截图提问`;
-}
 // 全局能力位：快捷键面板据此标注「本机能不能用 / 缺什么」，避免用户设完快捷键才发现是死键
 function hotkeyCaps() {
   const backend = screenshotBackend();
-  let paste = false;
+  // false 参数：只查询 macOS 辅助功能信任状态，不弹授权框
+  let trusted = false;
   if (process.platform === 'darwin') {
-    // false 参数：只查询辅助功能信任状态，不弹授权框
     try {
-      paste = systemPreferences.isTrustedAccessibilityClient(false);
+      trusted = systemPreferences.isTrustedAccessibilityClient(false);
     } catch {
-      paste = false;
+      trusted = false;
     }
-  } else if (process.platform === 'win32') {
-    paste = true; // keybd_event 走系统 API，无需额外权限或第三方工具
-  } else {
-    paste = hasCmd('xdotool') || hasCmd('wtype');
   }
-  const pasteHint = paste
-    ? ''
-    : process.platform === 'darwin'
-      ? '需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能'
-      : '缺少粘贴工具：X11 装 xdotool，Wayland 装 wtype';
+  const pasteTool = caps.pickPasteTool({
+    platform: process.platform,
+    env: process.env,
+    hasCmd,
+    trustedAccessibility: trusted,
+  });
   return {
     os: process.platform,
     screenshot_backend: backend,
     screenshot_supported: !!backend,
     screenshot_hint: backend ? '' : shotMissingHint(),
-    paste_supported: paste,
-    paste_hint: pasteHint,
+    paste_tool: pasteTool,
+    paste_supported: !!pasteTool,
+    paste_hint: pasteTool
+      ? ''
+      : process.platform === 'darwin'
+        ? '需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能'
+        : '缺少粘贴工具：X11 装 xdotool，Wayland 装 wtype',
   };
 }
 // 剪贴板图片 → base64 PNG（Windows 截图回读通道；空剪贴板/非图片返回空串）

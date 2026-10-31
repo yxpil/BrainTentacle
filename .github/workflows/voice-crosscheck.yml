@@ -1,0 +1,120 @@
+name: voice-crosscheck
+
+# 多端联调前置自检：用真机 runner 跑「不需要人坐在屏幕前」的链路——
+#   1) 桌面能力探测矩阵（截图后端 / 粘贴工具的选择与缺工具提示）
+#   2) 本地合成内核按平台真下载 → 解档 → 选名 → 执行（含 Windows DLL / Linux .so 加载）
+#   3) 跨架构识别原生包补装（electron-builder beforePack 的同一段逻辑）
+#   4) 识别 worker 起停 + 固定素材 WAV 转写（含 Linux LD_LIBRARY_PATH / Windows PATH）
+# 只 workflow_dispatch 触发：不打 tag、不出包、不上传任何产物，也不接进发布链。
+# 交互部分（真实框选、抢焦点粘贴、辅助功能/UAC 弹窗）在这里验不了，仍需目标机器人工点一遍。
+on:
+  workflow_dispatch:
+    inputs:
+      with_asr:
+        description: "跑识别端到端（各平台下载约 240MB 模型）"
+        type: boolean
+        default: true
+      with_kernel:
+        description: "跑合成内核端到端（各平台下载约 20-28MB）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-crosscheck-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  crosscheck:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # xcheck_* = beforePack 要补装的目标，故意选不等于 runner 自身的架构，
+          # 才能证明跨架构补装在各 OS 上成立；skip_* 必须是 registry 里不存在的组合
+          - name: windows-x64
+            os: windows-latest
+            xcheck_platform: win32
+            xcheck_arch: 0 # Arch.ia32 —— 真实发布，应补装成功
+            skip_platform: win32
+            skip_arch: 3 # Arch.arm64 —— sherpa 无此包，应明确跳过
+          - name: linux-x64
+            os: ubuntu-24.04
+            xcheck_platform: linux
+            xcheck_arch: 3 # Arch.arm64
+            skip_platform: linux
+            skip_arch: 2 # Arch.armv7l —— 无此包
+          - name: macos-arm64
+            os: macos-14
+            xcheck_platform: darwin
+            xcheck_arch: 1 # Arch.x64
+            skip_platform: darwin
+            skip_arch: 4 # Arch.universal —— 无此包
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 根 postinstall 会连 dsh-bridge / voice-bridge 一起装：识别原生包
+      # （sherpa-onnx-<os>-<arch>）由 npm 按 runner 自身平台落位。
+      # 顺带装 scrot + xdotool：让 Linux 上的「真机能探到截图后端 / 粘贴工具」成为阳性断言
+      - name: 依赖安装
+        run: npm ci --no-audit --no-fund
+
+      - name: 系统截图/粘贴工具（Linux）
+        if: matrix.name == 'linux-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y scrot xdotool
+
+      - name: 能力探测单测
+        run: node --test e2e/capabilities-test.cjs
+
+      - name: 本机真实探测结果（三端对照）
+        run: node e2e/capabilities-probe.cjs
+
+      - name: beforePack 跨架构补装（存在的目标包）
+        env:
+          BIT_XCHECK_PLATFORM: ${{ matrix.xcheck_platform }}
+          BIT_XCHECK_ARCH: ${{ matrix.xcheck_arch }}
+          BIT_XCHECK_EXPECT: install
+        run: node e2e/before-pack-check.cjs
+
+      - name: beforePack 对未发布架构明确跳过
+        env:
+          BIT_XCHECK_PLATFORM: ${{ matrix.skip_platform }}
+          BIT_XCHECK_ARCH: ${{ matrix.skip_arch }}
+          BIT_XCHECK_EXPECT: skip
+        run: node e2e/before-pack-check.cjs
+
+      - name: 内核端到端（真下载 + 解档 + 执行）
+        if: ${{ inputs.with_kernel }}
+        run: cargo test -p bit-core --lib tts::tests::e2e_cli_install_real_and_runs -- --ignored --nocapture
+
+      - name: 识别端到端（模型下载 + worker + 固定素材转写）
+        if: ${{ inputs.with_asr }}
+        run: cargo test -p bit-core --lib voice::tests::e2e_download_and_transcribe -- --ignored --nocapture
+
+      - name: 相关单测（tts）
+        run: "cargo test -p bit-core --lib tts::"
+
+      - name: 相关单测（voice，含下载续传与就绪判定）
+        run: "cargo test -p bit-core --lib voice::"
+
+      # 全量单测仅作参考：既有的 Windows 路径/工具门控用例在非 Windows 上本就红
+      - name: 全量单测（信息性，不作为闸门）
+        continue-on-error: true
+        run: cargo test -p bit-core --lib

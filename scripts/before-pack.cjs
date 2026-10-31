@@ -59,6 +59,7 @@ exports.default = async function beforePack(context) {
   const dest = path.join(bridgeDir, 'node_modules', pkg, 'sherpa-onnx.node');
   if (fs.existsSync(dest)) {
     console.log(`[beforePack] 原生包已就位：${pkg}`);
+    pruneForeign(bridgeDir, pkg);
     return;
   }
   const version = sherpaVersion(bridgeDir);
@@ -77,5 +78,20 @@ exports.default = async function beforePack(context) {
   if (!fs.existsSync(dest)) {
     throw new Error(`[beforePack] ${pkg} 装完仍缺 node_modules/${pkg}/sherpa-onnx.node`);
   }
+  pruneForeign(bridgeDir, pkg);
   console.log(`[beforePack] OK → ${pkg}`);
 };
+
+// 打包机自己那一份（以及其它架构那份）对目标包纯属死重量：npm 只会装构建机平台的可选依赖，
+// 跨架构出包时它跟着 voice-bridge/** 一起进 asar.unpacked，几十 MB 白占安装体积。
+// 只在 CI 里清（本地开发树保留，免得把开发者自己机器的识别弄坏）。
+function pruneForeign(bridgeDir, keepPkg) {
+  if (!process.env.CI) return;
+  const nm = path.join(bridgeDir, 'node_modules');
+  if (!fs.existsSync(nm)) return;
+  for (const name of fs.readdirSync(nm)) {
+    if (!/^sherpa-onnx-(darwin|linux|win)-/.test(name) || name === keepPkg) continue;
+    fs.rmSync(path.join(nm, name), { recursive: true, force: true });
+    console.log(`[beforePack] CI 清理非目标原生包：${name}`);
+  }
+}

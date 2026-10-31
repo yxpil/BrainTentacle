@@ -1443,12 +1443,13 @@ mod tests {
     }
 
     /// 真实端到端：voice_prepare 下载模型（SHA 校验）→ status 就绪 →
-    /// say 合成中文语音 → 起 worker（与 start_worker 同款 argv/env 协议，测试进程
-    /// 非 Electron 故用 node 启动）→ voice_transcribe 返回文本与源句比对。
+    /// 固定素材 WAV → 起 worker（与 start_worker 同款 argv/env 协议 + 同款原生库路径，
+    /// 测试进程非 Electron 故用 node 启动）→ voice_transcribe 返回文本与源句比对。
+    /// 素材已固化进仓库，三端跑的是同一段音频，识别结果可直接横向对比。
     ///
     /// 触发：cargo test -p bit-core --lib voice::tests::e2e -- --ignored --nocapture
     #[tokio::test]
-    #[ignore = "需下载约 241MB 模型 + macOS say，手动触发"]
+    #[ignore = "需下载约 241MB 模型，手动/CI 触发"]
     async fn e2e_download_and_transcribe() {
         // 固定目录：模型只下一次，重复跑 e2e 直接复用
         let data_dir = std::env::temp_dir().join("bit-voice-e2e");
@@ -1486,29 +1487,49 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
 
-        // 2) say 合成中文测试句 → 转 16k 单声道 PCM16 → 规范化 WAV
+        // 2) 测试音频：三端共用仓库内固定素材（e2e/fixtures/voice-e2e-zh.wav，
+        //    say + afconvert 生成后固化，16k 单声道 PCM16，内容为「今天天气真不错」）。
+        //    BIT_E2E_WAV 可指向自己的文件；两者都没有才回落 macOS 现录。
         let work = data_dir.join("e2e-audio");
         std::fs::create_dir_all(&work).unwrap();
-        let aiff = work.join("src.aiff");
-        let wav_raw = work.join("raw.wav");
         let sentence = "今天天气真不错";
-        let say_ok = std::process::Command::new("say")
-            .args(["-v", "Tingting", "-o"])
-            .arg(&aiff)
-            .arg(sentence)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        assert!(say_ok, "say 合成语音失败");
-        let cvt_ok = std::process::Command::new("afconvert")
-            .args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"])
-            .arg(&aiff)
-            .arg(&wav_raw)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        assert!(cvt_ok, "afconvert 转码失败");
-        let wav = to_canonical_wav(&std::fs::read(&wav_raw).unwrap());
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("e2e/fixtures/voice-e2e-zh.wav");
+        let src = std::env::var("BIT_E2E_WAV").map(PathBuf::from).unwrap_or(fixture);
+        let wav = match std::fs::read(&src) {
+            Ok(raw) => {
+                println!("测试音频来源：{}（{} 字节）", src.display(), raw.len());
+                to_canonical_wav(&raw)
+            }
+            Err(e) => {
+                assert_eq!(
+                    std::env::consts::OS,
+                    "macos",
+                    "{e}；非 macOS 无法现录，请把素材放到 e2e/fixtures/voice-e2e-zh.wav 或用 BIT_E2E_WAV 指定"
+                );
+                let aiff = work.join("src.aiff");
+                let wav_raw = work.join("raw.wav");
+                let say_ok = std::process::Command::new("say")
+                    .args(["-v", "Tingting", "-o"])
+                    .arg(&aiff)
+                    .arg(sentence)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                assert!(say_ok, "say 合成语音失败");
+                let cvt_ok = std::process::Command::new("afconvert")
+                    .args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"])
+                    .arg(&aiff)
+                    .arg(&wav_raw)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                assert!(cvt_ok, "afconvert 转码失败");
+                to_canonical_wav(&std::fs::read(&wav_raw).unwrap())
+            }
+        };
         println!("测试音频 {} 字节（规范 44 字节头）", wav.len());
 
         // 3) 起 worker：argv/env 协议与 start_worker 完全一致（共用 worker_config_json），
