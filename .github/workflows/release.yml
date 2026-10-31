@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要构建并上传资产的 tag（如 v0.6.33）"
+        description: "要构建并上传资产的 tag（如 v0.7.2）"
         required: true
-        default: "v0.6.37"
+        default: "v0.7.2"
       include_macos:
         description: "是否同时构建 macOS 包"
         type: boolean
@@ -56,12 +56,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - name: 版本一致性闸门（tag = package.json = Cargo.toml = Cargo.lock = tauri.conf.json）
+        run: |
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          EXPECT="${TAG#v}"
+          PKG=$(node -p "require('./package.json').version")
+          CARGO=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          LOCK=$(grep -A1 '^name = "bit-core"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          echo "tag=$TAG package.json=$PKG Cargo.toml=$CARGO tauri.conf.json=$TAURI Cargo.lock=$LOCK"
+          for v in "$PKG" "$CARGO" "$TAURI" "$LOCK"; do
+            [ "$v" = "$EXPECT" ] || { echo "::error::版本标识不一致：$v != $EXPECT（tag $TAG）"; exit 1; }
+          done
       - name: 安装 Linux 系统依赖（src-tauri 过渡期壳仍在 workspace，需要 webkit 头）
         run: |
           sudo apt-get update
@@ -91,7 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: 安装交叉编译目标（mac x64 在 arm runner 上交叉构建）
         if: matrix.name == 'macos-x64'
@@ -136,7 +148,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -189,7 +201,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -232,7 +244,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -293,7 +305,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - name: 容器内构建 bit-cli（alpine ${{ matrix.arch }}）
         run: |
           VERSION="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
@@ -332,7 +344,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - name: 安装 QEMU 模拟器
         run: |
           sudo apt-get update -qq
