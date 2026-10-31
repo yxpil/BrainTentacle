@@ -74,7 +74,7 @@ jobs:
             skip_platform: linux
             skip_arch: 2 # Arch.armv7l —— 无此包
           - name: macos-arm64
-            os: macos-14
+            os: macos-15
             xcheck_platform: darwin
             xcheck_arch: 1 # Arch.x64
             skip_platform: darwin
