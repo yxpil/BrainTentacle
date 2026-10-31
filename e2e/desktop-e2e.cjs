@@ -192,8 +192,23 @@ class Cdp {
     this.ws = ws;
     this.seq = 0;
     this.pending = new Map();
+    this.events = []; // 渲染层 console / 未捕获异常（失败时带进诊断）
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
+      if (msg.method === "Runtime.consoleAPICalled") {
+        const line = (msg.params.args || [])
+          .map((a) => (a.value !== undefined ? a.value : a.description || a.type))
+          .join(" ");
+        this.events.push(`[${msg.params.type}] ${line}`);
+        if (this.events.length > 200) this.events.splice(0, 100);
+        return;
+      }
+      if (msg.method === "Runtime.exceptionThrown") {
+        const d = msg.params.exceptionDetails;
+        this.events.push(`[异常] ${d?.exception?.description || d?.text || ""}`);
+        if (this.events.length > 200) this.events.splice(0, 100);
+        return;
+      }
       const p = msg.id && this.pending.get(msg.id);
       if (p) {
         this.pending.delete(msg.id);
@@ -563,15 +578,27 @@ $h.ToString()`);
         // 录 ~3 秒固定素材（素材本身约 2 秒，Chromium 会循环回放）
         await sleep(3200);
         await emit(); // 再触发一次 = 停止并转写
-        const text = await until(
-          "转写结果落地",
-          async () => {
-            const v = await draftValue();
-            return v && v.length > before.length ? v.slice(before.length).trim() : null;
-          },
-          WAIT_ASR,
-          1000
-        );
+        let text;
+        try {
+          text = await until(
+            "转写结果落地",
+            async () => {
+              const v = await draftValue();
+              return v && v.length > before.length ? v.slice(before.length).trim() : null;
+            },
+            WAIT_ASR,
+            1000
+          );
+        } catch (e) {
+          // 等不到结果时，把识别 worker 状态、界面提示与两端日志都带上——否则只有一句「超时」
+          const st = await cdp.invoke("voice_status").catch(() => null);
+          const body = await toastText().catch(() => "");
+          throw new Error(
+            `${e.message}\nvoice_status=${JSON.stringify(st).slice(0, 500)}\n界面文字=${String(body).slice(0, 300)}` +
+              `\n--- 渲染层 console ---\n${cdp.events.slice(-15).join("\n")}` +
+              `\n--- 主进程日志尾部 ---\n${tail(20)}`
+          );
+        }
         if (!/[\u4e00-\u9fff]{2,}/.test(text)) throw new Error(`转写结果不像中文：${JSON.stringify(text)}`);
         // 粘贴通道可用时结果应落到前台并提示「已粘贴到原应用」；不可用（macOS 未授权辅助功能
         // 等）时渲染层会兜底回草稿并提示「粘贴失败」——两种都算链路走通，但不能两种都没有。
@@ -622,6 +649,8 @@ $h.ToString()`);
     // 删掉同步 readImage/writeImage 后，这里曾是静默失效且没有任何自动验证的角落。
     if (process.platform === "win32") {
       await probe("P4b 剪贴板还原：图片/文本粘贴后原内容回位（截图回读同一通道）", async () => {
+        // 上一探针的粘贴会在 800ms 后异步还原剪贴板；不等它就写图片会被它清掉
+        await sleep(2000);
         const COLOR = [12, 34, 56];
         const want = COLOR.join(",");
         const pasteAndWait = async (marker) => {
@@ -718,6 +747,8 @@ $h.ToString()`);
   if (!results.length) {
     say(`没有跑到任何探针。主进程日志尾部：\n${tail(60)}`);
   }
+  // 失败时把主进程日志尾巴留在 CI 日志里：探测失败的原因十有八九在应用内部
+  if (exitCode) say(`--- 主进程日志尾部 ---\n${tail(40)}`);
   say(`==== desktop-e2e ${exitCode ? "FAIL" : "PASS"} ====`);
   process.exit(exitCode);
 })().catch((e) => {
