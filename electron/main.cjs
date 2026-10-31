@@ -679,7 +679,7 @@ async function hostCommand(cmd, args) {
       if (process.platform === 'win32') {
         // Ctrl+V 用 user32 keybd_event 直接注入：SendKeys 在部分应用（走原始输入的）会失效
         const script = [
-          'Add-Type -Namespace BIT -Name Kb -MemberDefinition \'@([System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void keybd_event(byte b, byte s, uint f, System.UIntPtr e);)@',
+          'Add-Type -Namespace BIT -Name Kb -MemberDefinition \'[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void keybd_event(byte b, byte s, uint f, System.UIntPtr e);\'',
           '[BIT.Kb]::keybd_event(0x11, 0, 0, [System.UIntPtr]::Zero)',
           '[BIT.Kb]::keybd_event(0x56, 0, 0, [System.UIntPtr]::Zero)',
           '[BIT.Kb]::keybd_event(0x56, 0, 2, [System.UIntPtr]::Zero)',
