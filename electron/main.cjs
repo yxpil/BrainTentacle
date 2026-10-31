@@ -6,7 +6,7 @@
 //!   3) invoke 路由：B 类宿主命令（对话框/自启/热键/提权/换装重启）JS 拦截，
 //!      其余透传 Rust dispatch（白名单查表）
 //!   4) bit-asset 协议替代 Tauri assetProtocol（convertFileSrc 的文件图片访问）
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu, nativeTheme, shell, clipboard, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu, nativeTheme, shell, clipboard, ClipboardItem, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -648,15 +648,16 @@ async function hostCommand(cmd, args) {
       // Windows 用 keybd_event（免装第三方），Linux 用 xdotool（X11）/ wtype（Wayland）。
       const text = String(args.text ?? '');
       if (!text) return { ok: false };
-      const oldText = clipboard.readText();
-      const oldImg = clipboard.readImage();
-      clipboard.writeText(text);
+      // 异步剪贴板：写入要等 resolve，否则模拟 Ctrl+V 可能抢在内容落地前
+      const oldText = await clipboard.readText().catch(() => '');
+      const oldPng = await clipboardPng();
+      await clipboard.writeText(text);
       // 目标应用读到剪贴板后再还原，避免覆盖用户原有内容
       const restore = () =>
-        setTimeout(() => {
+        setTimeout(async () => {
           try {
-            clipboard.writeText(oldText);
-            if (!oldImg.isEmpty()) clipboard.writeImage(oldImg);
+            await clipboard.writeText(oldText);
+            if (oldPng) await clipboardWritePng(oldPng);
           } catch { /* 恢复失败不影响主流程 */ }
         }, 800);
       if (process.platform === 'darwin') {
@@ -686,7 +687,8 @@ async function hostCommand(cmd, args) {
         ].join('\n');
         const r = await execShot('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
         if (r.err) {
-          clipboard.writeText(oldText);
+          await clipboard.writeText(oldText);
+          if (oldPng) await clipboardWritePng(oldPng);
           throw new Error('模拟粘贴失败（PowerShell keybd_event）：' + lastLine(r.err));
         }
         restore();
@@ -697,7 +699,8 @@ async function hostCommand(cmd, args) {
       if (hasCmd('xdotool')) tools.push(['xdotool', ['key', 'ctrl+v']]);
       if (hasCmd('wtype')) tools.push(['wtype', ['-M', 'ctrl', 'v', '-m', 'ctrl']]);
       if (!tools.length) {
-        clipboard.writeText(oldText);
+        await clipboard.writeText(oldText);
+        if (oldPng) await clipboardWritePng(oldPng);
         throw new Error(
           isWayland()
             ? 'Wayland 模拟粘贴需要安装 wtype（或 xdotool 走 XWayland）；未装时转写结果留在对话草稿'
@@ -711,7 +714,8 @@ async function hostCommand(cmd, args) {
           return { ok: true };
         }
       }
-      clipboard.writeText(oldText);
+      await clipboard.writeText(oldText);
+      if (oldPng) await clipboardWritePng(oldPng);
       throw new Error('模拟粘贴失败：需 xdotool（X11）或 wtype（Wayland）');
     }
     case 'screenshot_region': {
@@ -826,16 +830,42 @@ function hotkeyCaps() {
         : '缺少粘贴工具：X11 装 xdotool，Wayland 装 wtype',
   };
 }
-// 剪贴板图片 → base64 PNG（Windows 截图回读通道；空剪贴板/非图片返回空串）
-function clipboardPngBase64() {
+// 剪贴板图片取/还。Electron 44 起主进程 clipboard 只剩 W3C 异步 API
+// （read/write/readText/writeText），旧的 readImage/writeImage 已移除，
+// 截图回读与语音粘贴的「用完还原」都靠这两个等价物。
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const blobBuf = async (blob) =>
+  blob && typeof blob.arrayBuffer === 'function' ? Buffer.from(await blob.arrayBuffer()) : Buffer.alloc(0);
+async function clipboardPng() {
   try {
-    const img = clipboard.readImage();
-    if (!img || img.isEmpty()) return '';
-    const buf = img.toPNG();
-    return buf && buf.length ? buf.toString('base64') : '';
-  } catch {
-    return '';
-  }
+    for (const item of await clipboard.read()) {
+      const types = item.types || [];
+      // ① 标准 image/*：Windows/Linux 的截图落在这条
+      const std = types.find((t) => /^image\//.test(t));
+      if (std) {
+        const buf = await blobBuf(await item.getType(std));
+        if (buf.length && buf.subarray(0, 8).equals(PNG_SIG)) return buf;
+      }
+      // ② macOS 的 image/png 是空 Blob（Electron 44），原始 pasteboard 类型才有字节
+      for (const t of types.filter((x) => /osclipboard;format="/i.test(x) && /png/i.test(x))) {
+        const buf = await blobBuf(await item.getType(t));
+        if (buf.length && buf.subarray(0, 8).equals(PNG_SIG)) return buf;
+      }
+    }
+  } catch { /* 空剪贴板 / 无图片类型 */ }
+  return null;
+}
+async function clipboardWritePng(buf) {
+  try {
+    // macOS 只认原生 pasteboard 类型名；image/png 写进去等于没写（Electron 44）
+    const mime = process.platform === 'darwin' ? 'public.png' : 'image/png';
+    await clipboard.write([new ClipboardItem({ [mime]: new Blob([buf], { type: mime }) })]);
+  } catch { /* 还原失败不影响主流程 */ }
+}
+// 剪贴板图片 → base64 PNG（Windows 截图回读通道；空剪贴板/非图片返回空串）
+async function clipboardPngBase64() {
+  const buf = await clipboardPng();
+  return buf ? buf.toString('base64') : '';
 }
 // macOS：权限预检 + screencapture -i 落临时文件
 async function captureDarwin() {
@@ -907,7 +937,7 @@ async function captureLinux() {
 }
 // Windows：唤起系统截图工具，等剪贴板出现"新"图片（用户不截就超时，按取消处理）
 async function captureWindows() {
-  const before = clipboardPngBase64();
+  const before = await clipboardPngBase64();
   try {
     await shell.openExternal('ms-screenclip:');
   } catch (e) {
@@ -915,7 +945,7 @@ async function captureWindows() {
   }
   for (let waited = 0; waited < 120000; waited += 600) {
     await sleep(600);
-    const png = clipboardPngBase64();
+    const png = await clipboardPngBase64();
     if (png && png !== before) return { png };
   }
   return {};
