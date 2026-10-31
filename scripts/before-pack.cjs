@@ -48,6 +48,23 @@ function sherpaVersion(bridgeDir) {
   return v;
 }
 
+// npm 的启动方式在 Windows 上是个坑：npm 本体是 npm.cmd，而 Node 自 CVE-2024-27980 的修复后
+// 不允许在无 shell 的情况下 spawn .cmd/.bat（EINVAL）。优先用 npm 注入的 npm_execpath
+// （指向 npm-cli.js），拿当前 node 直接跑它——既绕开 .cmd，也不经 shell，没有参数转义问题。
+function npmLaunch(args) {
+  const cli = process.env.npm_execpath;
+  if (cli && fs.existsSync(cli)) {
+    // ELECTRON_RUN_AS_NODE：构建若由 Electron 进程发起，这一句才让 execPath 当 node 用
+    return {
+      file: process.execPath,
+      args: [cli, ...args],
+      opts: { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+    };
+  }
+  if (process.platform === 'win32') return { file: 'npm.cmd', args, opts: { shell: true } };
+  return { file: 'npm', args, opts: {} };
+}
+
 exports.default = async function beforePack(context) {
   const { pkg, note } = targetPkg(context.electronPlatformName, context.arch);
   if (!pkg) {
@@ -67,11 +84,15 @@ exports.default = async function beforePack(context) {
   try {
     // --force：跨平台安装 optional 原生包必须绕过 npm 的 os/cpu 校验（EBADPLATFORM）
     // --no-save / --no-package-lock：不改 package.json 与 lock，纯落位
-    execFileSync(
-      'npm',
-      ['install', '--no-save', '--no-package-lock', '--ignore-scripts', '--force', `${pkg}@${version}`],
-      { cwd: bridgeDir, stdio: 'inherit' },
-    );
+    const launch = npmLaunch([
+      'install',
+      '--no-save',
+      '--no-package-lock',
+      '--ignore-scripts',
+      '--force',
+      `${pkg}@${version}`,
+    ]);
+    execFileSync(launch.file, launch.args, { cwd: bridgeDir, stdio: 'inherit', ...launch.opts });
   } catch {
     throw new Error(`[beforePack] ${pkg}@${version} 补装失败：语音识别在该架构将不可用（请检查网络/npm registry 可达）`);
   }
