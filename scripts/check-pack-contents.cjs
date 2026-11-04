@@ -89,9 +89,20 @@ if (require.main === module) {
     console.error('用法：node scripts/check-pack-contents.cjs <appOutDir>');
     process.exit(2);
   }
-  const resources = fs.existsSync(path.join(appOutDir, 'Contents', 'Resources'))
-    ? path.join(appOutDir, 'Contents', 'Resources')
-    : path.join(appOutDir, 'resources');
+  // mac --dir 出包时 appOutDir 是 .app 的父目录（release/mac），真身在 <name>.app 里
+  let resources = null;
+  const direct = path.join(appOutDir, 'Contents', 'Resources');
+  if (fs.existsSync(direct)) resources = direct;
+  if (!resources) {
+    try {
+      for (const name of fs.readdirSync(appOutDir)) {
+        if (!name.endsWith('.app')) continue;
+        const r = path.join(appOutDir, name, 'Contents', 'Resources');
+        if (fs.existsSync(r)) { resources = r; break; }
+      }
+    } catch {}
+  }
+  if (!resources) resources = path.join(appOutDir, 'resources');
   const asarPath = path.join(resources, 'app.asar');
   const unpacked = path.join(resources, 'app.asar.unpacked');
 
