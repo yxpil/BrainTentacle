@@ -3,9 +3,11 @@ import { api } from "../api.js";
 import { IconPlus, IconSkill, IconTrash } from "../components/Icons.jsx";
 import { useLang } from "../i18n.js";
 import { confirmDialog } from "../components/ConfirmHost.jsx";
+import { Section } from "../components/SectionNav.jsx";
 
 // 技能（SKILL）：Autopilot 从总结记忆中自动提炼，也可手动沉淀；支持单条删除与多选批量删除
-export default function SkillsPage({ onStats }) {
+// 分区显隐与搜索过滤的口径由「记忆与技能」合并页下发（part / q / report）
+export default function SkillsPage({ onStats, part, report }) {
   const { t } = useLang();
   const [skills, setSkills] = useState([]);
   const [name, setName] = useState("");
@@ -16,6 +18,7 @@ export default function SkillsPage({ onStats }) {
   const reload = () =>
     api.listSkills().then((r) => {
       setSkills(r.skills || []);
+      report("skills", (r.skills || []).length);
       // 列表刷新后清掉已不存在的选中项
       setSelected((prev) => {
         const alive = new Set((r.skills || []).map((s) => s.id));
@@ -94,30 +97,27 @@ export default function SkillsPage({ onStats }) {
     }
   };
 
-  return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto">
-      <div>
-        <h2 className="text-lg font-semibold">{t("skills.title")}</h2>
-        <p className="text-xs text-neutral-500">
-          {t("skills.desc")}
-        </p>
-      </div>
+  const pSkills = part("skills", skills, (s) => [s.name, s.summary, s.source]);
+  useEffect(() => {
+    report("vis:skills", pSkills.show);
+  });
 
-      <form onSubmit={add} className="card flex flex-col gap-3">
-        <input className="field" placeholder={t("skills.namePlaceholder")} value={name}
+  return (
+    <Section show={pSkills.show}>
+      {/* 与记忆页的添加行同构：一行两栏 + 按钮，窄屏自动换行 */}
+      <form onSubmit={add} className="card flex flex-wrap gap-2">
+        <input className="field min-w-[10rem] flex-1 basis-40" placeholder={t("skills.namePlaceholder")} value={name}
           onChange={(e) => setName(e.target.value)} required />
-        <input className="field" placeholder={t("skills.summaryPlaceholder")} value={summary}
+        <input className="field min-w-0 flex-[2] basis-56" placeholder={t("skills.summaryPlaceholder")} value={summary}
           onChange={(e) => setSummary(e.target.value)} required />
-        <div className="flex justify-end">
-          <button className="pill pill-hover" disabled={!name.trim() || !summary.trim()}>
-            <IconPlus size={15} />
-            {t("common.add")}
-          </button>
-        </div>
+        <button className="pill pill-hover shrink-0" disabled={!name.trim() || !summary.trim()}>
+          <IconPlus size={15} />
+          {t("common.add")}
+        </button>
       </form>
 
       {skills.length > 0 && (
-        <div className="flex items-center gap-3 px-1">
+        <div className="card flex items-center gap-3">
           <label className="flex cursor-pointer items-center gap-2 text-sm text-neutral-600 select-none">
             <input
               type="checkbox"
@@ -140,41 +140,47 @@ export default function SkillsPage({ onStats }) {
         </div>
       )}
 
-      <div className="flex flex-col gap-2.5">
-        {skills.map((s) => (
-          <div key={s.id} className="card flex items-start gap-3 py-4">
-            <input
-              type="checkbox"
-              className="mt-1 size-4 shrink-0 accent-neutral-800"
-              checked={selected.has(s.id)}
-              onChange={() => toggle(s.id)}
-            />
-            <IconSkill size={18} className="mt-0.5 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold">{s.name}</span>
-                <span className="chip">{s.source}</span>
-              </div>
-              <p className="mt-1 text-sm text-neutral-600">{s.summary}</p>
-              <p className="mt-1 text-xs text-neutral-400">{s.ts}</p>
-            </div>
-            <button
-              title={t("common.delete")}
-              className="icon-btn mt-0.5 shrink-0 hover:bg-red-50 hover:text-red-600"
-              disabled={busy}
-              onClick={() => removeOne(s.id)}
-            >
-              <IconTrash size={15} className="mx-auto" />
-            </button>
-          </div>
-        ))}
-        {skills.length === 0 && (
-          <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
+      {pSkills.items.length === 0 ? (
+        <div className="card">
+          <p className="flex items-center justify-center gap-2 py-4 text-center text-sm text-neutral-400">
             <IconSkill size={16} />
             {t("skills.empty")}
-          </div>
-        )}
-      </div>
-    </div>
+          </p>
+        </div>
+      ) : (
+        <div className="card">
+          {pSkills.items.map((s) => (
+            <div
+              key={s.id}
+              className="flex items-start gap-3 border-b border-neutral-200/60 py-3 last:border-0 dark:border-neutral-800/60"
+            >
+              <input
+                type="checkbox"
+                className="mt-1 size-4 shrink-0 accent-neutral-800"
+                checked={selected.has(s.id)}
+                onChange={() => toggle(s.id)}
+              />
+              <IconSkill size={18} className="mt-0.5 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold">{s.name}</span>
+                  <span className="chip">{s.source}</span>
+                </div>
+                <p className="mt-1 text-sm text-neutral-600">{s.summary}</p>
+                <p className="mt-1 text-xs text-neutral-400">{s.ts}</p>
+              </div>
+              <button
+                title={t("common.delete")}
+                className="icon-btn mt-0.5 shrink-0 hover:bg-red-50 hover:text-red-600"
+                disabled={busy}
+                onClick={() => removeOne(s.id)}
+              >
+                <IconTrash size={15} className="mx-auto" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
   );
 }

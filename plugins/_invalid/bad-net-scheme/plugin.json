@@ -1,0 +1,9 @@
+{
+  "name": "不是 http 的外部连接",
+  "version": "1.0.0",
+  "description": "负面夹具：外部连接写了 ftp:// 地址，MCP 只走 http(s)，必须整体拒收",
+  "permissions": ["net"],
+  "connections": [
+    { "name": "ftp", "label": "文件服务器", "url": "ftp://example.com/mcp" }
+  ]
+}

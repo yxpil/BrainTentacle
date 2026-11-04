@@ -26,6 +26,21 @@ pub fn run(
     params: &serde_json::Value,
     timeout: Duration,
 ) -> Result<serde_json::Value, String> {
+    run_env(ctx, runtime_id, code, params, timeout, &[])
+}
+
+/// 同上，但允许调用方追加环境变量。
+/// 插件的解释器工具与任务用它拿到本插件的身份与令牌（见 plugin_sdk::tool_env），
+/// 这样插件脚本里 `require("bit")` / `import bit` 就能直接回连宿主能力。
+/// 内置工具与 AI 临时脚本传空表：它们没有插件身份，也不该拿到任何插件令牌。
+pub fn run_env(
+    ctx: &Arc<crate::state::Ctx>,
+    runtime_id: &str,
+    code: &str,
+    params: &serde_json::Value,
+    timeout: Duration,
+    extra_env: &[(String, String)],
+) -> Result<serde_json::Value, String> {
     let rt = crate::runtime::get(ctx, runtime_id)
         .ok_or_else(|| format!("Runtime `{runtime_id}` is not registered; refresh the runtime detection on the Tools page first"))?;
 
@@ -39,8 +54,8 @@ pub fn run(
 
     match rt.mode.as_str() {
         "compile" => run_compiled(&rt, code, params, timeout, &home),
-        "exec" => run_exec(&rt, code, params, timeout, &home),
-        _ => run_interpreted(ctx, &rt, code, params, timeout, &home),
+        "exec" => run_exec(&rt, code, params, timeout, &home, extra_env),
+        _ => run_interpreted(ctx, &rt, code, params, timeout, &home, extra_env),
     }
 }
 
@@ -56,6 +71,7 @@ fn run_interpreted(
     params: &serde_json::Value,
     timeout: Duration,
     home: &std::path::Path,
+    extra_env: &[(String, String)],
 ) -> Result<serde_json::Value, String> {
     let ext = match rt.lang.as_str() {
         "py" => "py",
@@ -109,6 +125,10 @@ fn run_interpreted(
     }
     if rt.lang == "js" || rt.lang == "ts" {
         cmd.env("NODE_PATH", home.join("node_modules"));
+    }
+    // 插件身份与 SDK 搜索路径：extras 已按 toolhomes 拼好，这里覆盖上面的默认值
+    for (k, v) in extra_env {
+        cmd.env(k, v);
     }
 
     let out = run_with_limit(cmd, Some(params), timeout);
@@ -230,9 +250,13 @@ fn run_exec(
     params: &serde_json::Value,
     timeout: Duration,
     home: &std::path::Path,
+    extra_env: &[(String, String)],
 ) -> Result<serde_json::Value, String> {
     let mut cmd = Command::new(&rt.path);
     crate::registry::no_window(&mut cmd);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
     for a in &rt.run_args {
         cmd.arg(a);
     }

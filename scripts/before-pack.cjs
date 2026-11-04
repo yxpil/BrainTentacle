@@ -106,8 +106,14 @@ exports.default = async function beforePack(context) {
 // 打包机自己那一份（以及其它架构那份）对目标包纯属死重量：npm 只会装构建机平台的可选依赖，
 // 跨架构出包时它跟着 voice-bridge/** 一起进 asar.unpacked，几十 MB 白占安装体积。
 // 只在 CI 里清（本地开发树保留，免得把开发者自己机器的识别弄坏）。
+// universal 包例外：那份构建把两架构原生包都装上，运行期按 process.arch 现挑，
+// 清掉任何一种都会让另一种芯片识别失败，所以由 BIT_UNIVERSAL_BUILD=1 关掉清理。
 function pruneForeign(bridgeDir, keepPkg) {
   if (!process.env.CI) return;
+  if (process.env.BIT_UNIVERSAL_BUILD === '1') {
+    console.log('[beforePack] universal 构建：保留全部架构的原生包，跳过清理');
+    return;
+  }
   const nm = path.join(bridgeDir, 'node_modules');
   if (!fs.existsSync(nm)) return;
   for (const name of fs.readdirSync(nm)) {

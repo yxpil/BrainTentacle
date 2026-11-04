@@ -1,0 +1,112 @@
+<!doctype html>
+<!-- 运维脚本台：exec 与 write 都用得起来，同时当场演示"没申报的能力会被拒"。
+     写文件一律落在插件自己的数据目录（相对路径的基准），不碰插件包，避免撞防篡改基线。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>运维脚本台</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#334155; --bad:#b91c1c; --good:#15803d; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#94a3b8; --bad:#f87171; --good:#4ade80; } }
+      * { box-sizing:border-box; }
+      body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 4px; font-size:16px; }
+      h2 { margin:0 0 6px; font-size:12px; color:var(--muted); }
+      .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+      button { margin:4px 6px 0 0; padding:6px 10px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; font:inherit; }
+      button.danger { border-color:var(--bad); background:transparent; color:var(--bad); }
+      pre { margin:8px 0 0; padding:8px; border:1px dashed var(--line); border-radius:8px; min-height:60px; max-height:180px; overflow:auto; white-space:pre-wrap; word-break:break-all; font:12px/1.5 ui-monospace,Consolas,monospace; }
+      .ok { color:var(--good); }
+      .bad { color:var(--bad); }
+    </style>
+  </head>
+  <body>
+    <h1>运维脚本台</h1>
+    <div style="color:var(--muted);margin-bottom:12px" id="who">正在握手…</div>
+    <div class="grid">
+      <div class="card">
+        <h2>exec.run（需 exec 权限）</h2>
+        <button id="ver">node -v</button>
+        <button id="cmd">跑一条 shell 命令</button>
+        <button id="bad-arg">故意少给参数</button>
+        <pre id="out-exec">…</pre>
+      </div>
+      <div class="card">
+        <h2>fs.*（需 write 权限）</h2>
+        <button id="wr">写 ops/notes.txt</button>
+        <button id="rd">读回来</button>
+        <button id="mv">改名</button>
+        <button id="rm" class="danger">删掉</button>
+        <pre id="out-fs">…</pre>
+      </div>
+      <div class="card">
+        <h2>闸门自测</h2>
+        <button id="no-session" class="danger">调 session.list</button>
+        <button id="no-notify" class="danger">调 notify</button>
+        <button id="yes-data">调 data.list</button>
+        <pre id="out-gate">未申报的能力应当当场被拒</pre>
+      </div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const show = (id, ok, text) => {
+        const el = $(id);
+        el.textContent = text;
+        el.className = ok ? "ok" : "bad";
+      };
+      const dump = (v) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
+
+      async function boot() {
+        const info = await Bit.ready();
+        $("who").textContent = info ? `${info.plugin_name} · 生效权限 ${info.permissions.join(" / ")}` : "握手尚未完成";
+      }
+
+      $("ver").addEventListener("click", async () => {
+        try { show("out-exec", true, dump(await Bit.exec.program("node", ["-v"]))); }
+        catch (e) { show("out-exec", false, String(e.message || e)); }
+      });
+      $("cmd").addEventListener("click", async () => {
+        try { show("out-exec", true, dump(await Bit.exec.run("echo bit-exec-ok"))); }
+        catch (e) { show("out-exec", false, String(e.message || e)); }
+      });
+      $("bad-arg").addEventListener("click", async () => {
+        // command 与 program 只能给一个，两个都给应当被拒
+        try { show("out-exec", false, dump(await Bit.cap("exec.run", { command: "echo a", program: "node" }))); }
+        catch (e) { show("out-exec", false, "如期被拒：" + String(e.message || e)); }
+      });
+
+      $("wr").addEventListener("click", async () => {
+        try { show("out-fs", true, dump(await Bit.fs.write("ops/notes.txt", `运维笔记 ${new Date().toISOString()}\n`))); }
+        catch (e) { show("out-fs", false, String(e.message || e)); }
+      });
+      $("rd").addEventListener("click", async () => {
+        try { show("out-fs", true, await Bit.fs.read("ops/notes.txt")); }
+        catch (e) { show("out-fs", false, "读取失败（也许还没写）：" + String(e.message || e)); }
+      });
+      $("mv").addEventListener("click", async () => {
+        try { show("out-fs", true, dump(await Bit.fs.move("ops/notes.txt", "ops/notes.done.txt"))); }
+        catch (e) { show("out-fs", false, String(e.message || e)); }
+      });
+      $("rm").addEventListener("click", async () => {
+        try { show("out-fs", true, dump(await Bit.fs.remove("ops/notes.done.txt", false))); }
+        catch (e) { show("out-fs", false, String(e.message || e)); }
+      });
+
+      $("no-session").addEventListener("click", async () => {
+        try { show("out-gate", false, "竟然放行了：" + dump(await Bit.cap("session.list", {}))); }
+        catch (e) { show("out-gate", true, "被拒（符合预期）：" + String(e.message || e)); }
+      });
+      $("no-notify").addEventListener("click", async () => {
+        try { show("out-gate", false, "竟然放行了：" + dump(await Bit.notify("不该出现", ""))); }
+        catch (e) { show("out-gate", true, "被拒（符合预期）：" + String(e.message || e)); }
+      });
+      $("yes-data").addEventListener("click", async () => {
+        try { show("out-gate", true, dump(await Bit.data.list())); }
+        catch (e) { show("out-gate", false, String(e.message || e)); }
+      });
+
+      boot().catch((e) => ($("who").textContent = "握手失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

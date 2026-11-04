@@ -189,7 +189,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// 进程存活检查（僵尸进程视为已死：父进程尚未回收时避免误判存活）
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     use sysinfo::{Pid, ProcessesToUpdate, System};
     let mut sys = System::new();
     sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
@@ -231,12 +231,25 @@ pub fn arm(ctx: &Arc<Ctx>) {
         .filter(|p| p.is_file())
         .cloned()
         .unwrap_or_else(|| exe.clone());
-    let guardian_bin = ctx
-        .worker_exe
-        .as_ref()
-        .filter(|p| p.is_file())
-        .cloned()
-        .unwrap_or_else(|| target.clone());
+    let guardian_bin = match ctx.worker_exe.as_ref().filter(|p| p.is_file()) {
+        Some(p) => p.clone(),
+        // 无 sidecar 时**不能**回落到 Electron 启动器：electron.exe 不认识 --bit-guardian，
+        // 会把它当成未知 switch，并把下一个位置参数（握手文件 guardian.json）当作应用入口
+        // 交给 ESM 加载器 → ERR_IMPORT_ATTRIBUTE_MISSING 崩溃弹窗，且复活必然失败。
+        // app_args 非空正是 Electron 形态的标记（单二进制形态为空，见 state.rs:99）。
+        None if !ctx.app_args.is_empty() => {
+            crate::audit::record(
+                ctx,
+                "local-app",
+                "guardian.no_sidecar",
+                "BIT",
+                serde_json::json!({ "armed": false, "reason": "bit-cli sidecar 缺失，跳过布防" }),
+                false,
+            );
+            return;
+        }
+        None => target.clone(),
+    };
     let Some(hash) = sha256_file(&target) else { return };
     let state_path = ctx.data_dir.join("guardian.json");
     let log_path = ctx.data_dir.join("guardian.log");

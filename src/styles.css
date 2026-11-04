@@ -31,19 +31,50 @@
   body {
     overscroll-behavior: none;
   }
+  /* 界面文字默认不可选中：拖拽图标/卡片/滑杆时不再扫出蓝色选区，截图与观感都干净。
+     需要复制的内容（对话正文、代码/日志、表格、输入框）在下面整块放行。 */
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input,
+  textarea,
+  select,
+  [contenteditable="true"],
+  .select-text,
+  .md,
+  pre,
+  code,
+  table {
+    -webkit-user-select: text;
+    user-select: text;
+  }
   /* 主题强调色：默认黑白胶囊；用户在调色盘选择后经内联样式覆盖 */
   :root {
     --accent: #171717;
     --accent-fg: #ffffff;
+    /* 导航选中底：强调色的极淡一层，浅色下不会糊成灰块 */
+    --accent-wash: color-mix(in srgb, var(--accent) 8%, transparent);
     /* Motion 令牌：全站动画时长/缓动统一从这里取值 */
     --dur-fast: 150ms;
     --dur: 220ms;
     --dur-slow: 320ms;
     --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    /* 聚焦态令牌：输入框 / 搜索框 / 聊天框共用，描边取主题色的淡档 + 外圈柔光。
+       换强调色（含暗色模式默认黑白）时三处一起变，不再各自写死。 */
+    --focus-border: color-mix(in srgb, var(--accent) 55%, transparent);
+    --focus-glow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent),
+      0 0 16px -2px color-mix(in srgb, var(--accent) 30%, transparent);
+    /* 分组面板：整组共用一块底，行与行之间只用一根发丝线 */
+    --panel-bg: #f5f5f5;
+    --panel-line: #e5e5e5;
   }
   .dark {
     --accent: #f5f5f5;
     --accent-fg: #171717;
+    --accent-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+    --panel-bg: #171717;
+    --panel-line: #2a2a2a;
   }
   /* 统一按钮微交互：所有按钮共享同一套过渡属性/时长/缓动（工具类的
      transition-* / duration-* 特异性更高，可按需覆盖） */
@@ -174,14 +205,16 @@
     position: absolute;
     left: 50%;
     top: 0;
-    width: 2.25rem; /* 与 NavItem 的 h-9 w-9 同尺寸 36px */
-    height: 2.25rem;
-    margin-left: -1.125rem; /* 水平居中 */
+    /* 与导航圆片同尺寸：边长由 --rail-item（外观页「图标栏大小」）统一给 */
+    width: var(--rail-item, 28px);
+    height: var(--rail-item, 28px);
+    margin-left: calc(var(--rail-item, 28px) / -2); /* 水平居中 */
     transform: translateY(var(--y, 0));
     pointer-events: none;
     will-change: transform;
     box-shadow: var(--shadow-pill);
-    transition: transform var(--dur) var(--ease-spring);
+    /* opacity：当前页在页眉入口（系统状态）时圆片淡出 */
+    transition: transform var(--dur) var(--ease-spring), opacity var(--dur) linear;
   }
   .nav-blob.slime {
     animation: nav-slime 460ms var(--ease-spring);
@@ -235,6 +268,270 @@
   .dark .card {
     @apply border-neutral-800 bg-neutral-900;
   }
+  /* ── 页面骨架 ──
+     各页此前各自铺满整窗，长行 + 大间距显得松散。这里统一限宽与节奏：
+     .page 用于列表/设置类，.page-wide 用于表格与统计网格类。 */
+  .page {
+    @apply mx-auto flex w-full max-w-[48rem] flex-col gap-3;
+  }
+  .page-wide {
+    @apply mx-auto flex w-full max-w-[60rem] flex-col gap-3;
+  }
+  /* 页头：标题、说明与右侧动作挤进同一行，不再各占一段 */
+  .page-head {
+    @apply flex flex-wrap items-center gap-x-3 gap-y-1;
+  }
+  .page-head > h2 {
+    @apply shrink-0 text-base font-semibold;
+  }
+  .page-head > .page-sub {
+    @apply min-w-0 flex-1 truncate text-xs text-neutral-500 dark:text-neutral-400;
+  }
+  /* 限宽之后卡片内边距同步收紧；JSX 里显式写了 p-* 的卡片保持它自己的 */
+  .page .card,
+  .page-wide .card,
+  .set-body .card {
+    padding: 0.85rem 1rem;
+  }
+  /* ── 设置中心：左栏一卡一组，右栏只渲染当前卡那一组 ── */
+  .set-shell {
+    @apply flex h-full min-h-0 gap-7;
+  }
+  .set-nav {
+    @apply flex h-full min-h-0 w-52 shrink-0 flex-col;
+  }
+  /* 搜索框：留出面板底色，和下面的导航列表分开，不再像一行裸文字 */
+  .set-nav-search {
+    @apply mb-2 flex items-center gap-2 rounded-xl border border-neutral-200/80 bg-white/60 px-2.5 py-1.5 dark:border-neutral-800 dark:bg-neutral-900/60;
+  }
+  .set-nav-list {
+    @apply flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1;
+  }
+  .set-nav-domain {
+    @apply flex flex-col gap-0.5;
+  }
+  /* 域名只做小标题：图标 + 名称 + 一条指向右侧的发丝线，视觉上把 19 张卡分成 6 段 */
+  .set-nav-head {
+    @apply mb-1 flex items-center gap-1.5 px-2 text-[11px] font-medium text-neutral-400 dark:text-neutral-500;
+  }
+  .set-nav-head::after {
+    content: "";
+    @apply ml-1 h-px min-w-2 flex-1 bg-neutral-200 dark:bg-neutral-800;
+  }
+  .set-nav-item {
+    @apply relative w-full truncate rounded-lg px-2.5 py-[7px] text-left text-[13px] text-neutral-600 transition-colors hover:bg-neutral-900/5 dark:text-neutral-300 dark:hover:bg-white/5;
+  }
+  .set-nav-item.on {
+    @apply bg-[var(--accent-wash)] font-semibold text-neutral-900 dark:text-white;
+  }
+  .set-nav-item.on::before {
+    content: "";
+    @apply absolute left-0 top-1/2 h-3.5 w-[3px] -translate-y-1/2 rounded-full bg-[var(--accent)];
+  }
+  /* 手机宽（≤640）：竖栏把正文挤成一列字都放不下的窄条。
+     这里把左栏摊成顶部横滑的胶囊条（域名小标题隐掉，靠胶囊本身分段），正文吃满剩下的宽度。 */
+  @media (max-width: 640px) {
+    .set-shell {
+      @apply flex-col gap-2;
+    }
+    .set-nav {
+      @apply h-auto w-full shrink-0;
+    }
+    .set-nav-search {
+      @apply mb-1;
+    }
+    .set-nav-list {
+      @apply flex-row items-start gap-1.5 overflow-x-auto overflow-y-hidden pr-0 pb-1;
+    }
+    .set-nav-domain {
+      @apply shrink-0 flex-row gap-1.5;
+    }
+    .set-nav-head {
+      @apply hidden;
+    }
+    .set-nav-item {
+      @apply w-auto shrink-0 whitespace-nowrap rounded-full border border-neutral-200 px-3 py-1 dark:border-neutral-700;
+    }
+    .set-nav-item.on::before {
+      @apply hidden;
+    }
+  }
+  .set-body {
+    @apply min-w-0 flex-1 overflow-y-auto pr-1;
+  }
+  /* 右栏统一容器：页头与卡片同宽同起点，避免标题贴左、内容居中造成的错位。
+     宽屏不居中：内容紧贴左栏铺开，阅读列仍限宽，右侧留白比中间一道大缝自然。 */
+  .set-page {
+    @apply mr-auto flex w-full max-w-[48rem] flex-col gap-3 pb-8;
+  }
+  .set-page .page,
+  .set-page .page-wide {
+    @apply max-w-none;
+  }
+  .set-head {
+    @apply mb-1 flex flex-col gap-0.5;
+  }
+  .set-head-eyebrow {
+    @apply text-[11px] font-medium text-neutral-400 dark:text-neutral-500;
+  }
+  .set-head h2 {
+    @apply text-[17px] font-semibold leading-tight tracking-tight;
+  }
+  .set-head-desc {
+    @apply text-xs leading-relaxed text-neutral-500 dark:text-neutral-400;
+  }
+  /* 一组 = 一块手机系统式的分组列表：宽屏也保持单列，组内各项平铺，
+     用发丝线分隔。不再用 auto-fill 卡片网格，避免设置项被切成左右两栏的小卡片。 */
+  .set-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0 1.1rem;
+    border: 1px solid var(--panel-line);
+    border-radius: 1.1rem;
+    background: var(--panel-bg);
+    overflow: hidden;
+  }
+  /* ── 插件权限页：一个插件一块面板，面板头跟着滚动条吸顶 ──
+     十几颗一模一样的开关连着排，滚起来会读不出「这一段属于谁」，
+     所以把插件那一行做成吸顶头；sticky 要求面板自己不裁切，故单独放开 overflow。 */
+  .set-body .set-group.perm-group {
+    overflow: visible;
+  }
+  .set-body .set-group .card.perm-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    /* 负 margin 让底色铺满面板两边，吸顶时左右不会露出两条缝 */
+    margin: 0 -1.1rem;
+    padding-left: 1.1rem;
+    padding-right: 1.1rem;
+    background: var(--panel-bg);
+    border-radius: 1.1rem 1.1rem 0 0;
+  }
+  /* 组里的卡片只承担“行”的角色：去掉自己的底、描边、阴影和圆角 */
+  .set-body .set-group .card,
+  .set-body .set-group .set-section {
+    padding: 0.9rem 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .set-body .set-group .card + .card,
+  .set-body .set-group .set-section + .card,
+  .set-body .set-group .card + .set-section,
+  .set-body .set-group .set-section + .set-section,
+  .set-body .set-group > .card + .set-grid,
+  .set-body .set-group > .set-grid + .card,
+  .set-body .set-group > .set-grid + .set-grid {
+    border-top: 1px solid var(--panel-line);
+  }
+  /* 单列分组里的行卡与包裹层必须允许收缩：
+     长 URL、代码块、快捷键录入行的 min-content 会把整块撑出右边界，
+     窄窗下表现为内容被面板裁掉。收缩后长内容在行内换行或横向滚动。 */
+  .set-body .set-group > .card,
+  .set-body .set-group > .set-section,
+  .set-body .set-group > .set-grid,
+  .set-body .set-group > .set-grid > *,
+  .set-body .set-group > .set-grid > div > .card {
+    min-width: 0;
+  }
+  /* 卡片列表包一层 flex 容器时（提供方列表等），行距交给发丝线，不再额外留缝 */
+  .set-body .set-group .set-grid > div:has(> .card),
+  .set-body .set-group > .set-grid > div:has(> .card) {
+    row-gap: 0;
+  }
+  /* 容器里的行卡也要有分隔线，否则剥离卡片底之后会挤成一团 */
+  .set-body .set-group .set-grid > div:has(> .card) > .card + .card {
+    border-top: 1px solid var(--panel-line);
+  }
+  /* 只有分组的直接子级 grid 是“行容器”，统一压成单列。
+     嵌套在卡片里的 grid（翻译引擎参数、两列输入等）保持自己的分栏。 */
+  .set-body .set-group > .set-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+  /* 其余页面（如自动化运行态）仍按卡片网格并排 */
+  .set-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(21rem, 100%), 1fr));
+    gap: 0.75rem;
+    align-items: start;
+  }
+  /* ── 设置行 ──
+     标题/说明在左、控件在右；行内控件垂直居中，长说明不把行撑成一堵墙。 */
+  .set-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+  .set-section-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+  .set-section-title {
+    @apply text-[13px] font-semibold leading-snug text-neutral-900 dark:text-neutral-100;
+  }
+  .set-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-width: 0;
+    padding: 0.5rem 0;
+  }
+  .set-row + .set-row {
+    border-top: 1px solid var(--panel-line);
+  }
+  .set-row-text {
+    @apply min-w-0 flex-1;
+  }
+  .set-row-title {
+    @apply text-[13px] leading-snug text-neutral-800 dark:text-neutral-200;
+  }
+  .set-row-hint {
+    @apply mt-0.5 text-[11px] leading-snug text-neutral-400 dark:text-neutral-500;
+  }
+  .set-row-ctl {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    flex-shrink: 0;
+    min-width: 0;
+  }
+  .set-row-stacked {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .set-row-stacked .set-row-ctl {
+    justify-content: flex-start;
+  }
+  .set-desc-wrap {
+    @apply min-w-0;
+  }
+  .set-desc {
+    @apply text-[11.5px] leading-relaxed text-neutral-500 dark:text-neutral-400;
+  }
+  .set-more {
+    @apply mt-0.5 text-[11px] font-medium text-[var(--accent)] hover:underline;
+  }
+  .set-field {
+    @apply flex min-w-0 flex-col gap-1;
+  }
+  .set-field-label {
+    @apply text-[11px] text-neutral-500 dark:text-neutral-400;
+  }
+  .set-field-hint .set-desc {
+    @apply text-[11px] text-neutral-400 dark:text-neutral-500;
+  }
   /* 数据小圆片 */
   .chip {
     @apply inline-flex items-center gap-1 rounded-full border border-neutral-300
@@ -243,21 +540,67 @@
   .dark .chip {
     @apply border-neutral-700 bg-neutral-900 text-neutral-300;
   }
-  /* 输入框 */
+  /* 输入框 / 下拉框：默认圆角矩形。
+     早先未设圆角时回退 9999px，设置中心里的单行输入全被拉成胶囊，
+     又矮又宽的字段尤其像药丸。这里收到 10px，和卡片（24px）、
+     大文本域（16px）拉开层次；外观页「输入框/对话圆角」仍可整体覆盖。
+     min-w-0：嵌在 flex 行里时允许收缩，窄窗不再被输入框的固有宽度顶出横向滚动。 */
   .field {
-    @apply w-full rounded-full border border-neutral-300 bg-white px-4 py-2
+    @apply w-full min-w-0 border border-neutral-300 bg-white px-4 py-2
       text-sm text-neutral-900 outline-none transition-colors
-      focus:border-neutral-900 placeholder:text-neutral-400;
-    /* 外观页「输入框/对话圆角」独立调节；未设（0）时回退胶囊 */
-    border-radius: var(--look-ui-radius, 9999px);
+      placeholder:text-neutral-400;
+    border-radius: var(--look-ui-radius, 0.625rem);
+  }
+  /* 多行文本域比单行输入大一号，圆角也放大到 16px，避免大面板配小圆角像被切了角 */
+  textarea.field {
+    border-radius: var(--look-ui-radius, 1rem);
   }
   .dark .field {
     @apply border-neutral-700 bg-neutral-950 text-neutral-100
-      focus:border-neutral-200 placeholder:text-neutral-500;
+      placeholder:text-neutral-500;
   }
-  /* 聚焦光晕：跟随主题强调色，与描边高亮叠加 */
+  /* 聚焦：主题色淡描边 + 柔光（原黑色描边去掉，与搜索框同一套观感） */
   .field:focus {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: var(--focus-border);
+    box-shadow: var(--focus-glow);
+  }
+  /* 快捷键录入态：呼吸式主题色描边，一眼看出「现在按下的键会被记成快捷键」 */
+  .hotkey-recording {
+    border-color: var(--accent) !important;
+    box-shadow: var(--focus-glow);
+    animation: hotkey-breathe 1.2s ease-in-out infinite;
+  }
+  @keyframes hotkey-breathe {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+  }
+  /* 聊天输入区：与 .field 同一聚焦语言，区别只在它靠 focus-within 感知内部 textarea。
+     描边也写在这里——JSX 上的 border-neutral-300 属 utilities 层，会压过下面的 :focus-within */
+  .panel-input {
+    @apply border border-neutral-300;
+    transition-property: border-color, box-shadow;
+    transition-duration: var(--dur-fast);
+  }
+  .dark .panel-input {
+    @apply border-neutral-700;
+  }
+  .panel-input:focus-within {
+    border-color: var(--focus-border);
+    box-shadow: var(--focus-glow);
+  }
+  /* 悬浮搜索面板：面板内输入框是无描边的，聚焦态由整张卡片亮起来表达 */
+  .search-panel {
+    transition-property: border-color, box-shadow;
+    transition-duration: var(--dur-fast);
+  }
+  .search-panel:focus-within {
+    border-color: var(--focus-border);
+    box-shadow: var(--focus-glow);
   }
   /* 圆形图标按钮（列表操作 / 标题栏） */
   .icon-btn {
@@ -267,6 +610,30 @@
   }
   .dark .icon-btn {
     @apply bg-neutral-900 text-neutral-300 hover:bg-neutral-800 hover:text-white;
+  }
+
+  /* ========== 搜索控件（设置中心 / 会话列表 / 悬浮搜索面板共用） ========== */
+  /* 统一为无框的「放大镜 + 透明输入 + 可选清除/提示」，不在行内再套一层圆角输入框。
+     外观页「搜索框样式」只改放大镜的聚焦着色，输入区本身不动。 */
+  .search-box {
+    @apply flex items-center gap-2;
+  }
+  .search-box .search-ico {
+    transition: color var(--dur-fast) var(--ease-pill);
+  }
+  /* 跟随输入框：聚焦时放大镜随文字一起变亮 */
+  .search-box:focus-within .search-ico {
+    color: var(--search-ico-active, rgb(82 82 82));
+  }
+  .dark .search-box:focus-within .search-ico {
+    color: var(--search-ico-active, rgb(212 212 212));
+  }
+  /* 主题色：放大镜用强调色；极简：保持弱化，不参与聚焦反馈 */
+  html.search-accent {
+    --search-ico-active: var(--accent);
+  }
+  html.search-ghost {
+    --search-ico-active: rgb(163 163 163);
   }
 
   /* ========== 外观引擎：圆角/边框/阴影变量 ========== */
@@ -325,6 +692,43 @@ html.has-transparency .icon-btn {
 html.dark.has-transparency .icon-btn {
   background-color: rgba(23, 23, 23, var(--look-card-alpha, 0.85)) !important;
 }
+/* 分组面板在透明背景下自己承担整块底：行卡必须回到透明，
+   否则每行又被 !important 的半透明底切回一张张卡片 */
+html.has-transparency .set-body .set-group,
+html.has-transparency .panel-stack:has(> .card + .card) {
+  background-color: rgba(245, 245, 245, var(--look-card-alpha, 0.85)) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+html.dark.has-transparency .set-body .set-group,
+html.dark.has-transparency .panel-stack:has(> .card + .card) {
+  background-color: rgba(23, 23, 23, var(--look-card-alpha, 0.85)) !important;
+}
+html.has-transparency .set-body .set-group .card:not(.perm-head),
+html.has-transparency .panel-stack:has(> .card + .card) > .card {
+  background-color: transparent !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* 插件权限页的吸顶头是浮在行上的那一层，必须自带底：透明外观下跟着面板用同一档 alpha + 模糊，
+   否则滚到列表中段时，下面那行的字会直接从头部底下透出来。 */
+html.has-transparency .set-body .set-group .card.perm-head {
+  background-color: rgba(245, 245, 245, var(--look-card-alpha, 0.85)) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+html.dark.has-transparency .set-body .set-group .card.perm-head {
+  background-color: rgba(23, 23, 23, var(--look-card-alpha, 0.85)) !important;
+}
+/* 外观开关同步作用于面板：去边框/去阴影时不留一层空壳 */
+html.no-border .set-body .set-group,
+html.no-border .panel-stack:has(> .card + .card) {
+  border: none;
+}
+html.no-shadow .set-body .set-group,
+html.no-shadow .panel-stack:has(> .card + .card) {
+  box-shadow: none;
+}
 
 /* 入场动画：轻微上浮 + 淡入（页眉仪表盘、会话行、工具卡片） */
 @keyframes bit-rise {
@@ -337,8 +741,196 @@ html.dark.has-transparency .icon-btn {
     transform: none;
   }
 }
+/* 入场动画：轻微上浮 + 淡入（页眉仪表盘、会话行、工具卡片）
+   fill 用 backwards 不用 both：both 会把 to 的 transform:none 一直保留，
+   而动画优先级高于内联样式，会话行右滑时写进去的 translateX 会被它吃掉 */
 .anim-rise {
-  animation: bit-rise 0.28s var(--ease-pill) both;
+  animation: bit-rise 0.28s var(--ease-pill) backwards;
+}
+
+/* 页眉状态灯：空心点 + 径向渐变光晕，光晕向外淡出，和页眉背景自然衔接。
+   空闲绿 / 思考蓝 / 出字琥珀 / 调工具紫；改色走 transition，不会硬跳 */
+.title-lamp {
+  --lamp: #10b981;
+  --lamp-glow: rgba(16, 185, 129, 0.3);
+  position: relative;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 9999px;
+}
+.title-lamp::before,
+.title-lamp::after {
+  content: "";
+  position: absolute;
+  border-radius: 9999px;
+  transition:
+    background 0.45s ease,
+    box-shadow 0.45s ease,
+    opacity 0.45s ease;
+}
+/* 光晕：中间浓、外圈透明，避免实心圆点直接切在背景上 */
+.title-lamp::before {
+  inset: -6px;
+  background: radial-gradient(
+    circle,
+    var(--lamp-glow) 0%,
+    color-mix(in srgb, var(--lamp-glow) 45%, transparent) 45%,
+    transparent 72%
+  );
+}
+/* 灯芯：纯色实心，不带渐变（高光会让灯芯看起来发虚，只靠光晕做层次） */
+.title-lamp::after {
+  inset: 3px;
+  background: var(--lamp);
+  box-shadow: 0 0 7px var(--lamp-glow);
+}
+.title-lamp.is-think {
+  --lamp: #38bdf8;
+  --lamp-glow: rgba(56, 189, 248, 0.5);
+}
+.title-lamp.is-work {
+  --lamp: #fbbf24;
+  --lamp-glow: rgba(251, 191, 36, 0.46);
+}
+.title-lamp.is-tool {
+  --lamp: #a78bfa;
+  --lamp-glow: rgba(139, 92, 246, 0.58);
+}
+.title-lamp.is-tool::after {
+  box-shadow: 0 0 10px var(--lamp-glow);
+}
+.title-lamp:not(.is-idle)::before {
+  animation: bit-lamp-breathe 1.8s ease-in-out infinite;
+}
+@keyframes bit-lamp-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .title-lamp:not(.is-idle)::before {
+    animation: none;
+  }
+}
+
+/* 插件异常灯：与状态灯同款外观、跟随当前状态色，但灯芯在灰色与当前色之间交替闪烁。
+   灰底也是灯芯，用内边距把背景收成 6px 实心圆（background-clip），不再叠一层径向渐变 */
+.title-lamp.is-alert {
+  padding: 3px;
+  background: #9ca3af;
+  background-clip: content-box;
+}
+
+/* 附件卡：类型色块 + 文件名 + 类型/大小。色只上在图标小块上，卡片本体保持中性，
+   一排 PDF/DOC/PPT 不会把界面刷成调色盘；深浅色各给一档，避免深色下发闷。 */
+.bit-file-chip {
+  border-color: color-mix(in srgb, currentColor 14%, transparent);
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+.bit-file-chip:hover {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+.bit-file-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 8px;
+  color: var(--fk);
+  background: color-mix(in srgb, var(--fk) 15%, transparent);
+}
+.bit-file-tile--red {
+  --fk: #d6336c;
+}
+.bit-file-tile--blue {
+  --fk: #1971c2;
+}
+.bit-file-tile--green {
+  --fk: #2f9e44;
+}
+.bit-file-tile--orange {
+  --fk: #e8590c;
+}
+.bit-file-tile--amber {
+  --fk: #b0810a;
+}
+.bit-file-tile--violet {
+  --fk: #7048e8;
+}
+.bit-file-tile--cyan {
+  --fk: #0c8599;
+}
+.bit-file-tile--slate {
+  --fk: #5c6672;
+}
+.dark .bit-file-tile--red {
+  --fk: #f783ac;
+}
+.dark .bit-file-tile--blue {
+  --fk: #74c0fc;
+}
+.dark .bit-file-tile--green {
+  --fk: #69db7c;
+}
+.dark .bit-file-tile--orange {
+  --fk: #ffa94d;
+}
+.dark .bit-file-tile--amber {
+  --fk: #ffd866;
+}
+.dark .bit-file-tile--violet {
+  --fk: #b197fc;
+}
+.dark .bit-file-tile--cyan {
+  --fk: #66d9e8;
+}
+.dark .bit-file-tile--slate {
+  --fk: #adb5bd;
+}
+.title-lamp.is-alert::after {
+  animation: bit-lamp-alert-core 1.4s ease-in-out infinite;
+}
+.title-lamp.is-alert::before {
+  animation: bit-lamp-alert-halo 1.4s ease-in-out infinite;
+}
+@keyframes bit-lamp-alert-core {
+  0%,
+  38% {
+    opacity: 1;
+  }
+  58%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes bit-lamp-alert-halo {
+  0%,
+  38% {
+    opacity: 0.9;
+    transform: scale(1.04);
+  }
+  58%,
+  100% {
+    opacity: 0.08;
+    transform: scale(0.88);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .title-lamp.is-alert::after {
+    animation: none;
+    opacity: 0.45;
+  }
+  .title-lamp.is-alert::before {
+    animation: none;
+    opacity: 0.3;
+  }
 }
 
 /* ========== 统一 Micro-motion 体系 ========== */
@@ -393,6 +985,21 @@ div.fixed.inset-0 > .card {
 .anim-pop {
   animation: bit-pop var(--dur-slow) var(--ease-pill) both;
 }
+/* 会话行右滑召出的调色板：从行底下拉滑出并淡入（原先是直接挂载，视觉上是闪一下） */
+@keyframes bit-swatch {
+  from {
+    opacity: 0;
+    transform: translateY(-7px) scaleY(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.swatch-in {
+  transform-origin: top center;
+  animation: bit-swatch 0.2s var(--ease-spring) both;
+}
 /* 页面切换：内容区淡入上浮（由 App 在激活页挂载） */
 .page-in {
   animation: bit-page 0.26s var(--ease-pill) both;
@@ -414,12 +1021,14 @@ div.fixed.inset-0 > .card {
 }
 
 /* ========== 背景（纯色 + 可选图片 + 透明度遮罩） ========== */
+/* 兜底色必须是实色：透明窗体一旦没有底就整窗看穿桌面。
+   （上面 @layer base 里同名规则写了 #ffffff/#18181b，但无层规则优先级更高会整个吃掉它） */
 #root::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -2;
-  background-color: var(--look-bg-color-light, transparent);
+  background-color: var(--look-bg-color-light, #ffffff);
   background-image: var(--app-bg-image, none);
   background-size: cover;
   background-position: center;
@@ -429,7 +1038,7 @@ div.fixed.inset-0 > .card {
   transition: background-color 0.2s ease, background-image 0.3s ease, opacity 0.3s ease;
 }
 .dark #root::before {
-  background-color: var(--look-bg-color-dark, transparent);
+  background-color: var(--look-bg-color-dark, #18181b);
 }
 /* 可调黑纱（默认 0 = 原图原色）：外观页「遮罩浓度」控制，背景图过亮影响文字可读时再调 */
 #root::after {

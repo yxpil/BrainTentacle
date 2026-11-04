@@ -188,12 +188,15 @@ async fn health() -> Json<serde_json::Value> {
 }
 
 /// 更新检测（同 check_updates 命令，远程管理/自动化测试用）
-async fn update_check() -> Response {
+/// 版本取 ctx.app_version（宿主传入的真实 App 版本），不用编译期常量：
+/// Electron 侧升版本时 bit-core 的 CARGO_PKG_VERSION 不变，会让手机端永远提示有更新。
+async fn update_check(State(ctx): State<Arc<Ctx>>) -> Response {
+    let cur = ctx.app_version.clone();
     match crate::update::fetch_latest().await {
         Ok(l) => {
-            let has_update = crate::update::version_gt(&l.version, env!("CARGO_PKG_VERSION"));
+            let has_update = crate::update::version_gt(&l.version, &cur);
             Json(json!({
-                "current": env!("CARGO_PKG_VERSION"),
+                "current": cur,
                 "latest": l.version,
                 "has_update": has_update,
                 "notes": l.notes,
@@ -207,14 +210,15 @@ async fn update_check() -> Response {
 
 /// 本地升级状态：有没有已下载的更新包
 async fn update_status(State(ctx): State<Arc<Ctx>>) -> Response {
+    let cur = ctx.app_version.clone();
     match crate::update::read_state(&ctx) {
         Some(st) => Json(json!({
-            "current": env!("CARGO_PKG_VERSION"),
+            "current": cur,
             "downloaded": st["state"] == "downloaded",
             "update": st,
         }))
         .into_response(),
-        None => Json(json!({ "current": env!("CARGO_PKG_VERSION"), "downloaded": false })).into_response(),
+        None => Json(json!({ "current": cur, "downloaded": false })).into_response(),
     }
 }
 
@@ -733,7 +737,7 @@ async fn auth(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response
     resp
 }
 
-fn actor_of(key: &str) -> String {
+pub(crate) fn actor_of(key: &str) -> String {
     let prefix: String = key.chars().skip(4).take(8).collect();
     if prefix.is_empty() {
         "agent:unknown".to_string()
@@ -1260,7 +1264,7 @@ async fn debug_config(State(ctx): State<Arc<Ctx>>, Json(body): Json<serde_json::
         }
         if let Some(v) = body.get("tool_approval").and_then(|x| x.as_str()) {
             // 非法值直接拒绝，避免把配置改成永远无法审批的死状态
-            if ["ask", "auto", "allow_all"].contains(&v) {
+            if ["ask", "auto", "l2pass", "allow_all"].contains(&v) {
                 cfg.tool_approval = v.to_string();
             }
         }
@@ -1360,7 +1364,7 @@ async fn debug_config(State(ctx): State<Arc<Ctx>>, Json(body): Json<serde_json::
 
 /// 远程对话限速：60 秒滑动窗口按客户端 IP 计数（/api/chat 与 /v1/chat/completions 各自独立桶）。
 /// 返回 Some(建议等待秒数) 表示超限；chat_rpm_max=0 时不限速。
-fn chat_rate_check(ctx: &Arc<Ctx>, client: &str, kind: &str) -> Option<u64> {
+pub(crate) fn chat_rate_check(ctx: &Arc<Ctx>, client: &str, kind: &str) -> Option<u64> {
     let max = ctx.config.lock().unwrap().chat_rpm_max;
     if max == 0 {
         return None;
@@ -1385,7 +1389,7 @@ fn chat_rate_check(ctx: &Arc<Ctx>, client: &str, kind: &str) -> Option<u64> {
 }
 
 /// 限速 429 响应：英文提示 + Retry-After（外部客户端 / 旧模型可读）
-fn rate_limited_response(wait: u64) -> Response {
+pub(crate) fn rate_limited_response(wait: u64) -> Response {
     (
         StatusCode::TOO_MANY_REQUESTS,
         [("Retry-After", wait.to_string().as_str())],
@@ -1437,7 +1441,7 @@ fn too_active_response() -> Response {
 }
 
 /// 敏感词审核（输入方向）：启用时命中即拒绝。返回英文 403（不透露命中词，防词库探测）
-fn moderation_input_check(ctx: &Arc<Ctx>, text: &str, actor: &str, path: &str) -> Option<Response> {
+pub(crate) fn moderation_input_check(ctx: &Arc<Ctx>, text: &str, actor: &str, path: &str) -> Option<Response> {
     let cfg = ctx.config.lock().unwrap().clone();
     if !cfg.moderation_enabled {
         return None;
@@ -1460,7 +1464,7 @@ fn moderation_input_check(ctx: &Arc<Ctx>, text: &str, actor: &str, path: &str) -
 }
 
 /// 敏感词审核（输出方向）：回复命中时替换为固定拒绝语并审计（不中断会话）
-fn moderation_output_check(ctx: &Arc<Ctx>, reply: &str, actor: &str, path: &str) -> String {
+pub(crate) fn moderation_output_check(ctx: &Arc<Ctx>, reply: &str, actor: &str, path: &str) -> String {
     let cfg = ctx.config.lock().unwrap().clone();
     if !cfg.moderation_enabled {
         return reply.to_string();
@@ -1486,10 +1490,12 @@ async fn context_metrics_route(State(ctx): State<Arc<Ctx>>) -> Response {
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
     let est = crate::ai::estimate_context_tokens(&ctx, &session_id, &convo);
+    let (max_context, max_context_source) = crate::ai::active_max_context_info(&ctx);
     Json(json!({
         "session_id": session_id,
         "est_tokens": est,
-        "max_context": crate::ai::active_max_context(&ctx),
+        "max_context": max_context,
+        "max_context_source": max_context_source,
     }))
     .into_response()
 }

@@ -1,0 +1,9 @@
+{
+  "name": "闸门夹具·图标动作非法",
+  "version": "0.0.1",
+  "description": "chat_icons 的 action 只有 page 与 prompt 两种，写成 modal 必须拒绝",
+  "permissions": ["chaticon"],
+  "chat_icons": [
+    { "id": "m", "label": "弹窗", "paths": ["M4 6 H20"], "action": "modal" }
+  ]
+}

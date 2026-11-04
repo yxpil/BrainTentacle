@@ -407,6 +407,15 @@ const server = http.createServer((req, res) => {
         return respond(res, "E2E-FINAL-RETOOL failed: 覆盖后调用无有效结果", sse);
       }
 
+      // 发「本机已有文档」场景：send_file 的反馈轮直接收尾。
+      // 必须排在 E2E-CMD-SEND 之前——那条是子串匹配，SENDPATH 会被它吃掉再跑一遍 write_file。
+      if (all.includes("E2E-CMD-SENDPATH")) {
+        if (rounds === 1) {
+          const sent = /"sent"\s*:\s*true/.test(fb);
+          return respond(res, sent ? "E2E-FINAL-SENDPATH 文件已发送" : "E2E-FINAL-SENDPATH failed: send_file 无有效结果", sse);
+        }
+      }
+
       // E2E-CMD-SEND: 轮0 write_file 生成文件 → 轮1 send_file 发送 → 轮2 最终
       if (all.includes("E2E-CMD-SEND")) {
         if (rounds === 1)
@@ -832,7 +841,7 @@ const server = http.createServer((req, res) => {
         res,
         // sleep 1s（非 1.5s）：Windows 冷启 pwsh 自身耗 0.3~0.6s，1.5+启动开销会越过
         // FRONT_WINDOW_MS=2000 转后台，T27 忙等断言失准；1s 在三平台都稳留前台窗口内
-        '先执行一个慢命令：\n[{"tool":"shell","params":{"command":"sleep 1 && echo e2e-slept"}}]',
+        '先执行一个慢命令：\n[{"tool":"shell","params":{"command":"sleep 1; echo e2e-slept"}}]',
         sse
       );
 
@@ -994,6 +1003,17 @@ const server = http.createServer((req, res) => {
       ]);
       return respond(res, `我先创建一个翻倍工具。\n${calls}`, sse);
     }
+
+    // 发「本机已有文档」场景：探针在消息里给绝对路径，AI 直接 send_file 发过来，
+    // 用来验文件卡的「预览」是否把办公文档开进右侧栏。
+    // 注意必须排在 E2E-CMD-SEND 之前：那条是子串匹配，SENDPATH 也会被它吃掉。
+    const sendPath = (last.match(/E2E-CMD-SENDPATH\s+(\S+)/) || [])[1];
+    if (sendPath)
+      return respond(
+        res,
+        `这个文件给你：\n${JSON.stringify([{ tool: "send_file", params: { path: sendPath, note: "E2E 交付文档" } }])}`,
+        sse
+      );
 
     // 发送文件场景：先 write_file 生成，反馈轮里 send_file 发给用户
     if (last.includes("E2E-CMD-SEND"))

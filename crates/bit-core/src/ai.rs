@@ -90,17 +90,22 @@ pub struct ChatMessage {
     /// 模型请求时同样剥离（模型已知图已送达，重发正文即可）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagram: Option<serde_json::Value>,
+    /// 这条用户消息随附的图片（data URL）：只为前端气泡回显而存，模型请求走独立的
+    /// images 参数、这里逐条剥离。发送前渲染层已压到视觉模型档位（≤1568px / ~1MB），
+    /// 所以落库体积可控；不存的话切走再回来就只剩「图片 ×N」，看不出发的是什么
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
-        ChatMessage { role: "user".into(), content: content.into(), tool_calls: Vec::new(), thinking: None, ts: Some(now_ts()), diagram: None }
+        ChatMessage { role: "user".into(), content: content.into(), tool_calls: Vec::new(), thinking: None, ts: Some(now_ts()), diagram: None, images: Vec::new() }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        ChatMessage { role: "assistant".into(), content: content.into(), tool_calls: Vec::new(), thinking: None, ts: Some(now_ts()), diagram: None }
+        ChatMessage { role: "assistant".into(), content: content.into(), tool_calls: Vec::new(), thinking: None, ts: Some(now_ts()), diagram: None, images: Vec::new() }
     }
     pub fn system(content: impl Into<String>) -> Self {
-        ChatMessage { role: "system".into(), content: content.into(), tool_calls: Vec::new(), thinking: None, ts: None, diagram: None }
+        ChatMessage { role: "system".into(), content: content.into(), tool_calls: Vec::new(), thinking: None, ts: None, diagram: None, images: Vec::new() }
     }
 }
 
@@ -116,6 +121,10 @@ pub struct ToolCallRecord {
     pub params: serde_json::Value,
     pub ok: bool,
     pub result: serde_json::Value,
+    /// 本次调用改动文件前的快照 id（只有 write_file/edit 有）：会话回退据此恢复文件。
+    /// 前端可见但无展示意义，模型请求时随记录一起剥离
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkpoints: Vec<String>,
 }
 
 /// 调用当前激活提供方进行一次对话（按协议分派）
@@ -232,7 +241,11 @@ pub async fn simple_chat(
         return Err(format!("审核 provider「{}」未配置 API Key", p.name));
     }
     let client = http_client_for(&p.base_url, timeout_secs).map_err(|e| e.to_string())?;
-    let msgs = [ChatMessage::system(system), ChatMessage::user(user)];
+    // 压缩摘要 / L2 审核也走这里：同样是发给模型的正文，必须过脱敏
+    let msgs = crate::hidden_code::maybe_mask_messages(
+        ctx,
+        &[ChatMessage::system(system), ChatMessage::user(user)],
+    );
     // 默认参数：不带 reasoning_effort/temperature，轻量请求
     let params = AiConfig::default();
     let (text, _) = match p.protocol.as_str() {
@@ -243,29 +256,13 @@ pub async fn simple_chat(
     Ok(text)
 }
 
-/// base_url 是否指向本机
-pub fn is_loopback_base(base: &str) -> bool {
-    let rest = match base.trim() {
-        s if s.starts_with("http://") => &s[7..],
-        s if s.starts_with("https://") => &s[8..],
-        _ => return false,
-    };
-    let host = rest.split(['/']).next().unwrap_or("");
-    let host = host.rsplit('@').next().unwrap_or(host); // 剥 user:pass@
-    let host = host.split(':').next().unwrap_or(host); // 剥端口
-    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
-}
-
-/// 统一 HTTP 客户端：系统代理照常生效（远程 AI 端点可能必须走代理），
-/// 但环回地址一律直连——代理客户端（Watt/Clash 等）只写注册表未运行时，
-/// 死代理会把发往本机服务（LM Studio/Ollama/MCP/debug/测试桩）的请求整个吞掉
+/// 统一 HTTP 客户端：出网代理口径全在 netproxy——
+/// 环回地址恒直连（代理客户端只写注册表未运行时，死代理会把发往本机服务
+/// LM Studio/Ollama/MCP/debug/测试桩 的请求整个吞掉），
+/// 其余按设置里的「跟随系统 / 强制直连 / 自定义代理」显式配置
 pub fn http_client_for(base: &str, timeout_secs: u64) -> reqwest::Result<reqwest::Client> {
-    let mut b = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs));
-    if is_loopback_base(base) {
-        b = b.no_proxy();
-    }
-    b.build()
+    let b = reqwest::Client::builder().timeout(std::time::Duration::from_secs(timeout_secs));
+    crate::netproxy::apply_to_builder(base, b).build()
 }
 
 /// 流式被调用方中止的哨兵错误（中断会话时立即断开 SSE 读取，不回退非流式）
@@ -386,6 +383,9 @@ pub async fn chat_stream_with_images<F: FnMut(TokenKind, &str) -> bool>(
     images: &[String],
     mut on_token: F,
 ) -> Result<(String, TokenUsage), String> {
+    // HiddenCode 脱敏：流式是对话主路径，必须在发请求前拦截，不能只靠非流式入口
+    let masked = crate::hidden_code::maybe_mask_messages(ctx, messages);
+    let messages = &masked[..];
     let provider = {
         let cfg = ctx.ai_config.lock().unwrap();
         cfg.active().cloned()
@@ -1613,14 +1613,14 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
         ""
     };
     runtime_info.push_str(&format!(
-        "\n## Media cache folder\n\
-        - Images/videos/SVG generated or drawn are auto-saved under: {} — use it for intermediate media; to show a picture, output an \"image\" field (path/b64:/data:URL) from tool stdout.{diagram_hint}",
+        "\n## Media folder\n\
+        - Generated images/videos/SVG auto-save under: {} — use it for intermediate media; show one via an \"image\" field (path/b64:/data:URL) in tool stdout.{diagram_hint}",
         ctx.image_dir().display()
     ));
     // 工作区沙箱：TUI 模式锚定启动目录，shell 默认 cwd 与文件工具相对路径都基于它，越界会被拒绝
     if let Some(ws) = crate::sandbox::effective_root(ctx) {
         runtime_info.push_str(&format!(
-            "\n## Workspace (sandbox)\n- Working directory: {} — shell runs here by default; relative paths in read_file/write_file/edit anchor here; absolute paths outside it are rejected",
+            "\n## Workspace (sandbox)\n- Working directory: {} — shell cwd and relative paths in read_file/write_file/edit anchor here; absolute paths outside are rejected",
             ws.display()
         ));
     }
@@ -1648,24 +1648,22 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
     let (manual, skill_examples, closing) = if native {
         (
             "## Tool calls (native)\n\
-            1. Match the JSON Schema in `tools` exactly — names, types, required fields.\n\
-            2. Announcing an action requires the call in the same turn.\n\
-            3. Independent calls: one turn, in parallel.\n\
-            4. Reply body holds words only — no JSON, no markers.\n\
-            5. Results return as tool messages: continue, or fix args and retry.\n\
-            6. Ask only when truly blocked; otherwise end with the final answer.",
-            "Skills: names only here. Relevant → skill(action=search, query=name) for full content, then follow. action=save writes (same name overwrites).",
+            1. Calls must match the JSON Schema in `tools` exactly; announcing an action requires the call in the same turn.\n\
+            2. Independent calls: one turn, in parallel. Reply body: words only — no JSON or markers.\n\
+            3. Results come back as tool messages: continue, or fix and retry.\n\
+            4. Ask only when truly blocked; otherwise end with the final answer.",
+            "Skills: names only. Use skill(action=search, query=name) to read one, then follow it; save writes (same name overwrites).",
             // 收尾句并入第 6 条，省一段重复
             "",
         )
     } else {
         (
             "## Tool calls (text protocol)\n\
-            To act, output ONE line of pure JSON, nothing wrapped around it: [{{\"tool\":\"name\",\"params\":{{...}}}}]\n\
-            Example: [{{\"tool\":\"shell\",\"params\":{{\"command\":\"echo hi\"}}}}]\n\
-            Multiple calls stay in ONE array. No action → answer in natural language.",
-            "Skills: names only here. Relevant → [{{\"tool\":\"skill\",\"params\":{{\"action\":\"search\",\"query\":\"name\"}}}}] for full content, then follow. save writes (same name overwrites).",
-            "When you need to call a capability, output a JSON array, each element {{\"tool\":string,\"params\":object}}, on its own line, with nothing else wrapped around it.",
+            To act, output ONE pure-JSON line, nothing around it: [{\"tool\":\"name\",\"params\":{...}}]\n\
+            Example: [{\"tool\":\"shell\",\"params\":{\"command\":\"echo hi\"}}]\n\
+            Multiple calls stay in ONE array. No action → reply in natural language.",
+            "Skills: names only. Use [{\"tool\":\"skill\",\"params\":{\"action\":\"search\",\"query\":\"name\"}}] to read one, then follow it; save writes (same name overwrites).",
+            "Tool calls: one JSON array line, as specified above — nothing else in it.",
         )
     };
 
@@ -1681,21 +1679,24 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
             .collect()
     };
     let has = |n: &str| enabled.contains(n);
+    let lazy = ctx.config.lock().unwrap().lazy_tools;
     let mut manual = manual.to_string();
     if has("shell") {
         if native {
-            manual.push_str("\n7. shell has two modes: `wait:true` = wait for completion before sending next tool (use when next step needs this command's output, e.g. npm install → npm run build; max 10 min); `background:true` = fire-and-forget, chat continues (dev servers, tests, pipelines; result auto-returns). If neither, short commands sync, long ones auto-background.\n   After background shell returns a job_id, YOU decide:\n   - Ignore it (dev servers, mirrors, long downloads): keep doing other things; the final result is injected when it finishes.\n   - Care about it (npm install, build, test, migration): call `shell_log(job_id)` once or twice to spot progress/errors early, write a short status to the user, then let the round end naturally — background completion will wake you up.\n   Do NOT tight-loop shell_log; that burns tokens.");
+            manual.push_str("\n5. shell: `wait:true` blocks until done (use when the next step needs the output; max 10 min). `background:true` returns a job_id immediately (servers/tests) and auto-returns the result. Otherwise short sync, long auto-bg. After a job_id: ignore it, or if the result matters call `shell_log(job_id)` once or twice, post a status and end your turn — completion wakes you. Never tight-loop.");
         } else {
-            manual.push_str("\nshell has two modes: wait=true = wait for completion before next tool (use for dependency chains like npm install → npm run build; max 10 min); background=true = fire-and-forget (dev servers, tests, pipelines; result auto-returns). If neither, short sync, long auto-bg. After background returns job_id: you decide — ignore (dev servers) and keep going, or care (install/build/test) and call `shell_log(job_id)` once or twice to check progress, then write a status and end your turn so completion wakes you up. No tight loops.");
+            manual.push_str("\nshell: wait=true blocks until done (use when the next step needs the output; max 10 min); background=true returns a job_id immediately and auto-returns the result. Otherwise short sync, long auto-bg. After a job_id: ignore it, or if the result matters call `shell_log(job_id)` once or twice, post a status and end your turn. Never tight-loop.");
         }
     }
     if has("sub_agent") {
         if native {
-            manual.push_str("\n8. sub_agent {\"task\",\"title\"} only for long self-contained subtasks (task text must carry background + goal + acceptance; final answer returns to you). No nesting; do quick or context-heavy work yourself.");
+            manual.push_str("\n6. sub_agent {\"task\",\"title\"} only for long, self-contained subtasks — task text must state background, goal and acceptance; the answer returns to you. No nesting.");
         } else {
-            manual.push_str("\nsub_agent {\"task\",\"title\"} only for long self-contained subtasks, task text must be self-contained. No nesting.");
+            manual.push_str("\nsub_agent {\"task\",\"title\"} only for long, self-contained subtasks — task text must be self-contained. No nesting.");
         }
     }
+
+    // 按需加载开着时：除 skill 外的工具只剩名字索引，调取方式写在索引头里，不再重复一段手册
 
     let system_prompt_override = {
         let cfg = ctx.config.lock().unwrap();
@@ -1709,9 +1710,10 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
         default_system_prompt_static(native, skill_examples)
     };
 
-    let tools_at_a_glance = dynamic_tools_at_a_glance(ctx, native);
-    // 原生模式：工具 schema 已随 tools 参数下发，详细一览是双重注入——降级为纯工具名列表
-    let glance = if native {
+    let tools_at_a_glance = dynamic_tools_at_a_glance(ctx, native, session);
+    // 按需加载开着时，glance 里已经带了「已加载 + 未加载索引」两段，直接用；
+    // 关着时维持原样：原生模式 schema 已随 tools 参数下发，详细一览是双重注入——降级为纯工具名列表
+    let glance = if native && !lazy {
         // 锁序纪律：config 快照后立即释放，再单独锁 tools，绝不跨锁持有（同 tools_manifest）
         let cfg = ctx.config.lock().unwrap().clone();
         let mut names: Vec<String> = ctx
@@ -1729,7 +1731,17 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
     } else {
         tools_at_a_glance.clone()
     };
-    let static_template = static_template.replace("{DYNAMIC_TOOLS_AT_A_GLANCE}", &glance);
+    let had_placeholder = static_template.contains("{DYNAMIC_TOOLS_AT_A_GLANCE}");
+    let mut static_template = static_template.replace("{DYNAMIC_TOOLS_AT_A_GLANCE}", &glance);
+    // 自定义模板里没留占位符（多半是把旧的渲染结果存回了），索引段会整个消失：
+    // 这里只补「未调取」那一截，保证「模型能看到该调取什么」不依赖模板怎么写
+    if lazy && !had_placeholder {
+        let idx = lazy_tool_index(ctx, session);
+        if !idx.is_empty() {
+            static_template.push_str("\n\n");
+            static_template.push_str(&idx);
+        }
+    }
 
     // 极简提示词：一句身份 + 兼容模式契约 + 按启用工具的少量提示。
     // 原生模式不再注入 Tools at a glance（schema 已随 tools 参数下发）；兼容模式保留（无 tools 参数）。
@@ -1743,6 +1755,11 @@ let word_lists: Vec<Vec<String>> = mem_items.iter().map(|(_, content)| cut(conte
         if !native {
             p.push_str("\nTo act, output ONE line: [{\"tool\":\"name\",\"params\":{...}}]. Results return as tool messages.");
             p.push_str(&format!("\n\n## Tools\n{tools_at_a_glance}"));
+        } else if lazy {
+            // 按需加载开着时未调取工具的 schema 不在 tools 参数里，模型至少要看到索引才能调取
+            p.push_str(&format!(
+                "\n\n## Tool index (skill(action=load_tool) before calling one)\n{tools_at_a_glance}"
+            ));
         }
         if has("shell") {
             p.push_str("\nshell: wait=true (sync, use for dependency chains like install→build; max 10 min) or background=true (fire-and-forget; result auto-returns). Short sync / long auto-bg if neither. After background returns job_id: you decide — ignore (dev servers) and keep going, or care (install/build/test) and call shell_log(job_id) once to check progress. No tight loops.");
@@ -1802,7 +1819,7 @@ fn fit_prompt_budget(mut prompt: String) -> String {
         return prompt;
     }
     // 1) 媒体段瘦身
-    if let Some((s, e)) = section_range(&prompt, "Media cache folder") {
+    if let Some((s, e)) = section_range(&prompt, "Media folder") {
         let path = prompt[s..e]
             .lines()
             .find(|l| l.contains("saved under"))
@@ -1906,18 +1923,31 @@ fn schema_type_hint(v: &serde_json::Value) -> String {
 
 /// 动态生成当前可用工具清单。工具被暂停或删除后会自动从清单中消失，
 /// 并随 system_prompt 注入到模型上下文（即同步告知 AI）。
-fn dynamic_tools_at_a_glance(ctx: &Arc<crate::state::Ctx>, native: bool) -> String {
-let cfg = ctx.config.lock().unwrap().clone();
-let mut tools: Vec<crate::registry::ToolDef> = ctx
-    .tools
-    .lock()
-    .unwrap()
-    .iter()
-    // 宿主管控工具（如 sub_agent）不出现在模型可见的一览里；闸门未开的操控类工具同样不出现
-    .filter(|t| tool_visible(&cfg, t))
-    .cloned()
-    .collect();
+/// 按需加载（config.lazy_tools）打开时这里同时负责两段：已加载的照旧整条下发，
+/// 未加载的只留一行摘要 + 怎么调取——省下的正是其余工具的 schema/参数说明。
+/// 两段分开返回：自定义模板没留占位符时只补索引，不重复整份一览。
+fn tool_glance_lines(
+    ctx: &Arc<crate::state::Ctx>,
+    native: bool,
+    session: Option<&str>,
+) -> (Vec<String>, Vec<String>) {
+    let cfg = ctx.config.lock().unwrap().clone();
+    let mut tools: Vec<crate::registry::ToolDef> = ctx
+        .tools
+        .lock()
+        .unwrap()
+        .iter()
+        // 宿主管控工具（如 sub_agent）不出现在模型可见的一览里；闸门未开的操控类工具同样不出现
+        .filter(|t| tool_visible(&cfg, t))
+        .cloned()
+        .collect();
     tools.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    // 快照之后再做按需加载判定：wants/loaded_set 要拿 config / tool_loaded 锁，不能持锁回调
+    let lazy = cfg.lazy_tools;
+    let loaded = crate::tool_load::loaded_set(ctx, session);
+    let (tools, pending): (Vec<_>, Vec<_>) = tools
+        .into_iter()
+        .partition(|t| crate::tool_load::wants(lazy, &loaded, &t.name));
 
     let mut lines = Vec::new();
     for t in tools {
@@ -1950,23 +1980,63 @@ let mut tools: Vec<crate::registry::ToolDef> = ctx
         } else {
             format!("- {}{}: {}. Params {}", t.name, owner, t.description, params)
         };
-        // 原生模式下参数 schema 已由函数定义单独下发，提示词里不再重复参数细节
+        // 原生模式下描述与参数 schema 已由 tools 参数单独下发，提示词里只留名字
         if native {
-            line = format!("- {}{}: {}", t.name, owner, t.description);
+            line = format!("- {}{}", t.name, owner);
         }
         lines.push(line);
     }
-    // 常驻但不在注册表里的补充能力（无法被暂停/删除）
-    if native {
-        lines.push("- run_script: run a piece of code temporarily with a local interpreter (not persisted)".to_string());
-        lines.push("- add_memory: store a long-term memory".to_string());
-        lines.push("- memory: fetch full memory text by id (see Memories topics)".to_string());
-    } else {
-        lines.push("- run_script: run a piece of code temporarily with a local interpreter (not persisted). Params {\"runtime\":string,\"code\":string,\"params\":object}".to_string());
-        lines.push("- add_memory: store a long-term memory. Params {\"content\":string,\"kind\":string}".to_string());
-        lines.push("- memory: fetch full memory text by id. Params {\"id\":string}".to_string());
+    // 常驻但不在注册表里的补充能力（无法被暂停/删除）；按需加载下同样要先调取
+    let extras = crate::tool_load::extra_tools();
+    let (loaded_extras, pending_extras): (Vec<_>, Vec<_>) = extras
+        .into_iter()
+        .partition(|(name, _, _)| crate::tool_load::wants(lazy, &loaded, name));
+    for (name, desc, params) in loaded_extras {
+        lines.push(if native {
+            format!("- {name}")
+        } else {
+            format!("- {name}: {desc}. Params {}", compact_schema(&params))
+        });
+    }
+    // 未加载的工具：一行一条摘要，附上调取方式（省 token 的主体就在这一段）
+    let mut index_block = Vec::new();
+    if lazy && !(pending.is_empty() && pending_extras.is_empty()) {
+        // 内置工具的名字本身就说明用途（read_file/shell/ask_user…），索引只留名字；
+        // 自建/远程/MCP/插件工具的名字不可预测，才附一句摘要帮模型认领
+        let mut idx: Vec<String> = pending
+            .iter()
+            .map(|t| {
+                let hint = match &t.kind {
+                    crate::registry::ToolKind::Builtin { .. } => String::new(),
+                    _ => format!(": {}", crate::tool_load::gist(&t.description)),
+                };
+                format!("- {}{}", t.name, hint)
+            })
+            .collect();
+        idx.extend(
+            pending_extras
+                .iter()
+                .map(|(name, _, _)| format!("- {name}")),
+        );
+        idx.sort();
+        index_block.push(format!(
+            "NOT LOADED ({}) — skill(action=load_tool, name=\"X\") loads it:",
+            idx.len()
+        ));
+        index_block.append(&mut idx);
     }
 
+    (lines, index_block)
+}
+
+/// 一览 + 未调取索引拼成的完整清单文本（注入系统提示词 {DYNAMIC_TOOLS_AT_A_GLANCE} 的那段）
+fn dynamic_tools_at_a_glance(
+    ctx: &Arc<crate::state::Ctx>,
+    native: bool,
+    session: Option<&str>,
+) -> String {
+    let (mut lines, mut index) = tool_glance_lines(ctx, native, session);
+    lines.append(&mut index);
     if lines.is_empty() {
         "(no tools available)".to_string()
     } else {
@@ -1974,14 +2044,20 @@ let mut tools: Vec<crate::registry::ToolDef> = ctx
     }
 }
 
+/// 只取「未调取工具」索引段：自定义提示词模板没留占位符时兜底注入用。
+/// 按需加载关闭、或本会话已全部调取时返回空串。
+fn lazy_tool_index(ctx: &Arc<crate::state::Ctx>, session: Option<&str>) -> String {
+    tool_glance_lines(ctx, true, session).1.join("\n")
+}
+
 /// 默认系统提示词的「静态部分」—— 不含 manual / skill_examples / closing / runtime_info，
 /// 这些在 build_system_prompt 里始终自动拼接。command 返回给前端显示时也用它。
 /// native=true 时去掉文本协议专属的 Params 标注与 stdin/stdout 说明（函数 schema 已由 tools 参数提供）。
 pub fn default_system_prompt_static(native: bool, skill_examples: &str) -> String {
     let head = "\
-You are BIT, a local AI agent on this device (tools run locally; model may be remote — never claim to be a cloud service). Reply in the user's language.
-- Never fabricate tool output. add_tool lets you extend yourself.
-- Obey the user's instructions; pursue their goal by every means available.
+You are BIT, a local AI agent on this device (tools run locally; the model may be remote — never claim to be a cloud service). Reply in the user's language.
+- Never fabricate tool output. add_tool extends your capabilities.
+- Obey the user; achieve their goal by every means available.
 
 ## Tools at a glance
 {DYNAMIC_TOOLS_AT_A_GLANCE}
@@ -1996,11 +2072,10 @@ You are BIT, a local AI agent on this device (tools run locally; model may be re
     } else {
         (
             "## Extension actions\n\
-             - run_script: run a piece of code temporarily with a local interpreter (not persisted). Params {\"runtime\":string,\"code\":string,\"params\":object}\n\
-             - add_memory {\"content\":string,\"kind\":string} — store a long-term memory",
+             - run_script {runtime,code,params}: run temp code via a local interpreter. add_memory {content,kind}: save a long-term memory.",
             "## Know\n\
-             - Only call listed tools; unknown calls return an available list.\n\
-             - Script I/O: stdin one JSON → stdout one JSON. Node: `const p=JSON.parse(require('fs').readFileSync(0,'utf8')||'{}');console.log(JSON.stringify({sum:(p.a||0)+(p.b||0)}))` Python: `import sys,json; p=json.loads(sys.stdin.read() or '{}'); print(json.dumps({'sum':p.get('a',0)+p.get('b',0)}))` Compiled: same contract, BIT compiles then runs.\n\
+             - Call only listed tools; unknown calls return the available list.\n\
+             - Script I/O (run_script/add_tool): stdin one JSON → stdout one JSON (Node: fd 0; Python: sys.stdin; print JSON). Compiled: same contract.\n\
              - Runtime ids: see Local interpreters below.",
         )
     };
@@ -2016,11 +2091,12 @@ You are BIT, a local AI agent on this device (tools run locally; model may be re
 }
 
 
-pub fn default_system_prompt_for_display(ctx: &Arc<crate::state::Ctx>) -> String {
-    let skill_examples = "The SKILL list in this prompt shows names only. When a skill name looks relevant to the current task, fetch its full content first via Tool skill with action=search and query=that name, then follow it.";
-    let template = default_system_prompt_static(true, skill_examples);
-    let tools_at_a_glance = dynamic_tools_at_a_glance(ctx, true);
-    template.replace("{DYNAMIC_TOOLS_AT_A_GLANCE}", &tools_at_a_glance)
+/// 设置页里的「可编辑默认模板」：保留 `{DYNAMIC_TOOLS_AT_A_GLANCE}` 占位符，不展开成现场清单。
+/// 工具与技能列表是发送时按当前启用的工具现算的，抄进编辑框只会让人以为改得动它——
+/// 改完也不会生效（下次发送又按实际工具重生成），所以这里只给可编辑的前半段。
+pub fn default_system_prompt_for_display(_ctx: &Arc<crate::state::Ctx>) -> String {
+    let skill_examples = "Skills: names only. Use skill(action=search, query=name) to read one, then follow it; save writes (same name overwrites).";
+    default_system_prompt_static(true, skill_examples)
 }
 
 // ============ 原生工具调用（function calling）：OpenAI / Claude / Gemini ============
@@ -2142,13 +2218,16 @@ pub fn is_host_only_tool(name: &str) -> bool {
 
 /// 组装原生工具清单：已注册且启用的工具 + execute_tool_call 直接处理的扩展动作。
 /// 中立格式（name/description/parameters），发送前按协议转换。
-pub fn native_tool_defs(ctx: &Arc<crate::state::Ctx>) -> Vec<serde_json::Value> {
+/// session：本会话的按需加载状态（config.lazy_tools 开着时，只有 skill 与已调取的工具进这里）
+pub fn native_tool_defs(ctx: &Arc<crate::state::Ctx>, session: Option<&str>) -> Vec<serde_json::Value> {
+    let lazy = ctx.config.lock().unwrap().lazy_tools;
+    let loaded = crate::tool_load::loaded_set(ctx, session);
     let mut defs: Vec<serde_json::Value> = {
         let cfg = ctx.config.lock().unwrap().clone();
-        let tools = ctx.tools.lock().unwrap();
+        let tools: Vec<crate::registry::ToolDef> = ctx.tools.lock().unwrap().iter().cloned().collect();
         tools
             .iter()
-            .filter(|t| tool_visible(&cfg, t))
+            .filter(|t| tool_visible(&cfg, t) && crate::tool_load::wants(lazy, &loaded, &t.name))
             .map(|t| {
                 serde_json::json!({
                     "name": t.name,
@@ -2158,26 +2237,13 @@ pub fn native_tool_defs(ctx: &Arc<crate::state::Ctx>) -> Vec<serde_json::Value> 
             })
             .collect()
     };
-    let extra: Vec<(&str, &str, serde_json::Value)> = vec![
-        (
-            "run_script",
-            "用本机解释器临时执行一段代码（不落地成常驻工具）。代码从 stdin 读 params JSON，结果打印到 stdout",
-            serde_json::json!({"type":"object","properties":{"runtime":{"type":"string","description":"本机可用解释器 id"},"code":{"type":"string","description":"完整代码"},"params":{"type":"object","description":"传给代码的参数"}},"required":["runtime","code"]}),
-        ),
-        (
-            "add_memory",
-            "沉淀一条长期记忆",
-            serde_json::json!({"type":"object","properties":{"content":{"type":"string"},"kind":{"type":"string","description":"如 preference/fact"}},"required":["content"]}),
-        ),
-        (
-            "memory",
-            "按 id 取回一条长期记忆全文（id 见提示词 Memories 主题索引）",
-            serde_json::json!({"type":"object","properties":{"id":{"type":"string","description":"记忆 id"}},"required":["id"]}),
-        ),
-    ];
-    for (name, desc, params) in extra {
+    for (name, desc, params) in crate::tool_load::extra_tools() {
         // 注册表里已有同名工具则跳过，避免重复
         if defs.iter().any(|d| d["name"] == name) {
+            continue;
+        }
+        // 注册表外的常驻能力同样受按需加载管：没调取过就不下发 schema
+        if !crate::tool_load::wants(lazy, &loaded, name) {
             continue;
         }
         defs.push(serde_json::json!({
@@ -2193,6 +2259,7 @@ pub async fn chat_native_round(
     convo: &[ChatMessage],
     images: &[String],
     exchanges: &[ToolExchange],
+    session: Option<&str>,
 ) -> Result<NativeRound, NativeErr> {
     let (p, params) = {
         let cfg = ctx.ai_config.lock().unwrap();
@@ -2208,7 +2275,12 @@ pub async fn chat_native_round(
         )));
     }
     let client = http_client_for(&p.base_url, 180).map_err(|e| NativeErr::Other(e.to_string()))?;
-    let defs = native_tool_defs(ctx);
+    let defs = native_tool_defs(ctx, session);
+    // 原生 Function Calling 的正文与工具结果回喂都可能是会话原文，统一脱敏后再发
+    let masked_convo = crate::hidden_code::maybe_mask_messages(ctx, convo);
+    let masked_exchanges = crate::hidden_code::maybe_mask_exchanges(ctx, exchanges);
+    let convo = &masked_convo[..];
+    let exchanges = &masked_exchanges[..];
     match p.protocol.as_str() {
         "claude" => native_round_claude(&client, &p, convo, images, exchanges, &defs, &params).await,
         "gemini" => native_round_gemini(&client, &p, convo, images, exchanges, &defs, &params).await,
@@ -2450,6 +2522,7 @@ pub async fn chat_native_round_stream<F: FnMut(NativeEvent) -> bool + Send>(
     convo: &[ChatMessage],
     images: &[String],
     exchanges: &[ToolExchange],
+    session: Option<&str>,
     mut on_event: F,
 ) -> Result<NativeRound, NativeErr> {
     let (p, params) = {
@@ -2466,7 +2539,13 @@ pub async fn chat_native_round_stream<F: FnMut(NativeEvent) -> bool + Send>(
         )));
     }
     let client = http_client_for(&p.base_url, 180).map_err(|e| NativeErr::Other(e.to_string()))?;
-    let defs = native_tool_defs(ctx);
+    let defs = native_tool_defs(ctx, session);
+
+    // 原生流式与一次性回退共用同一份脱敏副本（工具结果同样掩码）
+    let masked_convo = crate::hidden_code::maybe_mask_messages(ctx, convo);
+    let masked_exchanges = crate::hidden_code::maybe_mask_exchanges(ctx, exchanges);
+    let convo = &masked_convo[..];
+    let exchanges = &masked_exchanges[..];
 
     // 记录是否已向调用方发出过增量：发出过就不能再退回一次性重发（会造成文本重复）
     let mut emitted = false;
@@ -2495,7 +2574,7 @@ pub async fn chat_native_round_stream<F: FnMut(NativeEvent) -> bool + Send>(
         Err(NativeErr::Other(e)) if e == STREAM_STOP => Err(NativeErr::Other(e)),
         Err(_) if !emitted => {
             // 流式不可用（端点不支持 stream/参数被拒等）：退回一次性请求，整段以单事件补发
-            let round = chat_native_round(ctx, convo, images, exchanges).await?;
+            let round = chat_native_round(ctx, convo, images, exchanges, session).await?;
             let t = round.thinking.clone();
             if !t.is_empty() {
                 on_event(NativeEvent::Think(&t));
@@ -4065,20 +4144,18 @@ mod tool_visible_tests {
         assert!(!tool_visible(&cfg, &def("shell", false)));
     }
 
-    /// 权限闸门：配置开启才可见；macOS 上 screen/mouse/keyboard 恒隐藏
+    /// 权限闸门：只看配置，不看平台（三平台都实装，缺授权/缺 X11 由调用点运行时降级并报错，
+    /// 不在闸门里写死「macOS 恒隐藏」——那样 darwin 上跑 cargo test 会红）
     #[test]
     fn gated_tools_follow_config() {
         let mut cfg = crate::config::Config::default();
         cfg.tool_mouse = true;
         cfg.tool_screen = true;
-        if cfg!(target_os = "macos") {
-            assert!(!tool_visible(&cfg, &def("mouse", true)));
-            assert!(!tool_visible(&cfg, &def("screen", true)));
-        } else {
-            assert!(tool_visible(&cfg, &def("mouse", true)));
-            assert!(tool_visible(&cfg, &def("screen", true)));
-        }
+        assert!(tool_visible(&cfg, &def("mouse", true)), "开了就该可见");
+        assert!(tool_visible(&cfg, &def("screen", true)), "开了就该可见");
         assert!(!tool_visible(&cfg, &def("keyboard", true)), "keyboard 闸门未开");
+        cfg.tool_mouse = false;
+        assert!(!tool_visible(&cfg, &def("mouse", true)), "关掉就得隐藏");
     }
 }
 
@@ -4095,20 +4172,127 @@ pub fn claude_context_for(id: &str) -> Option<u64> {
     }
 }
 
+/// 解析 token 数：数字与数字字符串都收（网关序列化方式不统一），非正数视为无效
+fn as_token_count(v: &serde_json::Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        return (n > 0).then_some(n);
+    }
+    if let Some(n) = v.as_i64() {
+        return (n > 0).then_some(n as u64);
+    }
+    if let Some(n) = v.as_f64() {
+        return (n >= 1.0).then_some(n as u64);
+    }
+    v.as_str()
+        .map(str::trim)
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|n| *n >= 1.0)
+        .map(|n| n as u64)
+}
+
 /// 从单个模型对象尽力提取上下文长度（各家字段不统一，逐个常见字段尝试）
 fn context_len_from(model: &serde_json::Value) -> Option<u64> {
-    const FIELDS: [&str; 5] =
-        ["context_length", "max_model_len", "context_window", "max_context_length", "max_input_tokens"];
+    const FIELDS: [&str; 12] = [
+        "context_length",
+        "max_model_len",
+        "context_window",
+        "max_context_length",
+        "max_input_tokens",
+        "input_token_limit",
+        "inputTokenLimit",
+        "context_size",
+        "max_seq_len",
+        "max_sequence_length",
+        "n_ctx",
+        "n_ctx_train",
+    ];
     for f in FIELDS {
-        if let Some(v) = model.get(f).and_then(|v| v.as_u64()) {
-            return Some(v);
+        if let Some(n) = model.get(f).and_then(as_token_count) {
+            return Some(n);
         }
     }
-    // OpenRouter 嵌套形态：top_provider.context_length
-    model
-        .get("top_provider")
-        .and_then(|p| p.get("context_length"))
-        .and_then(|v| v.as_u64())
+    // 嵌套形态：OpenRouter top_provider / 部分网关 limits / llama.cpp meta
+    const NESTED: [&str; 5] = [
+        "/top_provider/context_length",
+        "/limits/context_length",
+        "/limits/context_window",
+        "/meta/n_ctx_train",
+        "/meta/n_ctx",
+    ];
+    for p in NESTED {
+        if let Some(n) = model.pointer(p).and_then(as_token_count) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// 模型 id 归一化：小写、去厂商前缀、去日期快照与 -latest 尾巴。
+/// 用于把配置里填的别名 / 快照 id 对到模型列表里的同一模型（OpenRouter 的
+/// vendor/model 形态、OpenAI 的 -2024-08-06 快照都是同一个上下文）。
+fn norm_model_id(id: &str) -> String {
+    let mut s = id.trim().to_ascii_lowercase();
+    if let Some(pos) = s.rfind('/') {
+        s = s[pos + 1..].to_string();
+    }
+    if let Some(stripped) = s.strip_suffix("-latest") {
+        s = stripped.to_string();
+    }
+    strip_date_snapshot(&s).to_string()
+}
+
+/// 去掉末尾日期快照后缀：-YYYY-MM-DD / -YYYYMMDD
+fn strip_date_snapshot(s: &str) -> &str {
+    let b = s.as_bytes();
+    // -YYYYMMDD（9 个字节含连字符）
+    if b.len() > 9 {
+        let i = b.len() - 8;
+        if b[i - 1] == b'-' && b[i..].iter().all(u8::is_ascii_digit) {
+            return &s[..i - 1];
+        }
+    }
+    // -YYYY-MM-DD（11 个字节含连字符）
+    if b.len() > 11 {
+        let i = b.len() - 10;
+        if i >= 1
+            && b[i - 1] == b'-'
+            && b[i + 4] == b'-'
+            && b[i + 7] == b'-'
+            && b[i..i + 4].iter().all(u8::is_ascii_digit)
+            && b[i + 5..i + 7].iter().all(u8::is_ascii_digit)
+            && b[i + 8..i + 10].iter().all(u8::is_ascii_digit)
+        {
+            return &s[..i - 1];
+        }
+    }
+    s
+}
+
+/// 在某个 base 的上下文缓存里找当前模型的实际上报值：
+/// 先精确匹配，再按归一化 id（别名 / 日期快照 / 厂商前缀）匹配。
+/// 找不到就返回 None——绝不拿同 base 下别的模型（尤其嵌入模型）的数值来猜；
+/// 也不做宽松前缀匹配（gpt-4o 与 gpt-4o-mini 是不同模型，上下文可能不同）。
+fn lookup_model_context(
+    map: &std::collections::BTreeMap<String, u64>,
+    base: &str,
+    model: &str,
+) -> Option<u64> {
+    if let Some(n) = map.get(&ctx_key(base, model)) {
+        return Some(*n);
+    }
+    let want = norm_model_id(model);
+    if want.is_empty() {
+        return None;
+    }
+    let prefix = format!("{}|", base.trim().trim_end_matches('/'));
+    let mut hit: Option<u64> = None;
+    for (k, v) in map.iter().filter(|(k, _)| k.starts_with(&prefix)) {
+        if norm_model_id(&k[prefix.len()..]) == want {
+            // 多个快照指向同一模型时取最大值，避免被某个小窗口变体低估
+            hit = Some(hit.map_or(*v, |p| p.max(*v)));
+        }
+    }
+    hit
 }
 
 /// 模型上下文缓存键：base 归一化（去首尾空白与尾斜杠）+ 模型 id
@@ -4236,7 +4420,7 @@ pub async fn fetch_provider_models(
                     arr.iter()
                         .filter_map(|m| {
                             let id = m.get("name")?.as_str()?.trim_start_matches("models/").to_string();
-                            let len = m.get("inputTokenLimit").and_then(|v| v.as_u64());
+                            let len = context_len_from(m);
                             Some((id, len))
                         })
                         .collect()
@@ -4249,7 +4433,9 @@ pub async fn fetch_provider_models(
                     arr.iter()
                         .filter_map(|m| {
                             let id = m.get("id")?.as_str()?.to_string();
-                            let len = claude_context_for(&id);
+                            // 官方 Claude 列表不带上下文；这里只收接口真给了的字段，
+                            // 家族默认值交给 active_max_context_info 兜底（标明来源）
+                            let len = context_len_from(m);
                             Some((id, len))
                         })
                         .collect()
@@ -4275,59 +4461,142 @@ pub async fn fetch_provider_models(
     Err(last_err)
 }
 
-/// 把拉取到的上下文长度并入 ai_config.model_context 持久缓存并落盘
+/// 把本次拉取到的上下文长度镜像进 ai_config.model_context 并落盘：
+/// 该 base 下不在本次列表里、或本次没给值的旧条目一并作废——
+/// 上限必须反映接口最新一次实际返回，不能留着上一次的陈旧值。
+/// 拉取失败时调用方不会进这里，网络抖动不会误清缓存。
 pub fn persist_model_context(ctx: &Arc<Ctx>, base_url: &str, models: &[(String, Option<u64>)]) {
+    let base = base_url.trim().trim_end_matches('/');
+    let prefix = format!("{base}|");
+    let fresh: std::collections::HashMap<&str, u64> = models
+        .iter()
+        .filter_map(|(id, len)| len.map(|n| (id.as_str(), n)))
+        .collect();
     {
         let mut cfg = ctx.ai_config.lock().unwrap();
-        for (id, len) in models {
-            if let Some(n) = len {
-                cfg.model_context.insert(ctx_key(base_url, id), *n);
-            }
+        cfg.model_context.retain(|k, _| match k.strip_prefix(&prefix) {
+            Some(id) => fresh.contains_key(id),
+            None => true,
+        });
+        for (id, n) in &fresh {
+            cfg.model_context.insert(ctx_key(base, id), *n);
         }
     }
     ctx.save_ai_config();
 }
 
-/// 启动/配置变更时后台刷新激活提供方的模型上下文缓存（失败静默）
-pub async fn refresh_model_context(ctx: &Arc<Ctx>, protocol: &str, base_url: &str, api_key: &str) {
+/// 启动/配置变更时后台刷新激活提供方的模型上下文缓存（失败静默）。
+/// 列表没给当前模型的上下文时，再问一次单模型详情接口（部分网关只在详情里给），
+/// 拿到任何新值都广播 model-context，让页眉上限立即跟上接口真实值。
+pub async fn refresh_model_context(
+    ctx: &Arc<Ctx>,
+    protocol: &str,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) {
     // 用自动检测后的生效 base 落缓存：与前端纠正后保存的 provider base 对齐
-    if let Ok((effective, models)) = fetch_provider_models(protocol, base_url, api_key).await {
-        persist_model_context(ctx, &effective, &models);
-    }
-}
-
-/// 激活模型的最大上下文（token）：优先模型列表获取的缓存，claude 协议用家族默认兜底
-pub fn active_max_context(ctx: &Arc<Ctx>) -> Option<u64> {
-    let ai = ctx.ai_config.lock().unwrap();
-    let p = ai.active()?.clone();
-    let base = p.base_url.trim().trim_end_matches('/');
-    // 精确匹配：provider.model 与模型列表中的 id 完全一致
-    if let Some(n) = ai.model_context.get(&ctx_key(base, &p.model)).copied() {
-        return Some(n);
-    }
-    // 兜底：同 base 下已缓存了模型上下文，但 provider 的 model 字段是别名 / 快照未列出的 id
-    // （很多提供方 /v1/models 返回的 id 与配置里填的模型名不一致）。取同 base 下最小的可用
-    // 上下文长度（保守，避免高估导致截断），保证 max_context 能取到。
-    if !p.model.is_empty() {
-        let prefix = format!("{}|", base);
-        if let Some(min) = ai
-            .model_context
-            .iter()
-            .filter(|(k, _)| k.starts_with(&prefix))
-            .map(|(_, v)| *v)
-            .min()
-        {
-            return Some(min);
+    let Ok((effective, mut models)) = fetch_provider_models(protocol, base_url, api_key).await else {
+        return;
+    };
+    // 列表里已有当前模型的值（含别名 / 快照匹配）就不再发详情请求
+    let known = models.iter().any(|(id, len)| {
+        len.is_some() && (id == model || norm_model_id(id) == norm_model_id(model))
+    });
+    if !known && !model.is_empty() {
+        if let Some(n) = fetch_model_context_detail(protocol, &effective, api_key, model).await {
+            match models.iter_mut().find(|(id, _)| id == model) {
+                Some(slot) => slot.1 = Some(n),
+                None => models.push((model.to_string(), Some(n))),
+            }
         }
     }
-    claude_context_for(&p.model)
+    persist_model_context(ctx, &effective, &models);
+    ctx.emit(
+        "model-context",
+        serde_json::json!({
+            "base": effective,
+            "model": model,
+            "max_context": active_max_context(ctx),
+        }),
+    );
+}
+
+/// 单模型详情接口尽力获取上下文（列表不带该字段时的补充）：
+/// openai 兼容 GET {base}/models/{id}，claude GET {base}/v1/models/{id}，
+/// gemini GET {base}/v1beta/models/{id}。拿不到按 None 处理。
+pub async fn fetch_model_context_detail(
+    protocol: &str,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Option<u64> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() || model.is_empty() {
+        return None;
+    }
+    let url = match protocol {
+        "gemini" => format!("{base}/v1beta/models/{model}?key={api_key}"),
+        "claude" => format!("{base}/v1/models/{model}"),
+        _ => format!("{base}/models/{model}"),
+    };
+    let client = http_client_for(&url, 10).ok()?;
+    let mut req = client.get(&url);
+    match protocol {
+        "gemini" => {}
+        "claude" => {
+            req = req
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01");
+        }
+        _ => {
+            if !api_key.is_empty() {
+                req = req.header("Authorization", format!("Bearer {api_key}"));
+            }
+        }
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    // 详情响应形态不一：模型对象本身 / {data: 对象} / {model: 对象}
+    context_len_from(&body)
+        .or_else(|| body.get("data").and_then(context_len_from))
+        .or_else(|| body.get("model").and_then(context_len_from))
+}
+
+/// 激活模型的最大上下文（token）及来源：
+/// - "api"：提供方接口实际上报（模型列表或详情接口）
+/// - "claude"：Claude 接口不提供上下文，按已知家族默认 200K
+/// - 空：接口未上报，由前端用设置里的回退值
+pub fn active_max_context_info(ctx: &Arc<Ctx>) -> (Option<u64>, &'static str) {
+    let ai = ctx.ai_config.lock().unwrap();
+    let p = match ai.active() {
+        Some(p) => p.clone(),
+        None => return (None, ""),
+    };
+    let base = p.base_url.trim().trim_end_matches('/');
+    if let Some(n) = lookup_model_context(&ai.model_context, base, &p.model) {
+        return (Some(n), "api");
+    }
+    if p.protocol == "claude" {
+        if let Some(n) = claude_context_for(&p.model) {
+            return (Some(n), "claude");
+        }
+    }
+    (None, "")
+}
+
+/// 激活模型的最大上下文（token），只关心数值的调用方用这个
+pub fn active_max_context(ctx: &Arc<Ctx>) -> Option<u64> {
+    active_max_context_info(ctx).0
 }
 
 /// 估算一次对话请求的 token 量（粗估：chars/2），远程访问配额提示用：
 /// 兼容模式（文本约定）下工具清单以压缩形式内联在系统提示词里，已计入 convo_chars；
 /// 标准原生模式才需要额外估算 tools 参数的 token 占用
 pub fn estimate_context_tokens(_ctx: &Arc<Ctx>, session_id: &str, convo: &[ChatMessage]) -> usize {
-    let _ = session_id;
     let compat = _ctx.config.lock().unwrap().compat_mode;
     let convo_chars: usize = convo
         .iter()
@@ -4336,10 +4605,150 @@ pub fn estimate_context_tokens(_ctx: &Arc<Ctx>, session_id: &str, convo: &[ChatM
     let tool_chars = if compat {
         0
     } else {
-        serde_json::to_string(&native_tool_defs(_ctx))
+        serde_json::to_string(&native_tool_defs(_ctx, Some(session_id)))
             .unwrap_or_default()
             .chars()
             .count()
     };
     (convo_chars + tool_chars).div_ceil(2)
+}
+
+/// 最大上下文解析与模型 id 匹配：只认接口实际返回，不跨模型猜
+#[cfg(test)]
+mod ctx_tests {
+    use super::{context_len_from, lookup_model_context, norm_model_id, strip_date_snapshot};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn parses_context_fields_from_common_shapes() {
+        // 数字 / 数字字符串 / 浮点都收（网关序列化不统一）
+        assert_eq!(context_len_from(&json!({"context_length": 65536})), Some(65536));
+        assert_eq!(context_len_from(&json!({"context_length": "262144"})), Some(262144));
+        assert_eq!(context_len_from(&json!({"max_model_len": 32768.0})), Some(32768));
+        // vLLM / llama.cpp / Gemini 的字段名
+        assert_eq!(context_len_from(&json!({"context_window": 8192})), Some(8192));
+        assert_eq!(context_len_from(&json!({"n_ctx_train": 4096})), Some(4096));
+        assert_eq!(context_len_from(&json!({"inputTokenLimit": 1048576})), Some(1048576));
+        // 嵌套：OpenRouter top_provider / 网关 limits
+        assert_eq!(
+            context_len_from(&json!({"top_provider": {"context_length": 200000}})),
+            Some(200000)
+        );
+        assert_eq!(
+            context_len_from(&json!({"limits": {"context_window": 128000}})),
+            Some(128000)
+        );
+        // 缺失或非法一律 None，不拿输出上限 max_tokens 冒充上下文
+        assert_eq!(context_len_from(&json!({"id": "x"})), None);
+        assert_eq!(context_len_from(&json!({"context_length": 0})), None);
+        assert_eq!(context_len_from(&json!({"context_length": "n/a"})), None);
+        assert_eq!(context_len_from(&json!({"max_tokens": 4096})), None);
+    }
+
+    #[test]
+    fn normalizes_model_aliases_and_snapshots() {
+        assert_eq!(norm_model_id("openai/GPT-4o-2024-08-06"), "gpt-4o");
+        assert_eq!(norm_model_id("gpt-4o-20240806"), "gpt-4o");
+        assert_eq!(norm_model_id("claude-3-5-sonnet-latest"), "claude-3-5-sonnet");
+        assert_eq!(norm_model_id("meta-llama/Llama-3.1-70B-Instruct"), "llama-3.1-70b-instruct");
+        // 非日期尾巴不动
+        assert_eq!(strip_date_snapshot("llama-3.1-70b"), "llama-3.1-70b");
+        assert_eq!(strip_date_snapshot("gpt-4o"), "gpt-4o");
+    }
+
+    #[test]
+    fn lookup_matches_alias_snapshot_but_never_other_models() {
+        let mut map = BTreeMap::new();
+        map.insert("https://x/v1|gpt-4o".to_string(), 128_000u64);
+        map.insert("https://x/v1|openai/gpt-4o-mini".to_string(), 128_000u64);
+        map.insert("https://x/v1|text-embedding-3-small".to_string(), 8_191u64);
+        // 精确
+        assert_eq!(lookup_model_context(&map, "https://x/v1", "gpt-4o"), Some(128_000));
+        // 别名：配置带日期快照 / 列表是别名
+        assert_eq!(
+            lookup_model_context(&map, "https://x/v1", "gpt-4o-2024-08-06"),
+            Some(128_000)
+        );
+        // 厂商前缀
+        assert_eq!(
+            lookup_model_context(&map, "https://x/v1", "gpt-4o-mini"),
+            Some(128_000)
+        );
+        // 列表里没有的模型：返回 None，绝不拿嵌入模型的 8191 猜
+        assert_eq!(lookup_model_context(&map, "https://x/v1", "o3-mini"), None);
+        // 宽松前缀不许串模型：gpt-4o 的值不能套到 gpt-4o-mini 上
+        let mut only_base = BTreeMap::new();
+        only_base.insert("https://x/v1|gpt-4o".to_string(), 128_000u64);
+        assert_eq!(lookup_model_context(&only_base, "https://x/v1", "gpt-4o-mini"), None);
+        // 别的 base 的缓存不串台
+        assert_eq!(lookup_model_context(&map, "https://y/v1", "gpt-4o"), None);
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::{estimate_tokens, system_prompt, system_prompt_native};
+    use std::sync::Arc;
+
+    /// 设置页给的是「可编辑的前半段」：工具/技能清单留占位符，不把现场生成的列表抄进编辑框
+    #[test]
+    fn display_template_keeps_placeholder() {
+        let ctx: Arc<crate::state::Ctx> = crate::plugins::test_ctx("prompt-display");
+        let shown = crate::ai::default_system_prompt_for_display(&ctx);
+        assert!(shown.contains("{DYNAMIC_TOOLS_AT_A_GLANCE}"), "占位符要原样留着");
+        assert!(!shown.contains("NOT LOADED"), "现场生成的未调取索引不该出现在编辑框里");
+        assert!(!shown.contains("Available tools:"), "工具清单不该抄进模板");
+        // 占位符留着，发送时才会被展开
+        let sent = system_prompt_native(&ctx, Some("s1"));
+        assert!(!sent.contains("{DYNAMIC_TOOLS_AT_A_GLANCE}"), "发出去的 prompt 不该残留占位符");
+        assert!(sent.contains("skill"), "展开后应带上工具与技能段");
+    }
+
+    /// 初始提示词体积回归：内置工具索引只留名字，整段应保持精简
+    /// （压缩前 native ≈1104 token / text ≈1222 token，这里留足新工具增长余量）
+    #[test]
+    fn default_prompts_stay_compact() {
+        let ctx: Arc<crate::state::Ctx> = crate::plugins::test_ctx("prompt-budget");
+        let native = system_prompt_native(&ctx, Some("s1"));
+        let text = system_prompt(&ctx, Some("s1"));
+        assert!(native.contains("NOT LOADED"), "按需加载索引应在");
+        // 内置工具的描述不再进索引；插件/MCP 那种不可预测的名字仍带摘要
+        assert!(!native.contains("Read live output of a background shell job"));
+        assert!(!native.contains("Create a plan: register a goal"));
+        assert!(estimate_tokens(&native) <= 800, "native {} tokens", estimate_tokens(&native));
+        assert!(estimate_tokens(&text) <= 950, "text {} tokens", estimate_tokens(&text));
+    }
+
+    /// 压缩不能把行为契约弄丢：调用格式、后台 shell、调取方式、身份与动态段都得在
+    #[test]
+    fn compressed_prompts_keep_contracts() {
+        let ctx: Arc<crate::state::Ctx> = crate::plugins::test_ctx("prompt-contract");
+        let native = system_prompt_native(&ctx, Some("s1"));
+        for needle in [
+            "JSON Schema in `tools`",
+            "wait:true",
+            "background:true",
+            "shell_log(job_id)",
+            "sub_agent",
+            "skill(action=load_tool",
+            "Reply in the user's language",
+            "Never fabricate tool output",
+            "## Auto-drive",
+            "## Media folder",
+        ] {
+            assert!(native.contains(needle), "missing {needle}");
+        }
+        let text = system_prompt(&ctx, Some("s1"));
+        for needle in [
+            "## Tool calls (text protocol)",
+            "pure-JSON line",
+            "[{\"tool\":\"skill\"",
+            "## Know",
+            "Script I/O",
+            "## Auto-drive",
+        ] {
+            assert!(text.contains(needle), "missing {needle}");
+        }
+    }
 }

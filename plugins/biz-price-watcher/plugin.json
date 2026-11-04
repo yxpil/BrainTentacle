@@ -1,0 +1,101 @@
+{
+  "name": "商品价格盯盘",
+  "version": "1.2.0",
+  "description": "电商运营场景：报价统计 + 定时快照 + 看板页 + 对话页快捷提问",
+  "author": "yxpil · 套件",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "chaticon", "settings", "data", "notify"],
+  "tools": [
+    {
+      "name": "price_stats",
+      "description": "对一组报价做统计：最低价、最高价、均价、离散度，并挑出波动超过阈值的 SKU",
+      "kind": "interpreter",
+      "runtime": "python",
+      "file": "tools/price_stats.py",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "报价数组，每项形如 {\"sku\": \"A1\", \"price\": 19.9}",
+            "items": { "type": "object" }
+          },
+          "volatility_threshold": { "type": "number", "description": "判定异常波动的比例，默认 0.15" }
+        },
+        "required": ["items"]
+      }
+    },
+    {
+      "name": "quote_digest",
+      "description": "把报价压成一行摘要文本；顺带回读一次本机健康检查，证明沙盒脚本可以出网",
+      "kind": "script",
+      "file": "tools/quote_digest.rhai",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "limit": { "type": "number", "description": "摘要里最多列几条，默认 5" }
+        }
+      }
+    },
+    {
+      "name": "last_snapshot",
+      "description": "读取定时任务最近一次写下的快照（工作目录里的 biz_pricewatch_daily.json），返回给对话使用",
+      "kind": "interpreter",
+      "runtime": "py",
+      "file": "tools/last_snapshot.py",
+      "parameters": { "type": "object", "properties": {} }
+    }
+  ],
+  "prompts": [
+    "回答价格类问题时，先调用 price_stats 得到统计结果再下结论，不要凭印象报数；波动超过阈值的 SKU 要单独列出。"
+  ],
+  "skills": [
+    { "name": "价格盯盘流程", "summary": "抓报价 → 清洗去重 → price_stats 统计 → 异常 SKU 进复核清单 → 每日 09:00 存快照" }
+  ],
+  "memories": [
+    "盯盘业务约定：离散度超过 15% 的 SKU 需要人工复核，复核窗口为当天 18:00 前。"
+  ],
+  "jobs": [
+    {
+      "name": "daily-snapshot",
+      "schedule": "daily 09:00",
+      "runtime": "python",
+      "file": "jobs/daily_snapshot.py"
+    },
+    {
+      "name": "heartbeat",
+      "schedule": "every 30s",
+      "runtime": "node",
+      "file": "jobs/heartbeat.js"
+    }
+  ],
+  "pages": [
+    {
+      "id": "board",
+      "label": "价格盯盘",
+      "src": "web/board.html",
+      "paths": ["M4 19 L9 12 L13 15 L20 5", "M4 21 L21 21"]
+    }
+  ],
+  "settings": {
+    "entries": [
+      {
+        "id": "threshold",
+        "label": "波动阈值",
+        "description": "离散度超过这个比例的 SKU 进入复核清单（键名 volatility_threshold）",
+        "kw": "价格 波动 阈值 threshold 复核"
+      }
+    ]
+  },
+  "chat_icons": [
+    {
+      "id": "ask-price",
+      "label": "问价格",
+      "label_en": "Ask price",
+      "paths": ["M12 3 L12 21", "M16 7 C16 5 14 4 12 4 C9.5 4 8 5.6 8 7.5 C8 11 16 9.5 16 13.5 C16 15.6 14.2 17 12 17 C9.8 17 8 15.8 8 14"],
+      "action": "prompt",
+      "text": "今天的报价里哪些 SKU 波动超过了阈值？请按离散度从高到低列出来。"
+    }
+  ]
+}

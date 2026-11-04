@@ -422,8 +422,11 @@
     rootEl.classList.remove('pop');
     void rootEl.offsetWidth; // 强制 reflow 重启动画
     rootEl.classList.add('pop');
+    render(); // 隐藏期间不刷，重新可见时立刻补一帧，避免停在旧数据
   });
-  setInterval(render, 1000); // 秒级刷新耗时
+  // 这页被任务面板和 hover 小窗各加载一份，两份都常驻 1s 轮询；
+  // 窗口看不见的时候刷新纯属白跑，所以隐藏即跳过
+  setInterval(() => { if (!document.hidden) render(); }, 1000);
   render();
 </script>
 </body>

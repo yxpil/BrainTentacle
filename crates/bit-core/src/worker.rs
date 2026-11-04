@@ -700,23 +700,13 @@ pub async fn serve(ctx: Arc<Ctx>) -> Result<(), String> {
     axum::serve(listener, app).await.map_err(|e| e.to_string())
 }
 
-/// 宿主 PID 存活检测（worker 防孤儿）
+/// 宿主 PID 存活检测（worker 防孤儿）。
+/// 三平台同一份实现（sysinfo），不写 OS 分支：原来非 Windows 走 `/proc/{pid}`，
+/// 而 macOS 没有 procfs → 恒判宿主已死，worker 每 30 秒自杀一轮，子代理与后台 shell 全灭；
+/// Windows 那条 tasklist 分支还得每半分钟起一个外部进程。
 fn host_alive(pid: &str) -> bool {
     let Ok(p) = pid.parse::<u32>() else { return true };
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // tasklist 精确匹配 PID；查无此进程即宿主已退出
-        let out = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {p}"), "/FO", "CSV", "/NH"])
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-            .output();
-        matches!(out, Ok(o) if String::from_utf8_lossy(&o.stdout).contains(&format!("\"{p}\"")))
-    }
-    #[cfg(not(windows))]
-    {
-        std::path::Path::new(&format!("/proc/{p}")).exists()
-    }
+    crate::guardian::pid_alive(p)
 }
 
 /// worker 收到 reload：从 bit.db 重读配置 / 模型配置 / 工具 / 技能 / 记忆 / 目标 / 待办
@@ -729,6 +719,8 @@ fn reload_state(ctx: &Arc<Ctx>) {
         crate::config::Config::load(&dir, &conn)
     };
     *ctx.config.lock().unwrap() = cfg;
+    // 宿主改了出网代理后 worker 侧同步生效（代理决策按进程各自持有，不共享）
+    crate::netproxy::apply(&ctx.config.lock().unwrap());
     let dk = ctx.config.lock().unwrap().device_key.clone();
     let (ai, skills, memories, goals, todos) = {
         let conn = ctx.db.lock().unwrap();
@@ -759,6 +751,15 @@ mod tests {
         PORT.store(34567, Ordering::Relaxed);
         assert_eq!(worker_url("/w/ping"), "http://127.0.0.1:34567/w/ping");
         PORT.store(0, Ordering::Relaxed);
+    }
+
+    /// 宿主存活检测：自己的 pid 必须判活（macOS 曾因依赖 /proc 恒判死，worker 反复自杀），
+    /// 解析不出 pid 时保持 fail-open（宁可留着 worker 也不误杀）
+    #[test]
+    fn host_alive_recognizes_self_and_garbage() {
+        assert!(host_alive(&std::process::id().to_string()), "本进程的 pid 必须算活着");
+        assert!(host_alive("not-a-pid"), "pid 解析不了时不该判死");
+        assert!(!host_alive("4000000000"), "这么大的 pid 不可能存在");
     }
 
     #[test]

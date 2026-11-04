@@ -1,0 +1,8 @@
+{
+  "name": "闸门夹具·页面没申报权限",
+  "version": "0.0.1",
+  "description": "令牌契约写得很规矩，但忘了申请 page 权限——注册独立页面同样要明示",
+  "bridge": { "token": "required" },
+  "permissions": ["settings"],
+  "pages": [{ "id": "p", "label": "页面", "src": "web/p.html" }]
+}

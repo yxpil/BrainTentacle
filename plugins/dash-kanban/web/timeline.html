@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- 时间线页：读同一份命名空间存储（storage 权限），按卡片序号倒排，演示两个页面共享数据。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>时间线</title>
+    <style>
+      :root { --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --accent:#0891b2; }
+      @media (prefers-color-scheme: dark){ :root{ --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --accent:#22d3ee; } }
+      body { margin:0; padding:16px; color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 12px; font-size:16px; }
+      ol { margin:0; padding-left:20px; }
+      li { border-bottom:1px solid var(--line); padding:6px 0; }
+      .tag { color:var(--accent); margin-left:8px; font-size:12px; }
+      .empty { color:var(--muted); }
+    </style>
+  </head>
+  <body>
+    <h1>推进时间线</h1>
+    <ol id="list"><li class="empty">还没有卡片</li></ol>
+    <script>
+      async function load() {
+        const raw = await Bit.storage.get("cards");
+        const cards = raw ? JSON.parse(raw) : [];
+        const list = document.getElementById("list");
+        list.innerHTML = "";
+        if (!cards.length) {
+          list.innerHTML = '<li class="empty">还没有卡片</li>';
+          return;
+        }
+        for (const c of cards.slice().reverse()) {
+          const li = document.createElement("li");
+          li.textContent = c.title;
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = c.col;
+          li.appendChild(tag);
+          list.appendChild(li);
+        }
+      }
+      load().catch((e) => (document.getElementById("list").textContent = "读取失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "运维脚本台",
+  "version": "1.0.0",
+  "description": "exec 与 write 两条高危权限的正例：跑命令、写文件，并当场演示未申报能力被拒绝",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "exec", "write", "data"],
+  "pages": [
+    {
+      "id": "ops",
+      "label": "运维脚本台",
+      "src": "web/ops.html",
+      "paths": ["M4 6 H20 V18 H4 Z", "M7 10 L9 12 L7 14", "M12 14 H16"]
+    }
+  ],
+  "tools": [
+    {
+      "name": "env_probe",
+      "description": "回报宿主给解释器的环境（工作目录、NODE_PATH、Python 版本），排障用",
+      "kind": "interpreter",
+      "runtime": "node",
+      "file": "tools/env_probe.js",
+      "parameters": { "type": "object", "properties": {} }
+    }
+  ]
+}

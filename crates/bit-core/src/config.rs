@@ -1,6 +1,7 @@
 // yxpil · BIT
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -63,6 +64,12 @@ pub struct Config {
     /// 图片查看闸门（view_image）：默认关闭，模型不主动看本机图片
     #[serde(default)]
     pub tool_viewimage: bool,
+    /// 工具按需加载：默认只给模型下发 skill 一个工具的完整 schema，其余工具在提示词里
+    /// 只留「名字 + 一句摘要」的索引，模型要用时先 skill(action=load_tool,name=X)，
+    /// 下一轮该工具的 schema 才进 tools 参数。内置 23 项 + MCP/插件工具的 schema 每轮
+    /// 都要重付十几 KB，这一层把它换成不到 1KB 的索引。默认开（老配置缺这个键也算开）。
+    #[serde(default = "default_true")]
+    pub lazy_tools: bool,
     /// 幻觉防护：单个词在一条回复里出现次数达到该值即判定为幻觉循环（0=关闭）
     #[serde(default = "default_word_repeat_max")]
     pub word_repeat_max: u32,
@@ -78,9 +85,39 @@ pub struct Config {
     /// 设置页可从检测到的可用 shell 列表里指定
     #[serde(default)]
     pub default_shell: String,
+    /// 托管服务（WorkWith / 插件清单 services[]）的生命周期口径。
+    /// 这几项过去全是写死在 workwith.rs 里的常量：机器慢一点、服务起得慢一点，
+    /// 用户除了等没有任何办法；进程崩了更是只登记一条异常、不会自己爬起来。
+    /// 现在统一收进设置，单位与上限见各处 clamp。
+    /// 启动前的等待毫秒数：给上一轮实例释放端口/文件锁留退路（0 = 立即启动，上限 10000）
+    #[serde(default = "default_svc_start_delay_ms")]
+    pub svc_start_delay_ms: u32,
+    /// 端口就绪等待上限（秒）：到点仍未监听就放弃 MCP 联动并告知用户（5..=600）
+    #[serde(default = "default_svc_ready_secs")]
+    pub svc_ready_secs: u32,
+    /// 进程意外退出后的自动重启次数上限（0 = 关掉自动重启，上限 10）。
+    /// 只算连续失败：端口就绪/握手成功，或进程活过 60 秒，计数就归零
+    #[serde(default = "default_svc_retries")]
+    pub svc_retries: u32,
+    /// 停止后等退出监控收尾的上限（秒，1..=60）：决定 stop() 何时返回一致的停止态
+    #[serde(default = "default_svc_stop_grace_secs")]
+    pub svc_stop_grace_secs: u32,
+    /// 单个服务的日志环形缓冲行数上限（100..=20000）：超出丢弃最早的行
+    #[serde(default = "default_svc_log_lines")]
+    pub svc_log_lines: u32,
     /// 禁用的本地插件 id 列表（toolhomes/plugins/<id>）：不在包里存，重扫不丢用户选择
     #[serde(default)]
     pub disabled_plugins: Vec<String>,
+    /// 用户逐个关掉的插件权限位：key = 插件 id，value = 已关闭的权限名。
+    /// 只存"关掉的"：缺省即清单申报的全部生效，插件升级新增的权限位不会被旧记录静默失效；
+    /// 与 disabled_plugins 同理存在配置里，重扫插件目录不丢用户选择。
+    #[serde(default)]
+    pub plugin_denied_perms: HashMap<String, Vec<String>>,
+    /// 用户逐个撤回的插件接管槽位：key = 插件 id，value = 已恢复为内置的槽位名
+    /// （如 "chat.voice"）。只存"撤回的"：缺省即清单声明的接管全部生效，
+    /// 插件升级新增的槽位不会被旧记录静默吞掉；与权限位开关互不影响。
+    #[serde(default)]
+    pub plugin_denied_takeovers: HashMap<String, Vec<String>>,
     /// 唤出主界面的全局快捷键（如 "Alt+Shift+B"）：窗口隐藏/最小化时也能系统级唤出；
     /// 空字符串 = 关闭。格式遵循 tauri-plugin-global-shortcut（Ctrl/Alt/Shift/Super + 键名）
     #[serde(default = "default_hotkey_show")]
@@ -89,6 +126,15 @@ pub struct Config {
     /// 发现语法错误时注入工具结果提醒模型自我修复，并向聊天 UI 发警告。默认开
     #[serde(default = "default_true")]
     pub syntax_check: bool,
+    /// 任务完成提示（同时管住提示音与系统通知气泡）三档：
+    /// default=每轮结束都提示，用内置短音（WebAudio 现场合成，不占素材、无授权问题）；
+    /// custom=同样每轮提示，但声音换成用户从本机选的音频文件（落 data_dir/sounds）；
+    /// error-only=平时完全安静，只有回合失败才出声+弹气泡（长任务跑一半挂了才吭声）。
+    #[serde(default = "default_notify_sound")]
+    pub notify_sound: String,
+    /// 提示音音量（0–100，百分比）。只作用于提示音，不碰 TTS 的播放增益。
+    #[serde(default = "default_notify_volume")]
+    pub notify_volume: u32,
     /// 禁用的本地插件 id 列表（toolhomes/plugins/<id>）：不在包里存，重扫不丢用户选择
     #[serde(default = "default_true")]
     pub agent_worker_enabled: bool,
@@ -152,12 +198,17 @@ pub struct Config {
     /// Deny 即拦截；审核不可达时保持原自动放行语义（不回退人工，避免打断自动化）
     #[serde(default)]
     pub l2pass_cover_auto: bool,
+    /// L2 审核提示词（system prompt）：空 = 用内置默认策略；用户自定义策略时
+    /// 仍会追加固定的 JSON 输出契约，保证审核结果可解析
+    #[serde(default)]
+    pub l2pass_prompt: String,
     /// 界面语言（"zh" | "en"）：存库统一读取——前端 i18n 与 Electron 托盘/任务面板
     /// 共用同一标记（历史教训：语言只存 localStorage 时托盘面板读不到，双语失效）
     #[serde(default)]
     pub language: String,
     /// 界面主题（"light" | "dark" | "auto"）：存库统一读取——前端 useTheme 与 Electron
     /// 托盘/任务面板共用同一标记（与 language 同因：只存 localStorage 时面板读不到）
+    /// 新装默认 dark：开箱即用当前推荐外观的深色档；用户显式选过 light 的值原样保留
     #[serde(default)]
     pub theme: String,
     /// 远程对话限速：每 60 秒滑动窗口内允许的对话请求上限（/api/chat 与 /v1/chat/completions
@@ -184,10 +235,49 @@ pub struct Config {
     /// 手动「检查更新」不受影响
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    /// 出网代理模式："system" = 跟随启动时继承的系统代理（默认，与旧版行为一致）/
+    /// "direct" = 强制直连（抹掉代理环境变量，翻越系统代理）/ "custom" = 用下面手填的代理。
+    /// 企业内网只有代理能出公网，直连一律超时，所以这一项得存在配置里而不是只认环境变量
+    #[serde(default = "default_proxy_mode")]
+    pub proxy_mode: String,
+    /// 自定义代理地址：`http://` / `https://` / `socks5(h)` / `socks4(a)`，
+    /// 裸 `host:port` 视为 http 代理。协议或端口非法时设置页保存即报错，不落库
+    #[serde(default)]
+    pub proxy_url: String,
+    /// 代理认证账号（可空）：保存时并进 proxy_url 的 userinfo，子进程工具同样能用
+    #[serde(default)]
+    pub proxy_user: String,
+    /// 代理认证密码（可空）。与 access_password 同一档：明文存 bit.db（本机用户可读的库），
+    /// 不做设备密钥加密——加密后 curl/git/npm 这些认环境变量的子进程工具就拿不到凭据了
+    #[serde(default)]
+    pub proxy_pass: String,
+    /// 不走代理的域名/IP 后缀，逗号分隔（回环地址任何模式下都直连，无需在这里重复写）。
+    /// 内网自建模型端点、局域网服务、公司内网页都靠这一项绕过代理
+    #[serde(default)]
+    pub proxy_bypass: String,
+    /// 是否把代理写进本进程环境变量（curl / git / npm / pip 等子进程靠它继承）。
+    /// 关掉后代理只管 BIT 自己的出网，不动子进程环境——混合环境（部分工具已自带代理）常用
+    #[serde(default = "default_true")]
+    pub proxy_export_env: bool,
+    /// 代理不可达时回退直连：出差/回家忘关代理时不至于整个应用断网。
+    /// 默认关闭——企业内网直连通常根本出不去，静默回退反而把超时拖成慢
+    #[serde(default)]
+    pub proxy_fail_open: bool,
+    /// 额外信任的根证书（PEM 文件路径）：企业网关做 TLS 中间人时给的是自家根 CA，
+    /// 装进系统证书库当然最好，不想动系统就给 BIT 指这一个文件
+    #[serde(default)]
+    pub proxy_ca_file: String,
+    /// 跳过 TLS 证书校验（只给排障用，默认关）。开启后中间人无法被识别，界面会持续标红提示
+    #[serde(default)]
+    pub proxy_insecure: bool,
 }
 
 /// 目标自动推进的安全上限：同一目标最多自动续跑轮数（防空转无限烧 token）
 pub const AUTO_DRIVE_MAX: u32 = 25;
+
+fn default_proxy_mode() -> String {
+    "system".into()
+}
 
 fn default_word_repeat_max() -> u32 {
     20
@@ -203,6 +293,26 @@ fn default_tool_loop_max() -> u32 {
 
 fn default_tool_timeout_secs() -> u32 {
     120
+}
+
+fn default_svc_start_delay_ms() -> u32 {
+    300
+}
+
+fn default_svc_ready_secs() -> u32 {
+    60
+}
+
+fn default_svc_retries() -> u32 {
+    2
+}
+
+fn default_svc_stop_grace_secs() -> u32 {
+    5
+}
+
+fn default_svc_log_lines() -> u32 {
+    1000
 }
 
 fn default_worker_hang_secs() -> u32 {
@@ -240,6 +350,14 @@ fn default_true() -> bool {
     true
 }
 
+/// 提示音默认档：每轮结束都给一声，老配置没这个键时保持"能听见完成提醒"
+fn default_notify_sound() -> String {
+    "default".to_string()
+}
+fn default_notify_volume() -> u32 {
+    60
+}
+
 fn generate_client_key() -> String {
     let mut rng = rand::thread_rng();
     let hex: String = (0..32).map(|_| format!("{:x}", rng.gen_range(0..16))).collect();
@@ -259,6 +377,7 @@ impl Default for Config {
             remote_enabled: false,
             tool_diagram: false,
             tool_viewimage: false,
+            lazy_tools: true,
             host: "127.0.0.1".into(),
             port: 8600,
             client_key: generate_client_key(),
@@ -281,9 +400,18 @@ impl Default for Config {
             tool_loop_max: default_tool_loop_max(),
             tool_timeout_secs: default_tool_timeout_secs(),
             default_shell: String::new(),
+            svc_start_delay_ms: default_svc_start_delay_ms(),
+            svc_ready_secs: default_svc_ready_secs(),
+            svc_retries: default_svc_retries(),
+            svc_stop_grace_secs: default_svc_stop_grace_secs(),
+            svc_log_lines: default_svc_log_lines(),
             disabled_plugins: Vec::new(),
+            plugin_denied_perms: HashMap::new(),
+            plugin_denied_takeovers: HashMap::new(),
             hotkey_show: default_hotkey_show(),
             syntax_check: true,
+            notify_sound: default_notify_sound(),
+            notify_volume: default_notify_volume(),
             custom_prompt: String::new(),
             system_prompt: String::new(),
             cloud_relay_url: None,
@@ -299,8 +427,9 @@ impl Default for Config {
             l2pass_enabled: false,
             l2pass_provider_id: String::new(),
             l2pass_cover_auto: false,
+            l2pass_prompt: String::new(),
             language: "zh".into(),
-            theme: "light".into(),
+            theme: "dark".into(),
             device_registered_at: None,
             device_fp_hash: None,
             chat_rpm_max: default_chat_rpm_max(),
@@ -309,6 +438,15 @@ impl Default for Config {
             autostart: false,
             elevated: false,
             auto_update: true,
+            proxy_mode: default_proxy_mode(),
+            proxy_url: String::new(),
+            proxy_user: String::new(),
+            proxy_pass: String::new(),
+            proxy_bypass: String::new(),
+            proxy_export_env: true,
+            proxy_fail_open: false,
+            proxy_ca_file: String::new(),
+            proxy_insecure: false,
         }
     }
 }

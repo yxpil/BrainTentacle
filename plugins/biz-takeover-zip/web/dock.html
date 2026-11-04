@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- 附件坞主页：接管内置附件入口后的落点。用 fs.*（write 权限未申报，所以这里改走 data.*）
+     把一份待发送清单存进插件数据目录，再跳回对话页——演示"接管不等于越权"。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>附件坞</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#b45309; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#fbbf24; } }
+      * { box-sizing:border-box; }
+      body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 4px; font-size:16px; }
+      .sub { color:var(--muted); margin-bottom:12px; }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:12px; }
+      .row { display:flex; gap:6px; flex-wrap:wrap; }
+      input, button { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--fg); }
+      button { border-color:var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+      ol { margin:6px 0 0; padding-left:20px; }
+      .tip { color:var(--muted); font-size:12px; margin-top:6px; }
+    </style>
+  </head>
+  <body>
+    <h1>附件坞</h1>
+    <div class="sub" id="who">正在握手…</div>
+    <div class="card">
+      <div class="row">
+        <input id="name" placeholder="文件名，例：报价单.pdf" size="28" />
+        <button id="add">加进清单</button>
+        <button id="go">带清单回对话</button>
+      </div>
+      <ol id="list"></ol>
+      <div class="tip" id="tip"></div>
+    </div>
+    <div class="card">
+      <h2 style="margin:0 0 6px;font-size:12px;color:var(--muted)">未申报 write，越权调用应当被拒</h2>
+      <button id="deny">试着写任意路径</button>
+      <div class="tip" id="deny-tip"></div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const FILE = "pending.json";
+
+      async function readList() {
+        try { return JSON.parse((await Bit.data.read(FILE)) || "[]"); } catch { return []; }
+      }
+      async function render() {
+        const rows = await readList();
+        $("list").innerHTML = rows.map((r) => `<li>${r}</li>`).join("") || "<li>（空）</li>";
+      }
+      async function boot() {
+        const info = await Bit.ready();
+        $("who").textContent = info ? `${info.plugin_name} · 生效权限 ${info.permissions.join(" / ")}` : "握手尚未完成";
+        await render();
+      }
+
+      $("add").addEventListener("click", async () => {
+        const n = $("name").value.trim();
+        if (!n) return;
+        const rows = await readList();
+        rows.push(n);
+        await Bit.data.write(FILE, JSON.stringify(rows, null, 2));
+        $("name").value = "";
+        await render();
+      });
+      $("go").addEventListener("click", async () => {
+        const rows = await readList();
+        await Bit.sessions.append("user", `准备发送附件：${rows.join("、") || "（无）"}`);
+        $("tip").textContent = "清单已记进本插件会话，现在回对话页";
+        await Bit.openPage("chat");
+      });
+      $("deny").addEventListener("click", async () => {
+        try {
+          await Bit.cap("fs.write", { path: "C:/Windows/Temp/bit-suite-should-not-exist.txt", text: "x" });
+          $("deny-tip").textContent = "竟然写成功了（不该发生）";
+        } catch (e) {
+          $("deny-tip").textContent = "被拒：" + String(e.message || e);
+        }
+      });
+
+      boot().catch((e) => ($("who").textContent = "握手失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

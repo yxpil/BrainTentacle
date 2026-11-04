@@ -1,0 +1,10 @@
+{
+  "name": "抢内置后缀",
+  "version": "1.0.0",
+  "description": "负面夹具：想接管核心自己就能解析的 .pdf，必须被拒收（插件只补核心读不了的类型）",
+  "bridge": { "token": "required" },
+  "permissions": ["files"],
+  "file_kinds": [
+    { "id": "mypdf", "label": "我的 PDF", "exts": [".pdf"], "paths": ["M4 4h16v16H4z"] }
+  ]
+}

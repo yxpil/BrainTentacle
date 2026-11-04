@@ -427,6 +427,27 @@ async function main() {
   const configWithKeys = { ...config, keys };
   const { port } = await startServer(token, configWithKeys);
   process.stdout.write(`${JSON.stringify({ port })}\n`);
+  // 防孤儿：宿主被强杀/崩溃时来不及收这个子进程，它就会一直留着（实测一台机器堆了 68 个、约 1GB 常驻内存）。
+  // 这里只认自己那个父进程：Windows 上没有重新收养，父进程一死 pid 就查不到；
+  // Unix 下父进程死了会被过继给 init（ppid 变 1），两种平台都能判定宿主已走。
+  // pid 复用只会让判定偏保守（多留一会儿），不会误杀正在工作的宿主。
+  const timer = setInterval(() => {
+    if (hostGone()) process.exit(0);
+  }, 30_000);
+  timer.unref?.();
+}
+
+/** 宿主（父进程）是否已经不在了 */
+function hostGone() {
+  const ppid = process.ppid;
+  if (!ppid || ppid <= 1) return true;
+  try {
+    process.kill(ppid, 0);
+    return false;
+  } catch (error) {
+    // EPERM = 进程存在但没权限查看，仍算活着
+    return error?.code !== "EPERM";
+  }
 }
 
 main().catch((error) => {

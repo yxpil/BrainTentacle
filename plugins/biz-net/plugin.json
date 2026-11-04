@@ -1,0 +1,38 @@
+{
+  "name": "外部网关连接器",
+  "version": "1.0.0",
+  "description": "声明两条外部 MCP 连接：一条地址写死、令牌取自本插件设置，另一条整段地址来自设置",
+  "bridge": { "token": "required" },
+  "permissions": ["net", "settings", "data", "page"],
+  "page": {
+    "id": "conn",
+    "label": "连接台",
+    "src": "web/conn.html",
+    "paths": ["M4 12h6", "M14 12h6", "M10 8h4v8h-4z"]
+  },
+  "settings": {
+    "entries": [
+      {
+        "id": "gateway",
+        "label": "网关凭据",
+        "description": "外部 MCP 网关的访问令牌；连接里的 {setting:token} 取的就是这个键",
+        "kw": "令牌 token 网关 gateway 外部连接 mcp"
+      }
+    ]
+  },
+  "connections": [
+    {
+      "name": "gateway",
+      "label": "本机 mock 网关",
+      "url": "http://127.0.0.1:9903/mcp",
+      "headers": { "Authorization": "Bearer {setting:token}" },
+      "auto_connect": true
+    },
+    {
+      "name": "relay",
+      "label": "临时中转（整段地址来自设置）",
+      "url": "{setting:endpoint}",
+      "auto_connect": false
+    }
+  ]
+}

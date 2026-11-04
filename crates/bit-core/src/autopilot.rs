@@ -67,7 +67,7 @@ async fn autonomous_step(ctx: &Arc<Ctx>) -> Result<(), String> {
                 ChatMessage::system(ai::system_prompt_native(ctx, None)),
                 ChatMessage::user(user),
             ];
-            ai::chat_native_round(ctx, &convo, &[], &[]).await
+            ai::chat_native_round(ctx, &convo, &[], &[], None).await
         };
         match native {
             Ok(round) => {

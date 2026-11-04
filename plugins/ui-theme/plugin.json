@@ -1,0 +1,7 @@
+{
+  "name": "外观微调",
+  "version": "0.2.0",
+  "description": "最小面积的 css 插件：只注入两个自定义属性，验证样式通道而不改宿主布局",
+  "permissions": ["css"],
+  "ui": { "css": ["ui/tint.css"] }
+}

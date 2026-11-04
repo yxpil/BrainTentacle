@@ -1,0 +1,8 @@
+{
+  "name": "闸门夹具·服务器没申报",
+  "version": "0.0.1",
+  "description": "声明了 server 却没申请 server 权限：不能靠少写一个权限位蒙过托管进程",
+  "bridge": { "token": "required" },
+  "permissions": ["page"],
+  "server": { "runtime": "node", "program": "server.js", "auto_start": false }
+}

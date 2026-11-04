@@ -1,0 +1,113 @@
+{
+  "name": "投研流水线",
+  "version": "2.2.0",
+  "description": "permissions 用 all 通配的正例：六个工具压模型侧的工具清单，样式/脚本/页面都由通配位放行",
+  "bridge": { "token": "required" },
+  "permissions": ["all"],
+  "ui": { "css": ["ui/pipeline.css"], "js": ["ui/pipeline.js"] },
+  "tools": [
+    {
+      "name": "ticker_normalize",
+      "description": "把股票代码规范成大写带交易所前缀（沪/深/港）",
+      "kind": "script",
+      "parameters": {
+        "type": "object",
+        "properties": { "codes": { "type": "array", "items": { "type": "string" } } },
+        "required": ["codes"]
+      },
+      "code": "let raw = if params.codes == () { [] } else { params.codes };\nlet out = [];\nfor c in raw {\n  let s = c + \"\";\n  s.trim();\n  while s.len() < 6 { s = \"0\" + s; }\n  if s.starts_with(\"6\") { s = \"SH\" + s; } else { s = \"SZ\" + s; }\n  out.push(s);\n}\n#{ \"ok\": true, \"count\": out.len(), \"codes\": out }"
+    },
+    {
+      "name": "weighted_price",
+      "description": "按持仓权重算加权均价，stdin 收 {rows:[{code,price,weight}]}",
+      "kind": "interpreter",
+      "runtime": "node",
+      "parameters": {
+        "type": "object",
+        "properties": { "rows": { "type": "array", "items": { "type": "object" } } },
+        "required": ["rows"]
+      },
+      "code": "let raw=\"\";process.stdin.on(\"data\",(c)=>raw+=c);process.stdin.on(\"end\",()=>{const p=JSON.parse(raw||\"{}\");const rows=(p.rows||[]).filter(r=>r&&Number.isFinite(Number(r.price))&&Number.isFinite(Number(r.weight)));const w=rows.reduce((a,r)=>a+Number(r.weight),0);const v=rows.reduce((a,r)=>a+Number(r.price)*Number(r.weight),0);process.stdout.write(JSON.stringify({ok:true,n:rows.length,total_weight:w,weighted_avg:w?v/w:null}));});"
+    },
+    {
+      "name": "risk_score",
+      "description": "按波动与回撤给组合打风险分（0-100，越高越险）",
+      "kind": "interpreter",
+      "runtime": "python",
+      "parameters": {
+        "type": "object",
+        "properties": { "volatility": { "type": "number" }, "drawdown": { "type": "number" } },
+        "required": ["volatility", "drawdown"]
+      },
+      "code": "import json,sys\nsys.stdout.reconfigure(encoding=\"utf-8\")\np=json.load(sys.stdin)\nv=float(p.get(\"volatility\") or 0)\nd=float(p.get(\"drawdown\") or 0)\nscore=round(min(100.0, v*120+d*180),1)\nband=\"低\" if score<30 else (\"中\" if score<60 else \"高\")\nprint(json.dumps({\"ok\":True,\"score\":score,\"band\":band,\"note\":f\"波动 {v:.2f}、回撤 {d:.2f} → {band}风险\"},ensure_ascii=False))"
+    },
+    {
+      "name": "calendar_days",
+      "description": "两个日期之间的工作日天数（周一到周五，不含节假日表）",
+      "kind": "interpreter",
+      "runtime": "node",
+      "parameters": {
+        "type": "object",
+        "properties": { "from": { "type": "string" }, "to": { "type": "string" } },
+        "required": ["from", "to"]
+      },
+      "code": "let raw=\"\";process.stdin.on(\"data\",(c)=>raw+=c);process.stdin.on(\"end\",()=>{const p=JSON.parse(raw||\"{}\");const a=new Date(p.from),b=new Date(p.to);let d=0;if(isNaN(a)||isNaN(b)){process.stdout.write(JSON.stringify({ok:false,error:\"日期格式不对\"}));return;}for(let x=new Date(a);x<=b;x.setDate(x.getDate()+1)){const w=x.getDay();if(w!==0&&w!==6)d++;}process.stdout.write(JSON.stringify({ok:true,workdays:d}));});"
+    },
+    {
+      "name": "fx_convert",
+      "description": "按传入汇率换算币种",
+      "kind": "script",
+      "parameters": {
+        "type": "object",
+        "properties": { "amount": { "type": "number" }, "rate": { "type": "number" } },
+        "required": ["amount", "rate"]
+      },
+      "code": "let a = if params.amount == () { 0 } else { params.amount };\nlet r = if params.rate == () { 1 } else { params.rate };\n#{ \"ok\": true, \"converted\": a * r, \"rate\": r }"
+    },
+    {
+      "name": "pipeline_health",
+      "description": "读流水线最近一次的自检文件（工具之间用工作目录里的 JSON 接力）",
+      "kind": "interpreter",
+      "runtime": "py",
+      "parameters": { "type": "object", "properties": {} },
+      "code": "import json,os,sys\nsys.stdout.reconfigure(encoding=\"utf-8\")\np=\"biz_pipeline_last.json\"\nd=json.load(open(p,encoding=\"utf-8\")) if os.path.exists(p) else None\nprint(json.dumps({\"ok\":True,\"found\":d is not None,\"report\":d},ensure_ascii=False))"
+    }
+  ],
+  "prompts": [
+    "投研流水线的结论都要带上 risk_score 的分值区间；没有 pipeline_health 自检结果时先说数据缺失。"
+  ],
+  "skills": [
+    { "name": "组合体检", "summary": "ticker_normalize → weighted_price → risk_score → pipeline_health 出报告" },
+    { "name": "换算口径", "summary": "统一用当日收盘汇率，fx_convert 只接受显式传入的 rate" }
+  ],
+  "memories": ["投研流水线只产出建议，不自动下单；报告里必须写清数据来源与时间。"],
+  "jobs": [
+    {
+      "name": "nightly-pipeline",
+      "schedule": "daily 02:30",
+      "runtime": "node",
+      "file": "jobs/pipeline.js"
+    }
+  ],
+  "pages": [
+    {
+      "id": "flow",
+      "label": "投研流水线",
+      "src": "web/flow.html",
+      "paths": ["M4 6 H10 V12 H4 Z", "M14 6 H20 V12 H14 Z", "M9 9 H15", "M12 12 V18"]
+    }
+  ],
+  "chat_icons": [
+    {
+      "id": "ask-flow",
+      "label": "跑一遍体检",
+      "label_en": "Run check",
+      "paths": ["M4 6 H10 V12 H4 Z", "M14 6 H20 V12 H14 Z", "M9 9 H15"],
+      "action": "prompt",
+      "text": "请按投研流水线的口径给我一份组合体检：先规范化代码，再算加权均价与风险分。"
+    }
+  ],
+  "settings": {
+    "entries": [{ "id": "band", "label": "风险分档", "description": "低/中/高的分界，键 risk_bands", "kw": "风险 分档 投研" }]
+  }
+}

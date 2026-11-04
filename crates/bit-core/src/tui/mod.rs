@@ -269,16 +269,16 @@ pub(crate) async fn handle(ctx: &Arc<Ctx>, line: &str, out: &Out) -> Result<Flow
             }
             "approval" => {
                 if arg.is_empty() {
-                    out.line(format!("Approval: {} (ask / auto / allow_all)", ctx.config.lock().unwrap().tool_approval));
+                    out.line(format!("Approval: {} (ask / auto / allow_all / l2pass)", ctx.config.lock().unwrap().tool_approval));
                     return Ok(Flow::Continue);
                 }
                 match arg {
-                    "ask" | "auto" | "allow_all" => {
+                    "ask" | "auto" | "allow_all" | "l2pass" => {
                         ctx.config.lock().unwrap().tool_approval = arg.to_string();
                         ctx.save_config();
                         out.line(format!("Approval → {arg}"));
                     }
-                    _ => return Err("Only ask / auto / allow_all".into()),
+                    _ => return Err("Only ask / auto / allow_all / l2pass".into()),
                 }
                 Ok(Flow::Continue)
             }

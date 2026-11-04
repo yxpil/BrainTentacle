@@ -287,6 +287,110 @@ jobs:
         run: |
           gh release upload "$TAG" release/dmg/*.dmg release/dmg/*-app.zip --clobber --repo "$GITHUB_REPOSITORY"
 
+  # Universal：arm64 + x64 合一的 mac 包（.dmg + -app.zip），给「不确定自己芯片」或
+  # 需要 Rosetta 兜底的用户。与上面双架构 job 平行、不进 finalize 的 needs：
+  # 它失败只会少这两个包，不会连累已经打好的 23 个资产与 latest.json。
+  gui-macos-universal:
+    needs: [ensure-release, napi]
+    if: github.event_name == 'push' || inputs.include_macos
+    continue-on-error: true
+    runs-on: macos-15
+    env:
+      TAG: ${{ needs.ensure-release.outputs.tag }}
+      # 让 before-pack 别把「不是本机架构」的 sherpa 原生包当死重量清掉：
+      # universal 包里两架构的原生包都得留着，运行期由 process.arch 自己挑
+      BIT_UNIVERSAL_BUILD: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: 前端构建
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-arm64
+          path: packaging/native-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-x64
+          path: packaging/native-x64
+      - name: 合 universal 物料（extraResources 走 lipo，必须真是 fat）
+        run: |
+          set -euo pipefail
+          mkdir -p packaging/native
+          lipo -create packaging/native-arm64/bit.node packaging/native-x64/bit.node -output packaging/native/bit.node
+          lipo -create packaging/native-arm64/bit-cli packaging/native-x64/bit-cli -output packaging/native/bit-cli
+          chmod +x packaging/native/bit-cli
+          cp packaging/native-arm64/icon.png packaging/native/icon.png
+          echo "bit.node 架构: $(lipo -archs packaging/native/bit.node)"
+          echo "bit-cli 架构: $(lipo -archs packaging/native/bit-cli)"
+          lipo -archs packaging/native/bit.node | grep -q arm64
+          lipo -archs packaging/native/bit.node | grep -q x86_64
+      - name: 补齐两架构 sherpa 原生包（npm 只会装构建机那一份）
+        run: |
+          set -euo pipefail
+          V=$(node -p "require('./voice-bridge/node_modules/sherpa-onnx-node/package.json').version")
+          cd voice-bridge
+          for a in arm64 x64; do
+            if [ ! -f "node_modules/sherpa-onnx-darwin-$a/sherpa-onnx.node" ]; then
+              npm install --no-save --no-package-lock --ignore-scripts --force "sherpa-onnx-darwin-$a@$V"
+            fi
+            lipo -archs "node_modules/sherpa-onnx-darwin-$a/sherpa-onnx.node"
+          done
+      - name: electron-builder --universal（.app）
+        run: npx electron-builder --mac --dir --universal --publish never
+      - name: ad-hoc 深签名 + dmg/zip
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          APP=$(ls -d release/mac*/BIT.app | head -1)
+          printf 'APPL????' > "$APP/Contents/PkgInfo"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          mkdir -p release/dmg-universal
+          STAGE=$(mktemp -d)
+          cp -R "$APP" "$STAGE/BIT.app"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "BIT" -srcfolder "$STAGE" -ov -format UDZO -fs HFS+ "release/dmg-universal/BIT_${VERSION}_universal.dmg"
+          rm -rf "$STAGE"
+          ditto -c -k --keepParent --sequesterRsrc "$APP" "release/dmg-universal/BIT_${VERSION}_universal-app.zip"
+      # 出包后逐件核对架构：主执行体与 bit.node/bit-cli 必须 fat；
+      # 目录名不带架构标记的单架构 .node 会让另一种芯片启动即崩，直接判失败。
+      - name: 校验产物真是双架构
+        run: |
+          set -euo pipefail
+          APP=$(ls -d release/mac*/BIT.app | head -1)
+          echo "BIT: $(lipo -archs "$APP/Contents/MacOS/BIT")"
+          lipo -archs "$APP/Contents/MacOS/BIT" | grep -q arm64
+          lipo -archs "$APP/Contents/MacOS/BIT" | grep -q x86_64
+          lipo -archs "$APP/Contents/Resources/bit.node" | grep -q x86_64
+          lipo -archs "$APP/Contents/Resources/bit-cli" | grep -q x86_64
+          UNP="$APP/Contents/Resources/app.asar.unpacked"
+          if [ -d "$UNP" ]; then
+            for f in $(find "$UNP" -name '*.node'); do
+              ARCHS=$(lipo -archs "$f" || echo "?")
+              case "$f" in
+                *darwin-arm64*|*darwin-x64*|*arm64*|*x64*) echo "按架构选包 $f: $ARCHS" ;;
+                *) echo "单架构原生包 $f: $ARCHS"
+                   echo "$ARCHS" | grep -q arm64 && echo "$ARCHS" | grep -q x86_64 || { echo "::error::$f 只有 $ARCHS，universal 包另一种芯片会加载失败"; exit 1; } ;;
+              esac
+            done
+          fi
+          # dmg 自检：挂上、看到 BIT.app、再弹出
+          MNT=$(hdiutil attach -nobrowse -readonly "release/dmg-universal/BIT_*.dmg" | tail -1 | awk '{print $NF}')
+          ls "$MNT/BIT.app/Contents/MacOS/BIT" && hdiutil detach "$MNT" -quiet
+      - name: 上传到 Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" release/dmg-universal/*.dmg release/dmg-universal/*-app.zip --clobber --repo "$GITHUB_REPOSITORY"
+
   # Alpine (musl)：只编 bit-cli（无 GUI——Electron 无 musl 二进制，已拍板）
   linux-musl:
     needs: [ensure-release, compile-check]

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const KEY = "bit.theme.v1";
 const ACCENT_KEY = "bit.accent.v1";
@@ -31,33 +31,33 @@ function applyAccent(color) {
   root.style.setProperty("--accent-fg", lum > 0.6 ? "#171717" : "#ffffff");
 }
 
+// 图标栏圆片边长（px）：CSS 变量和 React 内联尺寸共用同一个取数口径。
+// 主题导入是整包 JSON，navSize 写成 0 / 200 都会把侧栏挤没或撑出窗口，这里统一夹住。
+export function railItemPx(look) {
+  const raw = Number(look?.navSize);
+  if (!Number.isFinite(raw)) return DEFAULT_LOOK.navSize;
+  return Math.min(48, Math.max(20, Math.round(raw)));
+}
+
 // 外观配置：背景色/透明度/图片/圆角，统一走 CSS 变量
 // look 结构：{ enabled, bgColorLight, bgColorDark, bgOpacity, cardOpacity, bgImage, borderOn, borderRadius,
-//   cardRadius, shadowOn, fieldBgImage, fieldBgOpacity, chatBgImage, chatBgOpacity }（cardOpacity 未设=跟随背景+15%）
-function applyLook(look) {
+//   cardRadius, shadowOn, fieldBgImage, fieldBgOpacity, chatBgImage, chatBgOpacity, navLabelOn, navSize }（cardOpacity 未设=跟随背景+15%）
+function applyLook(input) {
   const root = document.documentElement;
-  // 字体缩放：Tailwind 全 rem 布局，调根字号即全局等比缩放（窗口级属性，独立于外观开关）
-  const scale = look?.fontScale ?? 1;
+  // 字体缩放：Tailwind 全 rem 布局，调根字号即全局等比缩放（窗口级属性，独立于外观开关）。
+  // 夹在滑杆区间内：主题导入是整包 JSON，fontScale 写成 0 / 3 都会绕过滑杆直接把布局撑坏
+  const raw = Number(input?.fontScale);
+  const scale = Number.isFinite(raw) ? Math.min(1.2, Math.max(0.85, raw)) : 1;
   if (scale === 1) root.style.removeProperty("font-size");
   else root.style.fontSize = `${(16 * scale).toFixed(1)}px`;
   // 窗口外圆角：窗口级属性，独立于外观定制开关（透明窗体走 CSS 圆角，DWM 不给圆角）
-  root.style.setProperty("--win-radius", (look?.winRadius ?? 0) + "px");
-  if (!look || !look.enabled) {
-    // 恢复默认
-    root.style.removeProperty("--app-bg-image");
-    root.style.removeProperty("--look-card-radius");
-    root.style.removeProperty("--look-ui-radius");
-    root.style.removeProperty("--look-bg-color-light");
-    root.style.removeProperty("--look-bg-color-dark");
-    root.style.removeProperty("--look-bg-opacity");
-    root.style.removeProperty("--panel-input-image");
-    root.style.removeProperty("--panel-input-alpha");
-    root.style.removeProperty("--panel-chat-image");
-    root.style.removeProperty("--panel-chat-alpha");
-    root.style.removeProperty("--look-bg-scrim");
-    root.classList.remove("no-border", "no-shadow", "has-bg-image", "has-transparency", "has-input-bg", "has-chat-bg");
-    return;
-  }
+  root.style.setProperty("--win-radius", (input?.winRadius ?? 0) + "px");
+  // 图标栏圆片边长：同为布局属性，关闭外观定制时也要保持用户调好的大小
+  //（导航项、指示圆片、整条栏宽都由这一个变量撑开）
+  root.style.setProperty("--rail-item", railItemPx(input) + "px");
+  // 关闭外观定制 ≠ 什么都不设：变量全清空后透明窗体就没有实色底，整窗看穿桌面
+  //（卡片之外的侧栏/页眉/留白全废）。改套 OFF_LOOK 这套可读默认档，走同一条渲染路径。
+  const look = input && input.enabled ? input : OFF_LOOK;
   // 背景色（light/dark 各自生效）
   if (look.bgColorLight) root.style.setProperty("--look-bg-color-light", look.bgColorLight);
   else root.style.removeProperty("--look-bg-color-light");
@@ -102,6 +102,10 @@ function applyLook(look) {
   // 边框 & 阴影开关
   root.classList.toggle("no-border", !look.borderOn);
   root.classList.toggle("no-shadow", !look.shadowOn);
+  // 搜索控件样式（侧栏搜索 / 悬浮搜索面板 / 页眉放大镜一起跟着）
+  const searchStyle = look.searchStyle || "auto";
+  root.classList.toggle("search-accent", searchStyle === "accent");
+  root.classList.toggle("search-ghost", searchStyle === "ghost");
   // 透明度联动：背景 < 100% 或卡片单独调过透明度时，给卡片/按钮加半透明样式
   root.classList.toggle("has-transparency", op < 100 || cardOp < 100);
 }
@@ -125,15 +129,51 @@ const DEFAULT_LOOK = {
   fieldBgOpacity: 100,
   chatBgImage: "",
   chatBgOpacity: 100,
+  // 搜索控件样式：auto=跟随输入框胶囊；accent=放大镜用主题色实心；ghost=无边框融入面板
+  searchStyle: "auto",
+  // 图标栏悬停是否浮出名称（title 提示）；关掉后圆片纯图标，不再弹系统 tooltip
+  navLabelOn: true,
+  // 图标栏圆片边长（px）：36 是旧版固定值，默认收到 28（约 -22%）把宽度让给内容区
+  navSize: 28,
 };
+
+// 「关闭外观定制」时实际生效的那一档：即提示语说的「默认黑白胶囊风」。
+// 与 DEFAULT_LOOK 的差别只在不透明白底 + 无图片（bgOpacity 90% 是开箱的定制观感，
+// 关闭态要的是最稳的可读性），其余圆角/边框/阴影沿用默认，保证卡片层次还在。
+const OFF_LOOK = {
+  ...DEFAULT_LOOK,
+  enabled: true,
+  bgColorLight: "#ffffff",
+  bgColorDark: "#18181b",
+  bgOpacity: 100,
+  cardOpacity: 100,
+  bgImage: "",
+  fieldBgImage: "",
+  fieldBgOpacity: 100,
+  chatBgImage: "",
+  chatBgOpacity: 100,
+  borderOn: true,
+  shadowOn: true,
+  searchStyle: "auto",
+};
+
+/// 从 localStorage 读当前外观配置（补齐默认值），供订阅 bit-look 的组件即时取最新值
+export function readLook() {
+  try {
+    const raw = localStorage.getItem(LOOK_KEY);
+    if (raw) return { ...DEFAULT_LOOK, ...JSON.parse(raw) };
+  } catch {
+    /* 坏 JSON 回退默认 */
+  }
+  return { ...DEFAULT_LOOK };
+}
 
 // 背景图转码压缩：Chromium 对 CSS 变量值有约 2MB 硬上限，超限时 setProperty
 // 整体拒收、回读为空——表现为"has-bg-image 遮罩生效（背景变暗）但图片不显示"；
 // localStorage 配额同样有限。上传与存量迁移统一压到 ≤1920px / ≤1.9MB，
 // 背景图有 cover 缩放 + 35% 黑遮罩，肉眼无感差异。
 const BG_LIMIT = 1.9 * 1024 * 1024;
-export function compressBgImage(dataUrl, maxDim = 1920) {
-  return new Promise((resolve) => {
+export function compressBgImage(dataUrl, maxDim = 1920) {  return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       try {
@@ -188,8 +228,9 @@ function pushTheme(mode) {
 }
 
 export function useTheme() {
-  const [mode, setMode] = useState(() => localStorage.getItem(KEY) || "light");
-  const [isDark, setIsDark] = useState(() => apply(localStorage.getItem(KEY) || "light"));
+  // 首帧默认深色：新装没有缓存时直接落到推荐外观的深色档（库里有值时下面再同步覆盖）
+  const [mode, setMode] = useState(() => localStorage.getItem(KEY) || "dark");
+  const [isDark, setIsDark] = useState(() => apply(localStorage.getItem(KEY) || "dark"));
   // 默认主题色：橙色 #ea580c（与外观定制页推荐配置一致，避免开箱是彩虹无主题态）
   const [accent, setAccentState] = useState(() => localStorage.getItem(ACCENT_KEY) || "#ea580c");
   const [look, setLookState] = useState(() => {
@@ -200,9 +241,13 @@ export function useTheme() {
     return { ...DEFAULT_LOOK };
   });
 
+  // 首帧只写本地缓存，不回写数据库：localStorage 仅作缓存，数据库才是权威。
+  // 若挂载时把缓存里的旧值 push 回库，会抢在 get_theme 之前把别的宿主刚改的主题覆盖掉。
+  const pushReady = useRef(false);
   useEffect(() => {
     localStorage.setItem(KEY, mode);
-    pushTheme(mode);
+    if (pushReady.current) pushTheme(mode);
+    else pushReady.current = true;
     setIsDark(apply(mode));
     if (mode !== "auto") return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -219,7 +264,8 @@ export function useTheme() {
       if (inv) {
         inv("get_theme", {})
           .then((r) => {
-            const t = r?.theme === "dark" || r?.theme === "auto" ? r.theme : "light";
+            const t =
+              r?.theme === "dark" || r?.theme === "light" || r?.theme === "auto" ? r.theme : "dark";
             if (alive && t !== mode) setMode(t);
           })
           .catch?.(() => {});
@@ -229,16 +275,21 @@ export function useTheme() {
   }, []);
   // 仅挂载时同步一次（闭包里的 mode 为首帧值；值相同时 setMode 不触发写库，无循环风险）
 
-  // 强调色变化立即生效（首次启动也恢复上次选择）
+  // 强调色变化立即生效（首次启动也恢复上次选择）。
+  // 关闭外观定制时不注入自定义强调色：内联 --accent 撤掉后回落到 styles.css 的内置黑白，
+  // 与开关提示的「默认黑白胶囊风格」一致（外观页关闭时主题色控件本身也已禁用）。
   useEffect(() => {
     localStorage.setItem(ACCENT_KEY, accent);
-    applyAccent(accent);
-  }, [accent]);
+    applyAccent(look.enabled ? accent : null);
+  }, [accent, look.enabled]);
 
   // 外观配置变化立即生效
   useEffect(() => {
     localStorage.setItem(LOOK_KEY, JSON.stringify(look));
     applyLook(look);
+    // look 是每个 useTheme() 各自持有的副本：CSS 类走 applyLook 天然全局生效，
+    // 但读 look 具体值的 React 组件（如图标栏悬停名称开关）得靠这个事件才即时刷新
+    window.dispatchEvent(new CustomEvent("bit-look"));
   }, [look]);
 
   // 存量迁移：早期版本把原图 data URL 直写 CSS 变量，超过 ~2MB 会被 Chromium

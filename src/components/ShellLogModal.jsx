@@ -141,7 +141,7 @@ export default function ShellLogModal({ job, onClose, onStop }) {
         <div
           ref={scrollerRef}
           onScroll={handleScroll}
-          className="min-h-0 flex-1 overflow-auto rounded-2xl bg-neutral-950 p-3 font-mono text-[11px] leading-relaxed text-neutral-100"
+          className="min-h-0 flex-1 select-text overflow-auto rounded-2xl bg-neutral-950 p-3 font-mono text-[11px] leading-relaxed text-neutral-100"
         >
           {err ? (
             <p className="text-red-400">{err}</p>

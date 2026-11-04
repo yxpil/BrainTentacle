@@ -1,0 +1,34 @@
+{
+  "name": "经营看板服务",
+  "version": "1.0.0",
+  "description": "自带 Node 服务器：动态页面开在插件进程上，进程自己再用 HTTP /cap 回连宿主",
+  "bridge": { "token": "required" },
+  "permissions": ["server", "page", "settings", "data", "chaticon"],
+  "server": {
+    "runtime": "node",
+    "program": "server.js",
+    "args": ["--verbose"],
+    "port": 0,
+    "auto_start": true,
+    "entry": "/"
+  },
+  "pages": [
+    {
+      "id": "live",
+      "label": "经营看板",
+      "url": "/",
+      "paths": ["M4 19 L4 9", "M10 19 L10 4", "M16 19 L16 12", "M21 19 L3 19"]
+    }
+  ],
+  "status_page": { "id": "health", "label": "服务健康", "url": "/status" },
+  "chat_icons": [
+    {
+      "id": "open-live",
+      "label": "经营看板",
+      "label_en": "Live board",
+      "paths": ["M4 19 L4 9", "M10 19 L10 4", "M16 19 L16 12", "M21 19 L3 19"],
+      "action": "page",
+      "page_key": "live"
+    }
+  ]
+}

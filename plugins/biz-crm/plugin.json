@@ -1,0 +1,35 @@
+{
+  "name": "客户跟进台",
+  "version": "2.0.0",
+  "description": "销售场景：把跟进纪要写进插件自己的会话，必要时唤醒它让 AI 接着想下一步",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "chat", "session", "settings", "data", "storage"],
+  "tools": [
+    {
+      "name": "next_action",
+      "description": "从纪要文本里挑出下一步动作与时间点（规则式，够用即可）",
+      "kind": "script",
+      "file": "tools/next_action.rhai",
+      "parameters": {
+        "type": "object",
+        "properties": { "note": { "type": "string", "description": "一段跟进记录原文" } },
+        "required": ["note"]
+      }
+    }
+  ],
+  "prompts": ["你在客户跟进台上产生的问题都带着纪要原文，回答时给出可执行的下一步，不要复述纪要。"],
+  "skills": [{ "name": "跟进分级", "summary": "A 类当天回、B 类三天内、C 类周会统一处理" }],
+  "memories": ["本插件的会话命名空间是 plugin:biz-crm，所有客户纪要只写在这里，不会污染用户会话。"],
+  "pages": [
+    {
+      "id": "followup",
+      "label": "客户跟进",
+      "src": "web/followup.html",
+      "paths": ["M4 5 L20 5", "M4 12 L14 12", "M4 19 L17 19", "M18 8 L21 11 L15 17 L12 18 L12 15 Z"]
+    }
+  ],
+  "settings": {
+    "entries": [{ "id": "grade", "label": "默认分级", "description": "新建纪要时的客户等级（键 default_grade）", "kw": "客户 分级 跟进" }],
+    "page": { "id": "cfg", "label": "跟进台设置", "src": "web/settings.html" }
+  }
+}

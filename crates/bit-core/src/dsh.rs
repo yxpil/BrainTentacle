@@ -7,8 +7,10 @@
 //!   skills/         dsh 技能（*/SKILL.md 或顶层 *.md），插件自带技能在 plugins/*/skills/
 //!   disabled.json   被禁用插件名列表 {"plugins":["name1",...]}，不存在 = 全部启用
 //!
-//! 桥注册为 stdio MCP server：command = 主程序自身（Electron 主程序配
-//! ELECTRON_RUN_AS_NODE=1 即以纯 Node 运行），免依赖用户机器上的 Node。
+//! 桥注册为 stdio MCP server，但进程由 WorkWith 托管（条目 id 固定 "dsh-bridge"）：
+//! command = 主程序自身（Electron 主程序配 ELECTRON_RUN_AS_NODE=1 即以纯 Node 运行），
+//! 免依赖用户机器上的 Node。启停、日志、MCP 联动全部走 workwith 一套生命周期，
+//! 用户既能在 WorkWith 页看到并管理它，AI 也能通过 workwith 工具操作它。
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -240,23 +242,114 @@ pub fn import_skills_impl(ctx: &Arc<Ctx>) -> Result<Value, String> {
     Ok(json!({ "imported": imported, "skipped": skipped, "roots": roots, "errors": errors }))
 }
 
-/// 已注册的桥 server id：按 command（当前主程序路径）+ args（唯一参数为 dsh-mcp.mjs）
-/// 匹配 ctx.mcp 里的 stdio 条目；未注册返回 None。
+/// 桥在 WorkWith 里的固定条目 id：稳定——重启应用 / 重启进程都不换，
+/// 联动出的 MCP 行恒为 ww-dsh-bridge，用户在 WorkWith 页看到的就是这一条
+const BRIDGE_ENTRY_ID: &str = "dsh-bridge";
+/// 旧版（未迁移前）把桥注册成手写 stdio MCP server，靠这两个特征识别并清理
+const BRIDGE_SCRIPT_NAME: &str = "dsh-mcp.mjs";
+
+/// 桥的 WorkWith 条目；必须是 stdio 联动模式才算桥（同名手写条目不算）
+fn bridge_entry(ctx: &Arc<Ctx>) -> Option<crate::workwith::WorkWithEntry> {
+    crate::workwith::load_entries(ctx)
+        .into_iter()
+        .find(|e| e.id == BRIDGE_ENTRY_ID && e.is_stdio_mcp())
+}
+
+/// 已注册的桥 server id：条目存在即算注册（进程是否活着看 status 里的 running）
 fn bridge_server_id(ctx: &Arc<Ctx>) -> Option<String> {
-    let exe = std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned());
-    let list = ctx.mcp.lock().unwrap();
-    list.iter()
-        .find(|s| {
-            s.transport == crate::mcp::McpTransport::Stdio
-                && s.args.len() == 1
-                && s.args[0].ends_with("dsh-mcp.mjs")
-                && exe.as_ref().map_or(true, |e| s.command == *e)
-        })
-        .map(|s| s.id.clone())
+    bridge_entry(ctx).map(|_| crate::workwith::mcp_id(BRIDGE_ENTRY_ID))
+}
+
+/// 升级迁移：旧版把桥注册成手写 stdio MCP server，这里照搬它的配置建成 WorkWith 条目，
+/// 再清掉旧行（旧进程随 unregister 一起终止）。只在桥条目还不存在时搬一次，重复调用幂等；
+/// 原本处于启用状态时搬完立即由 WorkWith 重新拉起，避免用户的桥出现空窗。
+fn migrate_bridge_entry(ctx: &Arc<Ctx>) {
+    if bridge_entry(ctx).is_some() {
+        retire_legacy_bridge_rows(ctx);
+        return;
+    }
+    let legacy = {
+        let list = ctx.mcp.lock().unwrap();
+        list.iter()
+            .filter(|s| {
+                s.transport == crate::mcp::McpTransport::Stdio
+                    && s.args.iter().any(|a| a.ends_with(BRIDGE_SCRIPT_NAME))
+            })
+            .cloned()
+            .next()
+    };
+    let Some(old) = legacy else { return };
+    let name = if old.name.trim().is_empty() {
+        "DeepSeek Harness 插件桥".to_string()
+    } else {
+        old.name.clone()
+    };
+    // 先落新条目，成功后才拆旧的：save 失败（配置残缺等）时旧桥原样留着，不弄成半残
+    if crate::workwith::save(
+        ctx,
+        json!({
+            "id": BRIDGE_ENTRY_ID,
+            "name": name,
+            "runtime_id": "custom",
+            "program": old.command,
+            "args": old.args,
+            "env": old.env,
+            "port": 0,
+            "mcp_mode": crate::workwith::MCP_MODE_STDIO,
+            "auto_with_session": true,
+        }),
+    )
+    .is_err()
+    {
+        return;
+    }
+    let restart = old.enabled;
+    retire_legacy_bridge_rows(ctx);
+    if restart {
+        let c2 = ctx.clone();
+        crate::task::spawn(async move {
+            let _ = crate::workwith::start(&c2, BRIDGE_ENTRY_ID).await;
+        });
+    }
+}
+
+/// 清掉迁移前遗留的手写桥条目：不删就会和 WorkWith 版并存——两个进程同时当桥，
+/// 工具重复导入、启停各管一半。返回清理条数（0 是常态，重复调用幂等）。
+fn retire_legacy_bridge_rows(ctx: &Arc<Ctx>) -> usize {
+    let keep = crate::workwith::mcp_id(BRIDGE_ENTRY_ID);
+    let stale: Vec<String> = {
+        let list = ctx.mcp.lock().unwrap();
+        list.iter()
+            .filter(|s| {
+                s.id != keep
+                    && s.transport == crate::mcp::McpTransport::Stdio
+                    && s.args.iter().any(|a| a.ends_with(BRIDGE_SCRIPT_NAME))
+            })
+            .map(|s| s.id.clone())
+            .collect()
+    };
+    if stale.is_empty() {
+        return 0;
+    }
+    for id in &stale {
+        // 旧会话自己持有子进程句柄：unregister 会真的把那个桥进程杀掉
+        crate::mcp::unregister_stdio(&ctx.mcp_stdio, id);
+        ctx.mcp.lock().unwrap().retain(|s| s.id != *id);
+        let mut tools = ctx.tools.lock().unwrap();
+        tools.retain(|t| match &t.kind {
+            crate::registry::ToolKind::Mcp { server_id, .. } => server_id != id,
+            _ => true,
+        });
+    }
+    ctx.save_mcp();
+    ctx.save_tools();
+    stale.len()
 }
 
 /// dsh 状态：已装插件（plugins/*/package.json）+ 启停 + 桥注册情况 + 技能根路径
 pub fn status_impl(ctx: &Arc<Ctx>) -> Result<Value, String> {
+    // 打开工具页即完成升级迁移：老桥搬进 WorkWith，此后状态一律按托管口径报
+    migrate_bridge_entry(ctx);
     let dsh_root = dsh_dir(ctx);
     let disabled = load_disabled(&dsh_root.join("disabled.json"));
     // 扫有 package.json 的目录即"已安装的 dsh 插件"
@@ -298,8 +391,18 @@ pub fn status_impl(ctx: &Arc<Ctx>) -> Result<Value, String> {
         .into_iter()
         .map(|(name, version, dir, enabled)| json!({ "name": name, "version": version, "dir": dir, "enabled": enabled }))
         .collect();
+    // 桥状态：条目在 = 已接入；running/pid 由 WorkWith 托管态给出（进程可能停着等用户启动）
     let bridge = match bridge_server_id(ctx) {
-        Some(id) => json!({ "registered": true, "server_id": id }),
+        Some(id) => {
+            let (running, pid, uptime_ms) = match crate::workwith::status_of(BRIDGE_ENTRY_ID) {
+                Some((pid, uptime_ms)) => (true, pid, uptime_ms),
+                None => (false, 0, 0),
+            };
+            json!({
+                "registered": true, "server_id": id, "hosted_by": "workwith",
+                "entry_id": BRIDGE_ENTRY_ID, "running": running, "pid": pid, "uptime_ms": uptime_ms,
+            })
+        }
         None => json!({ "registered": false }),
     };
     Ok(json!({
@@ -351,7 +454,9 @@ fn find_bridge_script() -> Option<PathBuf> {
 }
 
 /// dsh 首次接入：建 toolhomes/dsh/{plugins,skills}（首次创建时写 README 说明用法），
-/// 然后定位桥脚本并注册为 stdio MCP server（同 command+args 自动替换旧条目）。
+/// 然后定位桥脚本、建/更新 WorkWith 条目（stdio 联动）并立即启动。
+/// 进程与 MCP 联动全交给 WorkWith 托管：用户在 WorkWith 页能看到、能停、能看日志，
+/// AI 也能用 workwith 工具启停它（默认关闭，需用户开启）。
 pub async fn setup_bridge_impl(ctx: &Arc<Ctx>) -> Result<Value, String> {
     let root = dsh_dir(ctx);
     let first_create = !root.is_dir();
@@ -377,12 +482,109 @@ pub async fn setup_bridge_impl(ctx: &Arc<Ctx>) -> Result<Value, String> {
     env.insert("ELECTRON_RUN_AS_NODE".into(), "1".into());
     env.insert("DshPluginsDir".into(), plugins_dir(ctx).to_string_lossy().into_owned());
     env.insert("DshDisabledFile".into(), disabled_file(ctx).to_string_lossy().into_owned());
-    crate::commands_api::mcp_add_stdio(
+    // 条目运行中不允许改配置（改了也不生效）：接入按钮语义是「按当前路径重接」，
+    // 所以先停掉旧的托管进程
+    if crate::workwith::is_running(BRIDGE_ENTRY_ID) {
+        let _ = crate::workwith::stop(ctx, BRIDGE_ENTRY_ID).await;
+    }
+    // 老版手写桥条目可能还在跑：拆掉它（含进程与导入的工具），由 WorkWith 接管同一份配置
+    let retired = retire_legacy_bridge_rows(ctx);
+    crate::workwith::save(
         ctx,
-        "DeepSeek Harness 插件桥".into(),
-        command,
-        args,
-        env,
-    )
-    .await
+        json!({
+            "id": BRIDGE_ENTRY_ID,
+            "name": "DeepSeek Harness 插件桥",
+            "runtime_id": "custom",
+            "program": command,
+            "args": args,
+            "env": env,
+            "port": 0,
+            "mcp_mode": crate::workwith::MCP_MODE_STDIO,
+            // 会话联动：桥是 AI 侧能力，新会话首回合自动拉起（幂等，等价于旧的懒恢复）
+            "auto_with_session": true,
+        }),
+    )?;
+    let started = crate::workwith::start(ctx, BRIDGE_ENTRY_ID).await?;
+    let mid = crate::workwith::mcp_id(BRIDGE_ENTRY_ID);
+    // 握手与工具导入在 start 的后台任务里完成：等几秒让本次结果带回真实服务器信息，
+    // 页面一次刷新就能看到已接入的工具，而不是先回一个空壳
+    let mut server = None;
+    for _ in 0..25 {
+        match crate::mcp::find(ctx, &mid) {
+            Some(s) if s.enabled => { server = Some(s); break; }
+            _ => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+        }
+    }
+    crate::audit::record(
+        ctx,
+        "local-user",
+        "dsh.setup_bridge",
+        "dsh-bridge",
+        json!({ "pid": started.get("pid").cloned().unwrap_or(json!(0)), "retired": retired }),
+        server.is_some(),
+    );
+    Ok(json!({ "server": server, "id": mid, "workwith": started, "retired": retired }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_ctx(tag: &str) -> Arc<Ctx> {
+        let dir = std::env::temp_dir().join(format!(
+            "bit-dsh-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::state::Ctx::load(crate::state::LoadOpts {
+            data_dir: dir,
+            emitter: Arc::new(crate::emitter::NoopEmitter),
+            host: Arc::new(crate::emitter::NoopHost),
+            app_version: "test".into(),
+            worker_exe: None,
+            app_exe: None,
+            app_args: vec![],
+        })
+    }
+
+    fn legacy_row(enabled: bool) -> crate::mcp::McpServer {
+        crate::mcp::McpServer {
+            id: "mcp-old".into(),
+            name: "DeepSeek Harness 插件桥".into(),
+            url: String::new(),
+            transport: crate::mcp::McpTransport::Stdio,
+            command: "C:/app/electron.exe".into(),
+            args: vec!["C:/app/dsh-bridge/dsh-mcp.mjs".into()],
+            env: HashMap::from([("ELECTRON_RUN_AS_NODE".to_string(), "1".to_string())]),
+            version: String::new(),
+            protocol: String::new(),
+            session: String::new(),
+            enabled,
+            connected_at: String::new(),
+            headers: Default::default(),
+            plugin_id: String::new(),
+        }
+    }
+
+    /// 升级迁移：旧版手写 stdio 桥条目搬成 WorkWith 条目（配置原样照搬），旧行随之清掉。
+    /// 用 enabled=false 的旧行：迁移不触发重新拉起，单测里没有 tokio runtime 也不会炸
+    #[test]
+    fn legacy_bridge_row_migrates_into_workwith() {
+        let ctx = test_ctx("migrate");
+        ctx.mcp.lock().unwrap().push(legacy_row(false));
+        migrate_bridge_entry(&ctx);
+        let entries = crate::workwith::load_entries(&ctx);
+        assert_eq!(entries.len(), 1, "旧桥行应搬成一条 WorkWith 条目");
+        let e = &entries[0];
+        assert_eq!(e.id, BRIDGE_ENTRY_ID);
+        assert!(e.is_stdio_mcp(), "搬过来的条目必须是 stdio 联动");
+        assert_eq!(e.program, "C:/app/electron.exe");
+        assert_eq!(e.args, vec!["C:/app/dsh-bridge/dsh-mcp.mjs".to_string()]);
+        assert_eq!(e.env.get("ELECTRON_RUN_AS_NODE").map(|s| s.as_str()), Some("1"));
+        assert_eq!(ctx.mcp.lock().unwrap().len(), 0, "旧的手写桥行应被清理");
+        // 幂等：再来一次不产生第二条条目
+        migrate_bridge_entry(&ctx);
+        assert_eq!(crate::workwith::load_entries(&ctx).len(), 1);
+    }
 }

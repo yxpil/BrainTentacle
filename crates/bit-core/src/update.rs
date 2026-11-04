@@ -251,8 +251,12 @@ static DL_BUSY: AtomicBool = AtomicBool::new(false);
 /// 完成后写 state.json 并返回状态。
 pub async fn download_update(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
     let latest = fetch_latest().await?;
-    let current = env!("CARGO_PKG_VERSION");
-    if !version_gt(&latest.version, current) {
+    // 版本源必须与 apply_update 的防降级判定（ctx.app_version）一致：
+    // env!("CARGO_PKG_VERSION") 是 bit-core 编译期常量，Electron 侧升版本时不会变，
+    // 于是「有新版本」恒真 → 每次手动检查都重下整包，再被防降级拒装。
+    // CLI/TUI 传的 ctx.app_version 本身就是 CARGO_PKG_VERSION（bin/bit-cli.rs:43,67），行为不变。
+    let current = ctx.app_version.clone();
+    if !version_gt(&latest.version, &current) {
         return Ok(json_status("none", &latest, None));
     }
     let Some((name, url)) = pick_asset(&serde_json::json!({

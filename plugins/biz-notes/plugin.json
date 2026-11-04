@@ -1,0 +1,27 @@
+{
+  "name": "便签本",
+  "version": "1.4.0",
+  "description": "纯 data/storage 场景：便签按目录分层存进插件自己的数据目录，重启还在",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "data", "storage", "settings"],
+  "tools": [
+    {
+      "name": "note_stats",
+      "description": "统计便签本里各目录的条数与字数（读的是数据目录，不是插件包）",
+      "kind": "interpreter",
+      "runtime": "python",
+      "file": "tools/note_stats.py",
+      "parameters": { "type": "object", "properties": {} }
+    }
+  ],
+  "pages": [
+    {
+      "id": "notes",
+      "label": "便签本",
+      "src": "web/notes.html",
+      "paths": ["M5 4 H19 V20 H5 Z", "M8 8 H16", "M8 12 H16", "M8 16 H13"]
+    }
+  ],
+  "skills": [{ "name": "便签归档", "summary": "notes/<目录>/<标题>.md，一条文件一张便签" }],
+  "jobs": [{ "name": "weekly-trim", "schedule": "every 24h", "runtime": "node", "file": "jobs/trim.js" }]
+}

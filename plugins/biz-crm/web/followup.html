@@ -1,0 +1,106 @@
+<!doctype html>
+<!-- 客户跟进台：纪要只写进 plugin:biz-crm 命名空间的会话，页面上还能把它们读回来。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>客户跟进</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#7c3aed; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#a78bfa; } }
+      * { box-sizing:border-box; }
+      body { margin:0; padding:18px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 2px; font-size:16px; }
+      h2 { margin:0 0 8px; font-size:13px; }
+      .sub { color:var(--muted); margin-bottom:14px; }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+      textarea { width:100%; min-height:80px; padding:8px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--fg); font:inherit; }
+      button { margin:8px 6px 0 0; padding:6px 12px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; font:inherit; }
+      button.ghost { background:transparent; color:var(--accent); }
+      .msg { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:8px; white-space:pre-wrap; }
+      table { width:100%; border-collapse:collapse; }
+      td { padding:4px 6px; border-bottom:1px solid var(--line); font-size:12px; }
+      .draft { color:var(--muted); font-size:12px; margin-top:6px; }
+    </style>
+  </head>
+  <body>
+    <h1>客户跟进</h1>
+    <div class="sub" id="who">正在握手…</div>
+    <div class="card">
+      <h2>记一条</h2>
+      <textarea id="note" placeholder="例：客户说明天要报价，急"></textarea>
+      <div class="draft" id="draft"></div>
+      <button id="ask">交给 AI 想一想</button>
+      <button id="log" class="ghost">只记录，不提问</button>
+      <button id="wake" class="ghost">唤醒这条会话</button>
+      <div class="msg" id="out" hidden></div>
+    </div>
+    <div class="card">
+      <h2>我的会话（只会列出 plugin:biz-crm）</h2>
+      <table><tbody id="sess"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>最近的消息</h2>
+      <div class="msg" id="hist">—</div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let sid = "";
+
+      const show = (t) => { $("out").hidden = false; $("out").textContent = t; };
+
+      async function refresh() {
+        const r = await Bit.sessions.list();
+        const rows = r.sessions || [];
+        $("sess").innerHTML = rows
+          .map((s) => `<tr><td>${s.title || s.session_id}</td><td>${s.messages} 条</td><td>${s.updated || ""}</td></tr>`)
+          .join("") || "<tr><td>还没有会话</td></tr>";
+        if (rows.length) {
+          sid = rows[0].session_id;
+          const h = await Bit.sessions.read(sid);
+          $("hist").textContent = (h.messages || []).map((m) => `${m.role}: ${m.content}`).slice(-8).join("\n") || "（空会话）";
+        }
+      }
+
+      async function boot() {
+        const info = await Bit.ready();
+        $("who").textContent = info ? `${info.plugin_name} · 会话命名空间 plugin:${info.plugin_id}` : "握手尚未完成";
+        $("note").value = (await Bit.storage.get("draft")) || "";
+        $("note").addEventListener("input", () => Bit.storage.set("draft", $("note").value).then(() => ($("draft").textContent = "草稿已存进宿主代管的命名空间")));
+        await refresh();
+      }
+
+      $("ask").addEventListener("click", async () => {
+        const note = $("note").value.trim();
+        if (!note) return show("先写点纪要");
+        try {
+          const r = await Bit.chat(`客户纪要：${note}\n请给出下一步动作。`);
+          sid = r.session_id || sid;
+          show("AI：" + (r.reply || "（没有回复内容）"));
+          await Bit.storage.remove("draft");
+          $("note").value = "";
+        } catch (e) {
+          show("对话通道回我：" + (e.message || e));
+        }
+        await refresh();
+      });
+
+      $("log").addEventListener("click", async () => {
+        const note = $("note").value.trim();
+        if (!note) return show("先写点纪要");
+        const r = await Bit.sessions.append("user", note, sid);
+        sid = r.session_id;
+        show("已记进 " + sid);
+        await refresh();
+      });
+
+      $("wake").addEventListener("click", async () => {
+        if (!sid) return show("还没有会话可唤醒");
+        await Bit.sessions.wake(sid, "跟进台提醒：这条纪要到了该回的时候。");
+        show("唤醒请求已交给宿主（下一轮 AI 会看到）");
+      });
+
+      boot().catch((e) => ($("who").textContent = "握手失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

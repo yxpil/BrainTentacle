@@ -1,0 +1,30 @@
+{
+  "name": "开发糖示例",
+  "version": "1.0.0",
+  "description": "清单简写 + 进程 SDK（require / import \"bit\"）+ 页面糖 + 解释器白名单的正例",
+  "preset": "server",
+  "permission": "exec, workwith, storage",
+  "bridge": { "token": "required" },
+  "server": "node server.mjs",
+  "page": {
+    "id": "sugar",
+    "label": "开发糖",
+    "src": "web/index.html",
+    "paths": ["M5 5h14v14H5z", "M9 9h6v6H9z"]
+  },
+  "service": {
+    "name": "cjs",
+    "label": "CommonJS 常驻",
+    "runtime": "node",
+    "program": "svc/cjs.js",
+    "auto_start": true
+  },
+  "interpreters": "node",
+  "tool": {
+    "name": "sdk_probe",
+    "description": "在解释器工具里 require(\"bit\") 回连宿主，回报身份、生效权限与本机解释器",
+    "runtime": "node",
+    "file": "tools/probe.js",
+    "parameters": { "type": "object", "properties": {} }
+  }
+}

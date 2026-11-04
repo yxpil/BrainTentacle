@@ -1,0 +1,7 @@
+{
+  "name": "漏报exec",
+  "version": "1.0.0",
+  "description": "拒收夹具：声明了 interpreters 却没申报 exec 权限",
+  "permissions": ["data"],
+  "interpreters": "node, python"
+}

@@ -6,6 +6,7 @@ use crate::ai::ChatMessage;
 
 /// 一段独立的对话会话（多会话分组）
 /// favorite：收藏（置顶且批量删除时受保护）；color：彩色标签（十六进制色值，空=无色）
+/// group：所属分组名（空=未分组）；分组本身不单独建表，由会话上的名字归并而成
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Session {
     pub id: String,
@@ -18,6 +19,8 @@ pub struct Session {
     pub favorite: bool,
     #[serde(default)]
     pub color: String,
+    #[serde(default)]
+    pub group: String,
 }
 
 impl Session {
@@ -31,11 +34,31 @@ impl Session {
             messages: Vec::new(),
             favorite: false,
             color: String::new(),
+            group: String::new(),
         }
     }
 
     pub fn touch(&mut self) {
         self.updated = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+
+    /// 从第 at 条消息（含）分叉：复制截至该条的历史生成新会话（新 id、标题带“分支”）。
+    /// 下标越界按最后一条处理；空会话分叉为空会话。原会话不受影响。
+    pub fn fork_at(&self, at: usize) -> Session {
+        let base = self.title.trim();
+        let title = if base.ends_with(" · 分支") {
+            base.to_string()
+        } else {
+            format!("{base} · 分支")
+        };
+        let mut s = Session::new(&title);
+        if !self.messages.is_empty() {
+            let end = at.min(self.messages.len() - 1);
+            s.messages = self.messages[..=end].to_vec();
+        }
+        s.color = self.color.clone();
+        s.group = self.group.clone();
+        s
     }
 
     /// 会话摘要（用于列表右侧预览）：取最后一条非工具反馈消息的开头
@@ -129,6 +152,7 @@ impl SessionStore {
                 messages: Vec::new(),
                 favorite: false,
                 color: String::new(),
+                group: String::new(),
             });
         }
         self.get_mut(id).expect("会话已创建")
@@ -194,12 +218,17 @@ pub fn refresh_from_disk(ctx: &Arc<crate::state::Ctx>) {
     merge_from_disk(ctx, true);
 }
 
+/// 后台任务改共享字段前对齐磁盘（不裁剪）：宿主可能刚改过名，worker 不能拿旧快照覆盖
+pub fn merge_external(ctx: &Arc<crate::state::Ctx>) {
+    merge_from_disk(ctx, false);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn msg(role: &str, content: &str) -> ChatMessage {
-        ChatMessage { role: role.into(), content: content.into(), tool_calls: Vec::new(), thinking: None, ts: None, diagram: None }
+        ChatMessage { role: role.into(), content: content.into(), tool_calls: Vec::new(), thinking: None, ts: None, diagram: None, images: Vec::new() }
     }
 
     fn session_with(messages: Vec<ChatMessage>) -> Session {
@@ -237,6 +266,50 @@ mod tests {
         assert_eq!(session_with(vec![]).preview(), "");
         // 只有 system 消息 → 空摘要（不得把系统提示泄露到列表）
         assert_eq!(session_with(vec![msg("system", "secret-prompt")]).preview(), "");
+    }
+
+    // ---------- fork_at()：从某条消息分叉 ----------
+
+    #[test]
+    fn test_fork_at_copies_prefix_and_keeps_source() {
+        let src = session_with(vec![msg("user", "一"), msg("assistant", "二"), msg("user", "三")]);
+        let fork = src.fork_at(1);
+        assert_eq!(fork.messages.len(), 2);
+        assert_eq!(fork.messages[0].content, "一");
+        assert_eq!(fork.messages[1].content, "二");
+        assert_ne!(fork.id, src.id);
+        assert!(fork.title.ends_with(" · 分支"));
+        // 原会话不被改动（分叉是复制，不是截断）
+        assert_eq!(src.messages.len(), 3);
+    }
+
+    #[test]
+    fn test_fork_at_clamps_and_handles_empty() {
+        let src = session_with(vec![msg("user", "只有一条")]);
+        // 越界 → 最后一条
+        assert_eq!(src.fork_at(99).messages.len(), 1);
+        // 空会话 → 空分叉，不 panic
+        let empty = session_with(vec![]);
+        assert!(empty.fork_at(3).messages.is_empty());
+        // 连续分叉不叠加后缀
+        let one = session_with(vec![msg("user", "x")]).fork_at(0);
+        assert_eq!(one.fork_at(0).title, one.title);
+    }
+
+    #[test]
+    fn test_fork_at_keeps_group() {
+        let mut src = session_with(vec![msg("user", "一")]);
+        src.group = "资料".into();
+        assert_eq!(src.fork_at(0).group, "资料");
+    }
+
+    #[test]
+    fn test_old_session_json_defaults_group_to_empty() {
+        // 旧库存数据没有 group 字段：反序列化必须回落到未分组，不能被判坏
+        let raw = r#"{"id":"a","title":"旧会话","created":"2026-01-01 00:00:00","updated":"2026-01-01 00:00:00"}"#;
+        let s: Session = serde_json::from_str(raw).unwrap();
+        assert_eq!(s.group, "");
+        assert!(s.messages.is_empty());
     }
 
     // ---------- Session / SessionStore 边界 ----------

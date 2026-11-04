@@ -51,7 +51,6 @@ pub fn save_file_as(path: String, suggested_name: Option<String>) -> Result<Opti
 }
 
 pub fn estimate_context_tokens(ctx: &Arc<Ctx>, session_id: &str, convo: &[crate::ai::ChatMessage]) -> usize {
-    let _ = session_id;
     // 兼容模式（文本约定）下工具清单以压缩形式内联在系统提示词里，已计入 convo_chars；
     // 标准原生模式才需要额外估算 tools 参数的 token 占用
     let compat = ctx.config.lock().unwrap().compat_mode;
@@ -62,7 +61,7 @@ pub fn estimate_context_tokens(ctx: &Arc<Ctx>, session_id: &str, convo: &[crate:
     let tool_chars = if compat {
         0
     } else {
-        serde_json::to_string(&crate::ai::native_tool_defs(ctx))
+        serde_json::to_string(&crate::ai::native_tool_defs(ctx, Some(session_id)))
             .unwrap_or_default()
             .chars()
             .count()
@@ -628,6 +627,89 @@ pub fn set_tool_env_settings(
         true,
     );
     Ok(json!({ "ok": true }))
+}
+
+/// 托管服务生命周期调参：命令体在 bit-core::commands_api，这里只做 Tauri 壳接线
+#[tauri::command]
+pub fn get_service_tuning(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::get_service_tuning(&ctx(state))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn set_service_tuning(
+    state: State<'_, Arc<Ctx>>,
+    start_delay_ms: Option<u32>,
+    ready_secs: Option<u32>,
+    retries: Option<u32>,
+    stop_grace_secs: Option<u32>,
+    log_lines: Option<u32>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_service_tuning(
+        &ctx(state),
+        start_delay_ms,
+        ready_secs,
+        retries,
+        stop_grace_secs,
+        log_lines,
+    )
+}
+
+/// 任务完成提示音：命令体在 bit-core::commands_api，这里只做 Tauri 壳接线
+#[tauri::command]
+pub fn get_notify_sound(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::get_notify_sound(&ctx(state))
+}
+
+#[tauri::command]
+pub fn set_notify_sound(state: State<'_, Arc<Ctx>>, mode: String, volume: Option<u32>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_notify_sound(&ctx(state), mode, volume)
+}
+
+#[tauri::command]
+pub fn set_custom_sound(state: State<'_, Arc<Ctx>>, name: String, data: String) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_custom_sound(&ctx(state), name, data)
+}
+
+/// 出网代理（企业内网）：命令体在 bit-core::netproxy / commands_api，这里只做 Tauri 壳接线
+#[tauri::command]
+pub fn get_proxy_config(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::get_proxy_config(&ctx(state))
+}
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn set_proxy_config(
+    state: State<'_, Arc<Ctx>>,
+    mode: String,
+    url: String,
+    user: String,
+    pass: String,
+    bypass: String,
+    export_env: Option<bool>,
+    fail_open: Option<bool>,
+    ca_file: Option<String>,
+    insecure: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_proxy_config(
+        &ctx(state),
+        mode,
+        url,
+        user,
+        pass,
+        bypass,
+        export_env,
+        fail_open,
+        ca_file.unwrap_or_default(),
+        insecure,
+    )
+}
+
+#[tauri::command]
+pub async fn test_proxy(
+    state: State<'_, Arc<Ctx>>,
+    target: String,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::test_proxy(&ctx(state), target).await
 }
 
 /// 本机操控开关（screen / mouse / keyboard / draw_diagram / view_image）：设置页卡片。
@@ -1390,6 +1472,13 @@ pub async fn chat_interrupt(state: State<'_, Arc<Ctx>>, session_id: String) -> R
     crate::engine::interrupt(&ctx, &session_id).await
 }
 
+/// 此刻真有回合在跑的会话 id 列表（渲染层用它纠偏自己记的"会话忙否"）
+#[tauri::command]
+pub fn running_turns(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    bit_core::commands_api::running_turns(&ctx)
+}
+
 /// 工具审批应答（允许 / 拒绝）
 #[tauri::command]
 pub async fn tool_approve(state: State<'_, Arc<Ctx>>, id: String, allow: bool) -> Result<serde_json::Value, String> {
@@ -1865,43 +1954,11 @@ pub async fn mcp_discover(host: String, start: u16, end: u16) -> Result<serde_js
     Ok(json!({ "servers": found, "scanned": (end as u32 - start as u32 + 1) }))
 }
 
-/// 手动接入：对任意 URL 做 MCP 握手，成功则保存并返回服务器信息
+/// 手动接入：命令体在 bit-core::commands_api，这里只做 Tauri 壳接线。
+/// （这里曾抄过一份实现：核心给 MCP 加请求头与代理口径后，抄的那份就对不上签名了）
 #[tauri::command]
 pub async fn mcp_connect(state: State<'_, Arc<Ctx>>, url: String) -> Result<serde_json::Value, String> {
-    let ctx = ctx(state);
-    let url = url.trim().trim_end_matches('/').to_string();
-    if url.is_empty() {
-        return Err("请填写 MCP 服务器 URL".into());
-    }
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let (name, version, protocol, session) = crate::mcp::initialize(&http, &url).await?;
-    let server = crate::mcp::McpServer {
-        id: format!("mcp-{}", uuid::Uuid::new_v4().simple()),
-        name: name.clone(),
-        url: url.clone(),
-        transport: crate::mcp::McpTransport::Http,
-        version,
-        protocol,
-        session,
-        enabled: true,
-        connected_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        command: Default::default(),
-        args: Default::default(),
-        env: Default::default(),
-    };
-    // 同一 URL 只保留一条
-    let id = server.id.clone();
-    {
-        let mut list = ctx.mcp.lock().unwrap();
-        list.retain(|s| s.url != url);
-        list.push(server.clone());
-    }
-    ctx.save_mcp();
-    crate::audit::record(&ctx, "local-app", "mcp.connect", &name, json!({ "url": url }), true);
-    Ok(json!({ "server": server, "id": id }))
+    bit_core::commands_api::mcp_connect(&ctx(state), url).await
 }
 
 /// 已接入服务器列表

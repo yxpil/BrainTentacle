@@ -1,0 +1,9 @@
+{
+  "name": "占位写坏的外部连接",
+  "version": "1.0.0",
+  "description": "负面夹具：{setting: 占位没闭合，展开结果不可预期，必须整体拒收",
+  "permissions": ["net"],
+  "connections": [
+    { "name": "broken", "label": "坏占位", "url": "https://a.example.com/{setting:token/mcp" }
+  ]
+}

@@ -38,11 +38,11 @@ fs.writeFileSync(
   path.join(dataDir, "ai_config.json"),
   JSON.stringify({
     providers: [
-      { id: "e2e-mock-provider", name: "E2E-Mock", protocol: "openai", base_url: `http://127.0.0.1:${MOCK_PORT}/v1`, api_key: "sk-e2e-mock", model: "mock-1", active: true, temperature_mode: "default", reasoning_effort: "default" },
-      { id: "e2e-mock-openai-native", name: "E2E-Mock-OpenAI-Native", protocol: "openai", base_url: `http://127.0.0.1:${MOCK_PORT}/v1`, api_key: "sk-e2e-mock", model: "mock-1", active: false, temperature_mode: "default", reasoning_effort: "default" },
-      { id: "e2e-mock-claude", name: "E2E-Mock-Claude", protocol: "claude", base_url: `http://127.0.0.1:${MOCK_PORT}`, api_key: "sk-e2e-mock", model: "mock-1", active: false, temperature_mode: "default", reasoning_effort: "default" },
-      { id: "e2e-mock-gemini", name: "E2E-Mock-Gemini", protocol: "gemini", base_url: `http://127.0.0.1:${MOCK_PORT}`, api_key: "sk-e2e-mock", model: "mock-1", active: false, temperature_mode: "default", reasoning_effort: "default" },
-      { id: "e2e-mock-strict", name: "E2E-Mock-Strict", protocol: "openai", base_url: `http://127.0.0.1:${MOCK_PORT}/v1`, api_key: "sk-e2e-mock", model: "mock-1", active: false, temperature_mode: "default", reasoning_effort: "default" },
+      { id: "e2e-mock-provider", name: "E2E-Mock", protocol: "openai", base_url: `http://127.0.0.1:${MOCK_PORT}/v1`, api_key: "sk-e2e-mock", model: "mock-model-a", active: true, temperature_mode: "default", reasoning_effort: "default" },
+      { id: "e2e-mock-openai-native", name: "E2E-Mock-OpenAI-Native", protocol: "openai", base_url: `http://127.0.0.1:${MOCK_PORT}/v1`, api_key: "sk-e2e-mock", model: "mock-model-a", active: false, temperature_mode: "default", reasoning_effort: "default" },
+      { id: "e2e-mock-claude", name: "E2E-Mock-Claude", protocol: "claude", base_url: `http://127.0.0.1:${MOCK_PORT}`, api_key: "sk-e2e-mock", model: "mock-model-a", active: false, temperature_mode: "default", reasoning_effort: "default" },
+      { id: "e2e-mock-gemini", name: "E2E-Mock-Gemini", protocol: "gemini", base_url: `http://127.0.0.1:${MOCK_PORT}`, api_key: "sk-e2e-mock", model: "mock-model-a", active: false, temperature_mode: "default", reasoning_effort: "default" },
+      { id: "e2e-mock-strict", name: "E2E-Mock-Strict", protocol: "openai", base_url: `http://127.0.0.1:${MOCK_PORT}/v1`, api_key: "sk-e2e-mock", model: "mock-model-a", active: false, temperature_mode: "default", reasoning_effort: "default" },
     ],
   })
 );

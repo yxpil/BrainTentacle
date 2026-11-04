@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>登记一览</title>
+    <style>
+      body { font: 13px/1.6 system-ui, sans-serif; margin: 16px; color: #1f2430; }
+      h1 { font-size: 15px; margin: 0 0 8px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border-bottom: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; font-size: 12px; }
+      th { color: #6b7280; font-weight: 600; }
+      code { font-family: ui-monospace, Consolas, monospace; }
+      svg { vertical-align: middle; }
+      #status { color: #6b7280; margin-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>本插件登记的文件类型</h1>
+    <p id="status">正在与宿主握手…</p>
+    <table>
+      <thead><tr><th>图标</th><th>名称</th><th>后缀</th><th>解析</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <script>
+      // 开局先等握手回执（Bit.ready），否则 info()/cap() 拿到的是 null
+      (async function () {
+        const rows = document.getElementById("rows");
+        const status = document.getElementById("status");
+        const info = await window.Bit.ready();
+        status.textContent = info ? "已连上宿主：" + info.plugin_id : "未连上宿主";
+        let kinds = [];
+        try {
+          kinds = await window.Bit.files.kinds();
+        } catch (e) {
+          status.textContent = "读取登记失败：" + (e && e.message ? e.message : e);
+          return;
+        }
+        rows.textContent = "";
+        for (const k of kinds) {
+          const tr = document.createElement("tr");
+          const glyph = document.createElement("td");
+          if ((k.paths || []).length) {
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("width", "18");
+            svg.setAttribute("height", "18");
+            svg.setAttribute("viewBox", "0 0 24 24");
+            svg.setAttribute("fill", "none");
+            svg.setAttribute("stroke", "currentColor");
+            svg.setAttribute("stroke-width", "1.8");
+            for (const d of k.paths) {
+              const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+              p.setAttribute("d", d);
+              svg.appendChild(p);
+            }
+            glyph.appendChild(svg);
+          } else {
+            glyph.textContent = "—";
+          }
+          const label = document.createElement("td");
+          label.textContent = k.label;
+          const exts = document.createElement("td");
+          exts.innerHTML = "<code>" + (k.exts || []).join(" ") + "</code>";
+          const how = document.createElement("td");
+          how.textContent = k.tool ? "本插件工具解析" : "只换图标";
+          tr.append(glyph, label, exts, how);
+          rows.appendChild(tr);
+        }
+        // 留一份实据给探针：登记结果写进自己的数据目录
+        await window.Bit.data.writeJSON("kinds-proof.json", {
+          from: "biz-filekind",
+          count: kinds.length,
+          exts: kinds.flatMap((k) => k.exts || []),
+          withTool: kinds.filter((k) => k.tool).map((k) => k.id),
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -154,6 +154,9 @@ pub struct Ctx {
     pub nonce_seen: Mutex<crate::security::NonceCache>,
     /// 工具质量统计：tool_id → 成功率等（内存态 + tool_stats.json 落盘）
     pub tool_stats: Mutex<toolstats::Store>,
+    /// 工具按需加载（config.lazy_tools）：会话 → 本会话已调取完整 schema 的工具名集合。
+    /// 内存态：重启或新会话都回到「只有 skill」的起点，模型要用再调（见 tool_load.rs）
+    pub tool_loaded: Mutex<HashMap<String, std::collections::HashSet<String>>>,
     /// 工作区沙箱根（运行时）：TUI 启动时默认锚定进程 cwd；None = 不限制（桌面端默认）。
     /// config.workspace_root 可显式指定；shell 未传 cwd 时以此兜底，文件工具路径禁止逃逸
     pub workspace_root: Mutex<Option<PathBuf>>,
@@ -220,6 +223,14 @@ impl Ctx {
         d
     }
 
+    /// 用户自选的提示音文件存放处（data_dir/sounds）：与 images 同一口径，
+    /// 只在需要时创建，不放素材进安装包。
+    pub fn sound_dir(&self) -> PathBuf {
+        let d = self.data_dir.join("sounds");
+        fs::create_dir_all(&d).ok();
+        d
+    }
+
     /// UI 事件统一出口：所有 ctx.app.emit / emit_ui 调用点的唯一替代。
     /// 持有 Ctx 其他锁时不要调用（emitter 可能跨线程唤醒）；先 drop 锁再 emit
     pub fn emit(&self, name: &str, payload: serde_json::Value) {
@@ -251,6 +262,9 @@ impl Ctx {
         // 全量数据存储：先开 bit.db，再由 Config::load 处理引导锚点与配置迁移
         let mut db = crate::store::open(&data_dir);
         let config = crate::config::Config::load(&data_dir, &db);
+        // 出网代理随配置装载生效（本进程环境 + 进程内决策）：host / worker / TUI / CLI
+        // 都从这一条路径起，所以自定义代理对全进程 reqwest、webview 与 shell 子进程口径一致
+        crate::netproxy::apply(&config);
         let device_key = config.device_key.clone();
         // 一次性导入遗留 JSON 文件（幂等；导入后原文件改名 .migrated 留档）
         crate::store::import_legacy(&db, &data_dir, device_key.as_deref());
@@ -390,6 +404,7 @@ impl Ctx {
                 8192,
             )),
             tool_stats: Mutex::new(tool_stats),
+            tool_loaded: Mutex::new(HashMap::new()),
             workspace_root: Mutex::new(None),
             started: std::time::Instant::now(),
         })

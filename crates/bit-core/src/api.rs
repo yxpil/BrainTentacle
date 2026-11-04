@@ -40,8 +40,21 @@ pub fn bootstrap_services(ctx: &Arc<Ctx>) -> serde_json::Value {
     {
         let te_ctx = ctx.clone();
         crate::task::spawn_blocking(move || {
+            // 插件进程侧 SDK 先物化：插件服务与解释器工具 require("bit") 要看得见
+            crate::plugin_sdk::ensure(&te_ctx);
             crate::plugins::sync(&te_ctx);
             crate::toolenv::ensure_init(&te_ctx);
+        });
+    }
+
+    // 插件本机服务：只绑 127.0.0.1 的独立监听（页面 SDK / 静态页 / 对话 API）。
+    // 同步 bind 后才返回，插件页面地址拼出来的端口才是真实端口；与远程访问开关无关。
+    crate::plugin_api::start(ctx.clone());
+    // 清单里 auto_start 的插件服务器随之拉起（内部等运行环境探测就绪，避免首启必然失败）
+    {
+        let pa_ctx = ctx.clone();
+        crate::task::spawn(async move {
+            crate::plugins::auto_start_servers(&pa_ctx).await;
         });
     }
 
@@ -85,8 +98,14 @@ pub fn bootstrap_services(ctx: &Arc<Ctx>) -> serde_json::Value {
         crate::task::spawn(async move {
             let p = mf_ctx.ai_config.lock().unwrap().active().cloned();
             if let Some(p) = p {
-                crate::ai::refresh_model_context(&mf_ctx, &p.protocol, &p.base_url, &p.api_key)
-                    .await;
+                crate::ai::refresh_model_context(
+                    &mf_ctx,
+                    &p.protocol,
+                    &p.base_url,
+                    &p.api_key,
+                    &p.model,
+                )
+                .await;
             }
         });
     }
@@ -221,6 +240,9 @@ pub async fn check_updates(ctx: &Arc<Ctx>) -> Result<UpdateInfo, String> {
 /// 与托盘退出保持一致：通知守护进程不要接力拉起 + 关闭时静默更新
 pub fn quit_app(ctx: &Arc<Ctx>) -> serde_json::Value {
     crate::audit::record(ctx, "local-app", "app.quit", "BIT", json!({ "via": "ui" }), true);
+    // 插件服务器随主程序一起退：BIT 因用户启用插件才拉起的子进程，退出后留着会占端口、
+    // 且下次启动的"运行中"状态与实际不符（只有这一条退出漏斗，托盘/更新重启都走这里）
+    crate::workwith::kill_all_with_prefix("plugin:");
     // 正常退出：先通知守护进程不要接力拉起
     crate::guardian::expect_exit(ctx);
     // 硬退出兜底（与托盘退出一致）：事件循环消费 exit(0) 失败时强制退出，保证 100% 退掉

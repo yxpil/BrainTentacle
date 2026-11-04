@@ -1,0 +1,100 @@
+<!doctype html>
+<!-- 告警中心：申报了 events 之后，宿主把白名单事件转进帧里（Bit.on 收到 event="host"）。
+     这一页把流水显示出来，并按设置里的静音表决定是否弹系统通知。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>告警中心</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#dc2626; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#f87171; } }
+      * { box-sizing:border-box; }
+      body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 2px; font-size:16px; }
+      h2 { margin:0 0 6px; font-size:12px; color:var(--muted); }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:12px; }
+      .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+      input, button { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--fg); }
+      button { border-color:var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+      button.ghost { background:transparent; color:var(--accent); }
+      #feed { max-height:320px; overflow:auto; font:12px/1.5 ui-monospace,Consolas,monospace; }
+      #feed div { border-bottom:1px solid var(--line); padding:3px 0; }
+      .n { color:var(--accent); }
+    </style>
+  </head>
+  <body>
+    <h1>告警中心</h1>
+    <div class="sub" id="who" style="color:var(--muted)">正在握手…</div>
+    <div class="card">
+      <h2>静音表（逗号分隔的事件名）</h2>
+      <div class="row">
+        <input id="mute" size="40" />
+        <button id="save" class="ghost">保存</button>
+        <button id="test">发一条测试通知</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>事件流水（最近 50 条）</h2>
+      <div id="tip" style="color:var(--muted);font-size:12px"></div>
+      <div id="feed"></div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let muted = [];
+      let n = 0;
+      const feed = [];
+
+      // 只给这几类事件弹通知。notify-done 必须排除在外：通知本身会发一条 notify-done 事件回来，
+      // 若继续为它弹通知就是自己喂自己的死循环（第一版踩到了，一秒刷出几百条通知）。
+      const NOISY = ["notify-done", "chat.delta"];
+      const WINDOW_MS = 5000;
+      const MAX_PER_WINDOW = 3;
+      const recent = [];
+
+      function push(name, data) {
+        n += 1;
+        const line = `#${n} ${new Date().toLocaleTimeString()} ${name} ${JSON.stringify(data).slice(0, 120)}`;
+        feed.unshift(line);
+        if (feed.length > 50) feed.pop();
+        $("feed").innerHTML = feed.map((x) => `<div>${x.replace(/</g, "&lt;")}</div>`).join("");
+        if (NOISY.includes(name) || muted.includes(name)) return;
+        // 限流：同一窗口内最多三颗，避免事件风暴把系统通知刷成噪音
+        const now = Date.now();
+        while (recent.length && now - recent[0] > WINDOW_MS) recent.shift();
+        if (recent.length >= MAX_PER_WINDOW) {
+          $("tip").textContent = `限流中：${WINDOW_MS / 1000} 秒内已弹 ${recent.length} 颗，这条只进流水`;
+          return;
+        }
+        recent.push(now);
+        Bit.notify(`告警 ${name}`, line).catch(() => {});
+      }
+
+      Bit.on((event, payload) => {
+        if (event === "host") push(payload.name, payload.data);
+        else if (event === "chat") push("chat.delta", { len: (payload.content || "").length });
+      });
+
+      async function boot() {
+        const info = await Bit.ready();
+        $("who").textContent = info
+          ? `${info.plugin_name} · 已申报事件订阅（未申报 events 的插件这里永远是空的）`
+          : "握手尚未完成";
+        if (info && !info.permissions.includes("events")) $("who").textContent += "（注意：本插件没有 events 权限）";
+        const v = await Bit.settings.get("muted_events");
+        muted = String(v || "").split(",").map((s) => s.trim()).filter(Boolean);
+        $("mute").value = muted.join(", ");
+        const saved = await Bit.storage.get("feed");
+        if (saved) { feed.unshift(...JSON.parse(saved)); $("feed").innerHTML = feed.map((x) => `<div>${x}</div>`).join(""); }
+      }
+
+      $("save").addEventListener("click", async () => {
+        muted = $("mute").value.split(",").map((s) => s.trim()).filter(Boolean);
+        await Bit.settings.set("muted_events", muted.join(", "));
+      });
+      $("test").addEventListener("click", () => Bit.notify("告警中心", "这是一条来自插件的系统通知"));
+      setInterval(() => Bit.storage.set("feed", JSON.stringify(feed.slice(0, 20))), 8000);
+
+      boot().catch((e) => ($("who").textContent = "握手失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

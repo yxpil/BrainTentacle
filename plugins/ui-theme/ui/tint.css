@@ -1,0 +1,6 @@
+/* 只写两个自定义属性：不覆盖宿主任何一条真实样式，但插件页面上任何元素都能继承到，
+   验收时读根节点的 computed style 就能确认样式确实注入过（不是"文件读到了但没挂上"）。 */
+#root {
+  --bit-ui-theme-tint: 1;
+  --bit-ui-theme-name: "ui-theme";
+}

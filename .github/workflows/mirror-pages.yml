@@ -35,6 +35,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/configure-pages@v4
+      - uses: actions/checkout@v4
       - name: 下载 Release 资产并组装站点
         env:
           GH_TOKEN: ${{ github.token }}
@@ -61,74 +62,11 @@ jobs:
               || echo "最新版 latest.json 下载失败，本次部署不含根清单（客户端回退 GitHub API 源）"
           fi
 
-          # 版本目录内的资产清单行：文件名 + 人类可读大小（黑白极简 pill 风格）
-          ITEM_LIST=$(cd "site/$VERSION" && ls -1 | while read -r f; do
-            s=$(wc -c < "$f" | tr -d ' ')
-            h=$(numfmt --to=iec --suffix=B "$s" 2>/dev/null || printf '%sB' "$s")
-            printf '<li><a href="./%s"><span>%s</span><span class="size">%s</span></a></li>\n' "$f" "$f" "$h"
-          done)
-
-          CSS=$(cat <<'CSSEOF'
-          :root{color-scheme:light}
-          *{box-sizing:border-box}
-          body{margin:0;padding:44px 16px;background:#fff;color:#111;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;text-align:center}
-          h1{font-size:22px;margin:0 0 4px;letter-spacing:.5px}
-          .sub{color:#666;font-size:13px;margin:0 0 28px}
-          ul{list-style:none;margin:0 auto;padding:0;max-width:560px;display:flex;flex-direction:column;gap:8px;text-align:left}
-          li{margin:0;min-width:0}
-          a{display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid #111;border-radius:999px;padding:10px 18px;color:#111;text-decoration:none;font-size:14px;min-width:0}
-          a span:first-child{overflow-wrap:anywhere}
-          a:hover{background:#111;color:#fff}
-          .size{color:inherit;opacity:.55;font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
-          .foot{margin-top:32px;font-size:12px;color:#666}
-          .foot a{display:inline;border:0;padding:0;border-radius:0;color:#666;text-decoration:underline}
-          .foot a:hover{background:none;color:#111}
-          CSSEOF
-          )
-
-          # 版本页：/bit/<版本>/ —— 该版本全部资产的直链列表
-          cat > "site/$VERSION/index.html" <<PAGEEOF
-          <!doctype html>
-          <html lang="zh-CN">
-          <head>
-          <meta charset=utf-8>
-          <meta name=viewport content="width=device-width,initial-scale=1">
-          <title>触手怪 $VERSION 下载 / Downloads</title>
-          <style>$CSS</style>
-          </head>
-          <body>
-          <h1>触手怪 $VERSION</h1>
-          <p class=sub>全部资产直链 · All release assets（GitHub Pages 镜像 / mirror）</p>
-          <ul>
-          <li><a href="https://github.com/yxpil/bit-mobile"><span>安卓版</span><span class="size">bit-mobile</span></a></li>
-          $ITEM_LIST
-          </ul>
-          <p class=foot>触手怪 永久免费 / Tentacle is free forever · <a href="https://osbt.space">osbt.space</a> · <a href="https://github.com/yxpil/BrainTentacle">GitHub</a> · <a href="./latest.json">latest.json</a></p>
-          </body>
-          </html>
-          PAGEEOF
-
-          # 站点首页：/bit/ —— 最新版本入口（并发发布时也钉最新版，不随本镜像 tag 回退）
-          cat > site/index.html <<ROOTEOF
-          <!doctype html>
-          <html lang="zh-CN">
-          <head>
-          <meta charset=utf-8>
-          <meta name=viewport content="width=device-width,initial-scale=1">
-          <title>触手怪 下载 / Downloads</title>
-          <style>$CSS</style>
-          </head>
-          <body>
-          <h1>触手怪</h1>
-          <p class=sub>最新版本 / Latest: $LATEST_TAG</p>
-          <ul>
-          <li><a href="$LATEST_VERSION/"><span>v$LATEST_VERSION 全部文件 / All files</span></a></li>
-          <li><a href="latest.json"><span>自动更新清单 / Update manifest (latest.json)</span></a></li>
-          </ul>
-          <p class=foot>触手怪 永久免费 / Tentacle is free forever · <a href="https://osbt.space">osbt.space</a> · <a href="https://github.com/yxpil/BrainTentacle">GitHub</a></p>
-          </body>
-          </html>
-          ROOTEOF
+          # 页面交给 packaging/pages/gen_pages.py：按「系统 + 架构 + 包类型」分组标注每个
+          # 资产，并用 Client Hints 识别访问者设备、把对应包高亮、对下错的组合加确认。
+          # 原来是把 release 目录整个 ls 成一条无标注的直链列表，20 多个同版本不同架构的
+          # 文件排在一起，x64 电脑很容易点到 _aarch64-setup.exe。
+          python3 packaging/pages/gen_pages.py --assets-dir "site/$VERSION" --version "$VERSION" --latest-tag "$LATEST_TAG" --site-root site
           ls -la "site/$VERSION"
       - uses: actions/upload-pages-artifact@v3
         with:

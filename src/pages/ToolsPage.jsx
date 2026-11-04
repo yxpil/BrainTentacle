@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import PillSwitch from "../components/PillSwitch.jsx";
 import { useLang } from "../i18n.js";
 import { confirmDialog } from "../components/ConfirmHost.jsx";
+import SectionNav, { Section, makePart } from "../components/SectionNav.jsx";
 import {
   IconPlus,
   IconTrash,
@@ -13,8 +14,8 @@ import {
   IconTerminal,
   IconCode,
   IconRefresh,
-  IconFolderOpen,
   IconGlobe,
+  IconPuzzle,
   IconX,
 } from "../components/Icons.jsx";
 
@@ -125,12 +126,16 @@ io.write('{"echo": ' .. s .. '}')`,
   exe: "",
 };
 
+const TOOL_SEC_KEY = "bit.toolsec";
+
 // 工具中心：解释器注册 + 让 AI/用户写一段脚本变成工具 + 工具列表
-export default function ToolsPage({ onStats }) {
+export default function ToolsPage({ onStats, visible }) {
   const { t } = useLang();
   const [tools, setTools] = useState([]);
   const [runtimes, setRuntimes] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [sec, setSec] = useState(() => localStorage.getItem(TOOL_SEC_KEY) || "runtimes");
+  const [query, setQuery] = useState("");
 
   // 脚本工具编辑器
   const [runtime, setRuntime] = useState("");
@@ -168,10 +173,8 @@ export default function ToolsPage({ onStats }) {
   const [stdioErrs, setStdioErrs] = useState([]); // 弹窗内失败项：{ name, err }
   // 工具质量统计：tool_id → { recent_rate, recent_n, fail, last_err, avg_ms }
   const [stats, setStats] = useState({});
-  const [plugins, setPlugins] = useState([]);
-  const [pluginDir, setPluginDir] = useState("");
-  const [pluginBusy, setPluginBusy] = useState(false);
-  const [pluginErrors, setPluginErrors] = useState([]); // 清单校验/安全校验失败的插件错误
+  // 插件 id → 展示名：给「来自插件声明」的 MCP 行写出人话名字，null = 还没需要过
+  const [pluginNames, setPluginNames] = useState(null);
 
   // DeepSeek Harness (dsh) 插件桥：状态（插件列表 + 桥注册）/ 操作互斥 / 结果与错误
   const [dsh, setDsh] = useState(null); // dshStatus() 结果，进页面自动拉取
@@ -179,20 +182,27 @@ export default function ToolsPage({ onStats }) {
   const [dshMsg, setDshMsg] = useState(""); // 操作结果提示（如导入统计），下次操作时清掉
   const [dshErr, setDshErr] = useState(""); // 失败原因（页面既有红色错误样式）
 
-  const applyPluginList = (p) => {
-    setPlugins(p?.plugins || []);
-    setPluginDir(p?.dir || "");
-    setPluginErrors(p?.errors || []);
-  };
-
   const reload = async () => {
     const [t, r, m, s] = await Promise.all([api.listTools(), api.listRuntimes(), api.mcpList(), api.getToolStats().catch(() => [])]);
     setTools(t.tools || []);
     setRuntimes(r.runtimes || []);
-    setMcpServers(m.servers || []);
+    const servers = m.servers || [];
+    setMcpServers(servers);
     setStats(Object.fromEntries((Array.isArray(s) ? s : []).map((x) => [x.id, x])));
-    api.listPlugins().then(applyPluginList).catch(() => {});
     if (!runtime && r.runtimes?.length) setRuntime(r.runtimes[0].id);
+    // 插件声明的外部连接那行要写清「来自插件 X」：只有真出现这类条目才多拉一次插件列表
+    if (!pluginNames && servers.some((x) => x.plugin_id)) {
+      api
+        .listPlugins()
+        .then((r2) => {
+          const map = {};
+          (r2.plugins || []).forEach((p) => {
+            map[p.id] = p.name;
+          });
+          setPluginNames(map);
+        })
+        .catch(() => {});
+    }
   };
   useEffect(() => {
     reload();
@@ -207,6 +217,23 @@ export default function ToolsPage({ onStats }) {
       un2.then((f) => f());
     };
   }, []);
+
+  // 标签页是保活渲染（切走只 display:none），而桥的运行态会在别处变：WorkWith 页启停、
+  // 会话联动自动拉起。回到本页重拉一次，并趁页面可见时跟着 workwith 事件走，
+  // 否则会出现「进程明明在跑，卡片还写着未运行」「MCP 行还停在暂停态」。
+  useEffect(() => {
+    if (!visible) return;
+    const pull = () => {
+      loadDsh();
+      reload();
+    };
+    pull();
+    let un;
+    listen("workwith", pull)
+      .then((f) => (un = f))
+      .catch(() => {});
+    return () => un && un();
+  }, [visible]);
 
   const refreshRt = async () => {
     setRefreshing(true);
@@ -418,13 +445,29 @@ export default function ToolsPage({ onStats }) {
     }
   };
 
-  // 启用桥接 = 确保 dsh 目录存在 + 注册 MCP 桥；成功后重刷状态，失败把报错直接展示
+  // 启用桥接 = 确保 dsh 目录存在 + 建/更新 WorkWith 条目（stdio 联动）并启动；成功后重刷
   const enableDshBridge = async () => {
     setDshBusy(true);
     setDshErr("");
     setDshMsg("");
     try {
       await api.dshSetupBridge();
+      await loadDsh();
+    } catch (e) {
+      setDshErr(String(e));
+    } finally {
+      setDshBusy(false);
+    }
+  };
+
+  // 桥进程归 WorkWith 托管：这里的启停就是 workwith_stop / workwith_start（条目 id 由后端给）
+  const toggleDshBridge = async (bridge) => {
+    setDshBusy(true);
+    setDshErr("");
+    setDshMsg("");
+    try {
+      if (bridge.running) await api.stopWorkwith(bridge.entry_id);
+      else await api.startWorkwith(bridge.entry_id);
       await loadDsh();
     } catch (e) {
       setDshErr(String(e));
@@ -588,34 +631,91 @@ export default function ToolsPage({ onStats }) {
     }
   };
 
-  return (
-    <div className="flex h-full flex-col gap-5 overflow-y-auto">
-      {/* ── 解释器注册 ── */}
-      <section className="card">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <IconServer size={18} />
-            <div>
-              <h2 className="text-sm font-semibold">{t("tools.runtimesTitle")}</h2>
-              <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                {t("tools.runtimesDesc")}
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={refreshRt} className="pill pill-outline pill-hover" disabled={refreshing}>
-              <IconRefresh size={14} />
-              {refreshing ? t("tools.probing") : t("tools.refreshDetect")}
-            </button>
-            <button onClick={() => setShowAddRt((v) => !v)} className="pill pill-outline pill-hover">
-              <IconPlus size={14} />
-              {t("tools.addManual")}
-            </button>
-          </div>
-        </div>
+  // 左栏分区表：一条目对应右栏一块分组面板，与设置中心同构
+  const NAV = [
+    { key: "local", head: t("tools.groupLocal"), HeadIcon: IconTool, ids: ["runtimes", "script", "registered"] },
+    { key: "conn", head: t("tools.groupConn"), HeadIcon: IconGlobe, ids: ["mcp", "dsh"] },
+  ];
+  const meta = {
+    runtimes: { label: t("tools.runtimesTitle"), icon: IconServer },
+    script: { label: t("tools.scriptShort"), icon: IconCode },
+    registered: { label: t("tools.registeredTitle"), icon: IconTool },
+    mcp: { label: t("tools.mcpShort"), icon: IconGlobe },
+    dsh: { label: t("tools.dshShort"), icon: IconPuzzle },
+  };
+  const flat = new Map();
+  for (const g of NAV) for (const id of g.ids) flat.set(id, { id, label: meta[id].label, head: g.head });
+  const activeItem = flat.get(sec) || flat.get("runtimes");
+  const pickSec = (id) => {
+    setSec(id);
+    localStorage.setItem(TOOL_SEC_KEY, id);
+  };
 
+  const q = query.trim().toLowerCase();
+  /** 同自动化页：没搜索词只看选中区，有词则摊开命中条目所在的区 */
+  const part = makePart(activeItem.id, q, flat);
+  const P = {
+    runtimes: part("runtimes", runtimes, (r) => [r.id, r.name, r.path, r.lang, r.version]),
+    script: part("script", []),
+    registered: part("registered", tools, (x) => [x.name, x.description]),
+    mcp: part("mcp", mcpServers, (s) => [s.name, s.url, s.command]),
+    dsh: part("dsh", dsh?.plugins || [], (p) => [p.name, p.version]),
+  };
+  const counts = {
+    runtimes: runtimes.length,
+    registered: tools.length,
+    mcp: mcpServers.length,
+    dsh: (dsh?.plugins || []).length,
+  };
+  // hits：这一区有没有内容命中，左栏要跟着摊开，别出现「正文有结果、左栏说没找到」
+  const groups = NAV.map((g) => ({
+    ...g,
+    items: g.ids.map((id) => ({ id, ...meta[id], count: counts[id], hits: P[id].show })),
+  }));
+  const anyShow = Object.values(P).some((p) => p.show);
+  const { runtimes: pRt, script: pScript, registered: pReg, mcp: pMcp, dsh: pDsh } = P;
+
+  const descOf = {
+    runtimes: t("tools.runtimesDesc"),
+    script: t("tools.scriptDesc"),
+    registered: t("tools.registeredDesc"),
+    mcp: t("tools.mcpDesc"),
+    dsh: t("tools.dshDesc"),
+  }[activeItem.id];
+
+  // 分区级动作：解释器那一区需要重扫与手动登记，别的区动作都在面板里
+  const headActions =
+    activeItem.id === "runtimes" ? (
+      <>
+        <button onClick={refreshRt} className="pill pill-outline pill-hover shrink-0" disabled={refreshing}>
+          <IconRefresh size={14} />
+          {refreshing ? t("tools.probing") : t("tools.refreshDetect")}
+        </button>
+        <button onClick={() => setShowAddRt((v) => !v)} className="pill pill-outline pill-hover shrink-0">
+          <IconPlus size={14} />
+          {t("tools.addManual")}
+        </button>
+      </>
+    ) : null;
+
+  return (
+    <SectionNav
+      eyebrow={`${t("nav.tools")} · ${activeItem.head}`}
+      title={activeItem.label}
+      desc={descOf}
+      actions={headActions}
+      groups={groups}
+      active={activeItem.id}
+      onSelect={pickSec}
+      query={query}
+      onQuery={setQuery}
+      searchPlaceholder={t("tools.find")}
+      emptyText={t("common.noMatch")}
+    >
+      {/* ── 解释器注册 ── */}
+      <Section show={pRt.show}>
         {showAddRt && (
-          <form onSubmit={addRuntime} className="mb-3 grid grid-cols-4 gap-2">
+          <form onSubmit={addRuntime} className="card grid grid-cols-4 gap-2">
             <input className="field" placeholder={t("tools.rtIdPlaceholder")} value={rtId} onChange={(e) => setRtId(e.target.value)} required />
             <input className="field" placeholder={t("tools.rtPathPlaceholder")} value={rtPath} onChange={(e) => setRtPath(e.target.value)} required />
             <input className="field" placeholder={t("tools.rtNamePlaceholder")} value={rtName} onChange={(e) => setRtName(e.target.value)} />
@@ -645,11 +745,11 @@ export default function ToolsPage({ onStats }) {
           </form>
         )}
 
-        <div className="flex flex-col gap-2">
-          {runtimes.map((r) => {
+        <div className="card flex flex-col">
+          {pRt.items.map((r) => {
             const on = r.enabled ?? true;
             return (
-              <div key={r.id} className="flex items-center gap-3 rounded-2xl border border-neutral-200/70 px-4 py-2.5 dark:border-neutral-800/70">
+              <div key={r.id} className="flex items-center gap-3 border-b border-neutral-200/60 py-2.5 last:border-0 dark:border-neutral-800/60">
                 <div className={`flex min-w-0 flex-1 items-center gap-3 transition-opacity ${on ? "" : "opacity-45"}`}>
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-900">
                     <IconTerminal size={16} />
@@ -678,28 +778,18 @@ export default function ToolsPage({ onStats }) {
               </div>
             );
           })}
-          {runtimes.length === 0 && (
-            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
+          {pRt.items.length === 0 && (
+            <p className="py-4 text-center text-sm text-neutral-400">
               {t("tools.noRuntimes")}
             </p>
           )}
         </div>
-      </section>
+      </Section>
 
       {/* ── MCP 服务器：自动发现 + 接入 ── */}
-      <section className="card">
-        <div className="mb-3 flex items-center gap-2">
-          <IconGlobe size={18} />
-          <div>
-            <h2 className="text-sm font-semibold">{t("tools.mcpTitle")}</h2>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              {t("tools.mcpDesc")}
-            </p>
-          </div>
-        </div>
-
+      <Section show={pMcp.show}>
         {/* 扫描行：host + 端口范围 + 手动 URL */}
-        <div className="mb-3 grid grid-cols-6 gap-2">
+        <div className="card grid grid-cols-6 gap-2">
           <input className="field font-mono" title="Host" value={mcpHost} onChange={(e) => setMcpHost(e.target.value)} />
           <input className="field font-mono" placeholder={t("tools.mcpFrom")} value={mcpStart} onChange={(e) => setMcpStart(e.target.value)} inputMode="numeric" />
           <input className="field font-mono" placeholder={t("tools.mcpTo")} value={mcpEnd} onChange={(e) => setMcpEnd(e.target.value)} inputMode="numeric" />
@@ -717,18 +807,18 @@ export default function ToolsPage({ onStats }) {
         </div>
 
         {/* stdio 接入：弹窗式手动配置（JSON / 表单双模式） */}
-        <div className="mb-3 flex justify-end">
+        <div className="card flex justify-end">
           <button onClick={openStdioModal} className="pill pill-outline pill-hover" disabled={mcpBusy}>
             <IconPlus size={14} />
             {t("tools.mcpStdioAdd")}
           </button>
         </div>
 
-        {mcpMsg && <p className="mb-2 px-2 text-xs text-neutral-500 dark:text-neutral-400">{mcpMsg}</p>}
+        {mcpMsg && <p className="card text-xs text-neutral-500 dark:text-neutral-400">{mcpMsg}</p>}
 
         {/* 扫描结果 */}
         {mcpFound && mcpFound.length > 0 && (
-          <div className="mb-3 flex flex-col gap-2">
+          <div className="card flex flex-col gap-2">
             {mcpFound.map((d) => (
               <div key={d.url} className="flex items-center gap-3 rounded-2xl border border-dashed border-neutral-300 px-4 py-2.5 dark:border-neutral-700">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-900">
@@ -754,14 +844,14 @@ export default function ToolsPage({ onStats }) {
         )}
 
         {/* 已接入列表：圆片开关（暂停/继续）+ 重新导入 + 移除 */}
-        <div className="flex flex-col gap-2">
-          {mcpServers.map((s) => {
+        <div className="card flex flex-col">
+          {pMcp.items.map((s) => {
             const on = s.enabled ?? true;
             const toolCount = tools.filter(
               (tl) => tl.kind?.kind === "mcp" && tl.kind?.server_id === s.id
             ).length;
             return (
-              <div key={s.id} className="flex items-center gap-3 rounded-2xl border border-neutral-200/70 px-4 py-2.5 dark:border-neutral-800/70">
+              <div key={s.id} data-bit-mcp-row={s.id} className="flex items-center gap-3 border-b border-neutral-200/60 py-2.5 last:border-0 dark:border-neutral-800/60">
                 <div className={`flex min-w-0 flex-1 items-center gap-3 transition-opacity ${on ? "" : "opacity-45"}`}>
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-900">
                     <IconGlobe size={16} />
@@ -770,6 +860,14 @@ export default function ToolsPage({ onStats }) {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold">{s.name}</span>
                       <span className="chip">{s.transport === "stdio" ? "stdio" : "MCP"}</span>
+                      {/* ww- 前缀 = 这一行是 WorkWith 托管条目联动出来的，进程归服务页管 */}
+                      {s.id.startsWith("ww-") && <span className="chip">{t("tools.mcpHostedByWw")}</span>}
+                      {/* plugin_id 有值 = 插件清单 connections[] 声明的外部连接，生命周期归插件页管 */}
+                      {s.plugin_id && (
+                        <span className="chip" title={t("tools.mcpPluginHint")}>
+                          {t("tools.mcpFromPlugin", { name: pluginNames?.[s.plugin_id] || s.plugin_id })}
+                        </span>
+                      )}
                       <span className="chip">{toolCount} {t("tools.mcpTools")}</span>
                     </div>
                     <p className="truncate font-mono text-xs text-neutral-500 dark:text-neutral-400">
@@ -777,43 +875,59 @@ export default function ToolsPage({ onStats }) {
                     </p>
                   </div>
                 </div>
-                <button onClick={() => reimportMcp(s)} className="icon-btn shrink-0" title={t("tools.mcpImport")} disabled={mcpBusy}>
-                  <IconRefresh size={13} />
-                </button>
-                <PillSwitch
-                  checked={on}
-                  onChange={() => toggleMcp(s)}
-                  title={on ? t("tools.mcpEnabledTitle") : t("tools.pausedTitle")}
-                />
-                <button onClick={() => removeMcp(s.id)} className="icon-btn shrink-0" title={t("common.remove")}>
-                  <IconTrash size={13} />
-                </button>
+                {s.plugin_id ? (
+                  <button
+                    onClick={() => window.dispatchEvent(new CustomEvent("bit-open-page", { detail: { page: "plugins", plugin: s.plugin_id } }))}
+                    className="btn btn-ghost shrink-0 text-xs"
+                    title={t("tools.mcpManageInPlugin")}
+                  >
+                    {t("tools.mcpManageInPlugin")}
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={() => reimportMcp(s)} className="icon-btn shrink-0" title={t("tools.mcpImport")} disabled={mcpBusy}>
+                      <IconRefresh size={13} />
+                    </button>
+                    <PillSwitch
+                      checked={on}
+                      onChange={() => toggleMcp(s)}
+                      title={on ? t("tools.mcpEnabledTitle") : t("tools.pausedTitle")}
+                    />
+                    <button onClick={() => removeMcp(s.id)} className="icon-btn shrink-0" title={t("common.remove")}>
+                      <IconTrash size={13} />
+                    </button>
+                  </>
+                )}
               </div>
             );
           })}
-          {mcpServers.length === 0 && (
-            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("tools.mcpEmpty")}</p>
+          {pMcp.items.length === 0 && (
+            <p className="py-4 text-center text-sm text-neutral-400">{t("tools.mcpEmpty")}</p>
           )}
         </div>
-      </section>
+      </Section>
 
       {/* ── DeepSeek Harness (dsh) 插件：桥接后插件工具经 MCP 接入，技能可一键导入 ── */}
-      <section className="card">
-        <div className="mb-3 flex items-center gap-2">
-          <IconServer size={18} />
-          <div>
-            <h2 className="text-sm font-semibold">{t("tools.dshTitle")}</h2>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              {t("tools.dshDesc")}
-            </p>
-          </div>
-        </div>
-
-        {/* 状态行：桥注册情况（进页面已自动拉取）+ 未启用时给启用按钮 */}
-        <div className="mb-3 flex flex-wrap items-center gap-3">
+      <Section show={pDsh.show}>
+        {/* 状态行：桥由 WorkWith 托管，注册（条目存在）与运行（进程活着）是两回事 */}
+        <div className="card flex flex-wrap items-center gap-3">
           {dshBusy && <span className="text-xs text-neutral-500">…</span>}
           {dsh?.bridge?.registered && (
-            <span className="pill-outline text-emerald-600">{t("tools.dshBridgeOn")}</span>
+            <span className={`pill-outline ${dsh.bridge.running ? "text-emerald-600" : "text-neutral-500"}`}>
+              {dsh.bridge.running ? t("tools.dshBridgeOn") : t("tools.dshBridgeStopped")}
+            </span>
+          )}
+          {dsh?.bridge?.registered && (
+            <button
+              onClick={() => toggleDshBridge(dsh.bridge)}
+              className="pill pill-outline pill-hover"
+              disabled={dshBusy}
+            >
+              {dsh.bridge.running ? t("tools.dshBridgeStop") : t("tools.dshBridgeStart")}
+            </button>
+          )}
+          {dsh?.bridge?.registered && (
+            <span className="text-xs text-neutral-400">{t("tools.dshHosted")}</span>
           )}
           {dsh && !dsh.bridge?.registered && (
             <>
@@ -826,15 +940,15 @@ export default function ToolsPage({ onStats }) {
         </div>
 
         {/* 结果提示（导入统计）与失败原因（沿用本页红色错误样式） */}
-        {dshMsg && <p className="mb-2 px-2 text-xs text-neutral-500 dark:text-neutral-400">{dshMsg}</p>}
-        {dshErr && <p className="mb-2 break-all px-2 text-xs text-red-600">{dshErr}</p>}
+        {dshMsg && <p className="card text-xs text-neutral-500 dark:text-neutral-400">{dshMsg}</p>}
+        {dshErr && <p className="card break-all text-xs text-red-600">{dshErr}</p>}
 
         {/* 插件列表：name + 版本灰字 + 圆片开关（切换即 dsh_toggle_plugin 后重刷） */}
-        <div className="flex flex-col gap-2">
-          {(dsh?.plugins || []).map((p) => {
+        <div className="card flex flex-col">
+          {pDsh.items.map((p) => {
             const on = p.enabled ?? true;
             return (
-              <div key={p.name} className="flex items-center gap-3 rounded-2xl border border-neutral-200/70 px-4 py-2.5 dark:border-neutral-800/70">
+              <div key={p.name} className="flex items-center gap-3 border-b border-neutral-200/60 py-2.5 last:border-0 dark:border-neutral-800/60">
                 <div className={`flex min-w-0 flex-1 items-center gap-3 transition-opacity ${on ? "" : "opacity-45"}`}>
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-900">
                     <IconTool size={16} />
@@ -857,157 +971,22 @@ export default function ToolsPage({ onStats }) {
             );
           })}
           {/* 空列表：等状态拉到后再提示，避免加载瞬间闪"空" */}
-          {dsh && (dsh.plugins || []).length === 0 && (
-            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("tools.dshEmpty")}</p>
+          {dsh && pDsh.items.length === 0 && (
+            <p className="py-4 text-center text-sm text-neutral-400">{t("tools.dshEmpty")}</p>
           )}
         </div>
 
         {/* 底部：一键导入 dsh 插件生态里的技能 */}
-        <div className="mt-3 flex justify-end">
+        <div className="card flex justify-end">
           <button onClick={importDshSkills} className="pill pill-outline pill-hover" disabled={dshBusy}>
             <IconRefresh size={14} />
             {t("tools.dshImportSkills")}
           </button>
         </div>
-      </section>
+      </Section>
 
-      {/* ── 本地插件：toolhomes/plugins 声明式插件包（前后端统一：工具/提示词/技能/定时任务 + 界面 css/js）── */}
-      <section className="card">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <IconTool size={18} />
-            <div>
-              <h2 className="text-sm font-semibold">本地插件</h2>
-              <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                在插件目录建 <span className="font-mono">&lt;名字&gt;/plugin.json</span> 声明工具 / 提示词 / 技能 / 定时任务 / 界面（ui.css + ui.js），重扫即生效
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => pluginDir && api.openPath(pluginDir).catch((e) => console.warn("打开插件目录失败:", e))}
-              className="pill pill-outline pill-hover"
-              title="打开插件目录"
-              disabled={!pluginDir}
-            >
-              <IconFolderOpen size={14} />
-              打开文件夹
-            </button>
-            <button
-              onClick={async () => {
-                setPluginBusy(true);
-                try {
-                  await api.refreshPlugins();
-                  applyPluginList(await api.listPlugins());
-                  // 插件增删/开关后重放渲染层 UI（样式与页面登记重建）
-                  const { reloadPluginUi } = await import("../pluginHost.js");
-                  await reloadPluginUi();
-                } finally {
-                  setPluginBusy(false);
-                }
-              }}
-              className="pill pill-outline pill-hover"
-              disabled={pluginBusy}
-            >
-              <IconRefresh size={14} />
-              重扫插件
-            </button>
-          </div>
-        </div>
-
-        {pluginDir && (
-          <p className="mb-3 px-2 font-mono text-[11px] text-neutral-400">{pluginDir}</p>
-        )}
-
-        {/* 清单/安全校验失败列表：不让错误静默（此前解析失败只进 trace，用户无感知） */}
-        {pluginErrors.length > 0 && (
-          <div className="mb-3 rounded-2xl border border-red-300/60 bg-red-50/60 px-3 py-2 dark:border-red-900/60 dark:bg-red-950/30">
-            <p className="mb-1 text-xs font-semibold text-red-600 dark:text-red-400">校验未通过（这些插件未加载）</p>
-            {pluginErrors.map((e) => (
-              <p key={e} className="break-all font-mono text-[11px] leading-relaxed text-red-500 dark:text-red-400/90">{e}</p>
-            ))}
-          </div>
-        )}
-
-        <div className="flex flex-col gap-2">
-          {plugins.map((p) => (
-            <div key={p.id} className="flex items-center gap-3 rounded-2xl border border-neutral-200/70 px-4 py-2.5 dark:border-neutral-800/70">
-              <div className={`flex min-w-0 flex-1 flex-col gap-1 transition-opacity ${p.enabled ? "" : "opacity-45"}`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold">{p.name}</span>
-                  {p.version && <span className="chip">{p.version}</span>}
-                  {p.tools?.length > 0 && <span className="chip">{p.tools.length} 工具</span>}
-                  {p.prompts > 0 && <span className="chip">{p.prompts} 提示词</span>}
-                  {p.skills > 0 && <span className="chip">{p.skills.length} 技能</span>}
-                  {p.memories > 0 && <span className="chip">{p.memories} 记忆</span>}
-                  {p.jobs?.map((j) => (
-                    <span key={j.name} className="chip">{j.name} · {j.schedule}</span>
-                  ))}
-                  {p.has_ui && <span className="chip">界面</span>}
-                  {/* 权限声明：启用前明示插件要什么能力 */}
-                  {p.permissions?.map((perm) => (
-                    <span key={perm} className="chip font-mono">{perm}</span>
-                  ))}
-                  {/* 安全校验状态：篡改 = 哈希基线不匹配，能力已全部摘除 */}
-                  {p.verify === "tampered" && (
-                    <span className="chip border-red-400 text-red-500" title="文件与启用时哈希基线不一致，所有能力已停用。重新启用即信任当前内容。">
-                      安全校验失败
-                    </span>
-                  )}
-                </div>
-                {p.description && (
-                  <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">{p.description}</p>
-                )}
-              </div>
-              <PillSwitch
-                checked={p.enabled}
-                onChange={async () => {
-                  // 启用 = 明示信任：先弹权限清单让用户确认（停用无需确认）
-                  if (!p.enabled && (p.permissions?.length || p.has_ui)) {
-                    const perms = p.permissions || [];
-                    const ok = await confirmDialog({
-                      title: `启用插件「${p.name}」`,
-                      message:
-                        `该插件请求权限：${perms.join("、") || "无"}。` +
-                        `启用即以当前内容记录安全基线；之后文件被改动会自动停用并在上方提示。`,
-                    });
-                    if (!ok) return;
-                  }
-                  setPluginBusy(true);
-                  try {
-                    await api.togglePlugin(p.id, !p.enabled);
-                    applyPluginList(await api.listPlugins());
-                    const { reloadPluginUi } = await import("../pluginHost.js");
-                    await reloadPluginUi();
-                  } catch (e) {
-                    await confirmDialog({ alert: true, title: "启用失败", message: String(e?.message || e) });
-                  } finally {
-                    setPluginBusy(false);
-                  }
-                }}
-                disabled={pluginBusy}
-                title={p.enabled ? "停用插件" : "启用插件"}
-              />
-            </div>
-          ))}
-          {plugins.length === 0 && (
-            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">还没有插件：把插件包放进上面的目录后点「重扫插件」</p>
-          )}
-        </div>
-      </section>
-
-      {/* ── 写脚本变工具 ── */}
-      <section className="card">
-        <div className="mb-3 flex items-center gap-2">
-          <IconCode size={18} />
-          <div>
-            <h2 className="text-sm font-semibold">{t("tools.scriptTitle")}</h2>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              {t("tools.scriptDesc")}
-            </p>
-          </div>
-        </div>
-
+      <Section show={pScript.show}>
+        <div className="card">
         <div className="mb-2 grid grid-cols-3 gap-2">
           <select className="field" value={runtime} onChange={(e) => onPickRuntime(e.target.value)}>
             {runtimes.map((r) => (
@@ -1064,25 +1043,21 @@ export default function ToolsPage({ onStats }) {
             />
           </div>
         )}
-      </section>
+        </div>
+      </Section>
 
-      {/* ── 已注册工具 ── */}
-      <section className="card">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <IconTool size={18} />
-          {t("tools.registeredTitle")}
-        </h2>
+      <Section show={pReg.show}>
 
-        {tools.length > 0 && (
-          <div className="flex items-center gap-3 border-b border-neutral-200/70 px-4 pb-2 text-[11px] font-medium text-neutral-400 dark:border-neutral-800/70">
+        {pReg.items.length > 0 && (
+          <div className="card flex items-center gap-3 pb-1 text-[11px] font-medium text-neutral-400">
             <span className="flex-1">{t("tools.colName")}</span>
             <span className="w-16 text-center">{t("tools.colEnabled")}</span>
             <span className="w-8 text-center">{t("tools.colActions")}</span>
           </div>
         )}
 
-        <div className="flex flex-col">
-          {tools.map((tool) => {
+        <div className="card flex flex-col">
+          {pReg.items.map((tool) => {
             const k = kindTag(tool.kind);
             const on = tool.enabled ?? true;
             // gate_enabled：设置页"本机操控"闸门（screen/mouse/keyboard/draw_diagram/view_image）。
@@ -1092,7 +1067,7 @@ export default function ToolsPage({ onStats }) {
             return (
               <div
                 key={tool.id}
-                className="flex items-center gap-3 border-b border-neutral-200/50 px-4 py-3 last:border-0 dark:border-neutral-800/50"
+                className="flex items-center gap-3 border-b border-neutral-200/60 py-3 last:border-0 dark:border-neutral-800/60"
               >
                 <div className={`min-w-0 flex-1 transition-opacity ${effOn ? "" : "opacity-45"}`}>
                   <div className="flex items-center gap-2">
@@ -1151,11 +1126,17 @@ export default function ToolsPage({ onStats }) {
               </div>
             );
           })}
-          {tools.length === 0 && (
-            <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">{t("tools.empty")}</p>
+          {pReg.items.length === 0 && (
+            <p className="py-4 text-center text-sm text-neutral-400">{t("tools.empty")}</p>
           )}
         </div>
-      </section>
+      </Section>
+
+      {q && !anyShow && (
+        <p className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
+          {t("common.noMatch")}
+        </p>
+      )}
 
       {/* ── stdio 手动配置弹窗：JSON / 表单双模式，Esc 或点遮罩关闭 ── */}
       {showStdioModal && (
@@ -1240,6 +1221,6 @@ export default function ToolsPage({ onStats }) {
           </div>
         </div>
       )}
-    </div>
+    </SectionNav>
   );
 }

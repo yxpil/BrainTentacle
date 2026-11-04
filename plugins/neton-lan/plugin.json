@@ -1,0 +1,24 @@
+{
+  "name": "NetON 网络侦察（MCP 夹具）",
+  "version": "2.0.1",
+  "description": "把 NetON 的零依赖 MCP Streamable HTTP 服务改造成 WorkWith 托管条目：宿主分配端口、探到就绪后自动接入 MCP、六个网络工具随之可用；默认 loopback 作用域护栏，只对本机回环做探测，不扫真实局域网",
+  "permissions": ["workwith"],
+  "services": [
+    {
+      "name": "neton",
+      "label": "NetON MCP 服务",
+      "runtime": "node",
+      "program": "server.js",
+      "port": 0,
+      "mcp_mode": "http",
+      "auto_start": true,
+      "env": { "NETON_SCOPE": "loopback" }
+    }
+  ],
+  "prompts": [
+    "NetON 的六个工具由 MCP 导入、名字不带前缀：device_discovery / network_scan / port_scan / port_analyze / protocol_analyze / packet_capture。夹具默认 loopback 作用域：只有回环目标会被放行，越界目标返回 [neton-scope] 开头的拒绝理由。"
+  ],
+  "skills": [
+    { "name": "本机暴露面体检", "summary": "port_scan 127.0.0.1 常见端口 → port_analyze 抓 banner 指纹 → 汇总本机对外开放面" }
+  ]
+}

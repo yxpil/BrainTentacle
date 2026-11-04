@@ -1,0 +1,13 @@
+{
+  "name": "闸门夹具·图标超量",
+  "version": "0.0.1",
+  "description": "一个插件最多 4 颗对话页图标，第 5 颗应当让它整体加载失败",
+  "permissions": ["chaticon"],
+  "chat_icons": [
+    { "id": "i1", "label": "一", "paths": ["M4 6 H20"], "action": "prompt", "text": "一" },
+    { "id": "i2", "label": "二", "paths": ["M4 9 H20"], "action": "prompt", "text": "二" },
+    { "id": "i3", "label": "三", "paths": ["M4 12 H20"], "action": "prompt", "text": "三" },
+    { "id": "i4", "label": "四", "paths": ["M4 15 H20"], "action": "prompt", "text": "四" },
+    { "id": "i5", "label": "五", "paths": ["M4 18 H20"], "action": "prompt", "text": "五" }
+  ]
+}

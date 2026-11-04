@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../api.js";
-import { IconPlayTri, IconStop, IconTrash, IconWorkWith, IconX } from "../components/Icons.jsx";
+import { IconPlayTri, IconStop, IconTerminal, IconTrash, IconWorkWith, IconX } from "../components/Icons.jsx";
 import { useLang } from "../i18n.js";
 import { confirmDialog } from "../components/ConfirmHost.jsx";
 
@@ -14,11 +14,14 @@ const EMPTY_FORM = {
   cwd: "",
   env: "",
   port: "",
+  mcp_mode: "",
   auto_with_session: false,
+  declared: false,
 };
 
 // 本地服务托管（WorkWith）：条目 CRUD + 启停 + 实时日志 + 会话联动
-export default function WorkWithPage() {
+// embedded：并入插件页的「本地服务」分段时去掉页级限宽与重复标题
+export default function WorkWithPage({ embedded = false, onCount }) {
   const { t } = useLang();
   const [entries, setEntries] = useState([]);
   const [runtimes, setRuntimes] = useState([]);
@@ -31,6 +34,10 @@ export default function WorkWithPage() {
 
   const reload = () =>
     api.listWorkwith().then((r) => setEntries(r.entries || [])).catch(() => {});
+
+  useEffect(() => {
+    onCount?.(entries.length);
+  }, [entries, onCount]);
 
   useEffect(() => {
     reload();
@@ -74,7 +81,9 @@ export default function WorkWithPage() {
       cwd: e.cwd || "",
       env: Object.entries(e.env || {}).map(([k, v]) => `${k}=${v}`).join("\n"),
       port: e.port ? String(e.port) : "",
+      mcp_mode: e.mcp_mode || "",
       auto_with_session: !!e.auto_with_session,
+      declared: !!e.declared,
     });
   };
 
@@ -94,8 +103,10 @@ export default function WorkWithPage() {
       args: form.args.trim().split(/\s+/).filter(Boolean),
       cwd: form.cwd.trim(),
       env,
-      port: Number(form.port) || 0,
+      port: form.mcp_mode === "stdio" ? 0 : Number(form.port) || 0,
+      mcp_mode: form.mcp_mode,
       auto_with_session: form.auto_with_session,
+      declared: !!form.declared,
     };
     setBusy(true);
     try {
@@ -149,17 +160,28 @@ export default function WorkWithPage() {
     }
   };
 
+  const addButton = (
+    <button className="pill pill-hover shrink-0" onClick={() => { setErr(""); setForm({ ...EMPTY_FORM }); }}>
+      {t("ww.add")}
+    </button>
+  );
+
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("ww.title")}</h2>
-          <p className="text-xs text-neutral-500">{t("ww.desc")}</p>
+    <div className={embedded ? "flex flex-col gap-3" : "page"}>
+      {embedded ? (
+        <div className="flex items-center justify-between gap-3">
+          <p className="min-w-0 flex-1 text-xs text-neutral-500">{t("ww.desc")}</p>
+          {addButton}
         </div>
-        <button className="pill pill-hover shrink-0" onClick={() => { setErr(""); setForm({ ...EMPTY_FORM }); }}>
-          {t("ww.add")}
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">{t("ww.title")}</h2>
+            <p className="text-xs text-neutral-500">{t("ww.desc")}</p>
+          </div>
+          {addButton}
+        </div>
+      )}
 
       {err && (
         <div className="card flex items-center gap-2 border-red-200 py-3 text-sm text-red-600">
@@ -195,10 +217,20 @@ export default function WorkWithPage() {
           <textarea className="field rounded-[var(--look-ui-radius,1rem)] min-h-[60px] resize-y"
             rows={2} placeholder={t("ww.envPlaceholder")}
             value={form.env} onChange={(e) => setForm({ ...form, env: e.target.value })} />
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <label className="flex items-center gap-2 text-sm">
+              <span className="shrink-0 text-neutral-600">{t("ww.mcpMode")}</span>
+              <select className="field w-auto" value={form.mcp_mode}
+                onChange={(e) => setForm({ ...form, mcp_mode: e.target.value })}>
+                <option value="">{t("ww.mcpNone")}</option>
+                <option value="http">{t("ww.mcpHttp")}</option>
+                <option value="stdio">{t("ww.mcpStdio")}</option>
+              </select>
+            </label>
+            <label className={`flex items-center gap-2 text-sm ${form.mcp_mode === "stdio" ? "opacity-40" : ""}`}>
               <span className="shrink-0 text-neutral-600">{t("ww.port")}</span>
               <input type="number" min="0" max="65535" className="field w-28" value={form.port}
+                disabled={form.mcp_mode === "stdio"}
                 onChange={(e) => setForm({ ...form, port: e.target.value })} />
             </label>
             <label className="flex cursor-pointer items-center gap-2 text-sm select-none">
@@ -207,7 +239,9 @@ export default function WorkWithPage() {
               {t("ww.auto")}
             </label>
           </div>
-          <p className="text-xs text-neutral-400">{t("ww.autoHint")}</p>
+          <p className="text-xs text-neutral-400">
+            {form.mcp_mode === "stdio" ? t("ww.mcpStdioHint") : t("ww.autoHint")}
+          </p>
           <div className="flex justify-end gap-2">
             <button type="button" className="pill-outline pill-hover" onClick={() => setForm(null)}>{t("ww.cancel")}</button>
             <button className="pill pill-hover" disabled={busy || !form.name.trim() || !form.program.trim()}>
@@ -230,13 +264,17 @@ export default function WorkWithPage() {
                     <span className={`inline-block size-2 shrink-0 rounded-full ${running ? "bg-green-500" : "bg-neutral-300"}`} />
                     <span className="font-semibold break-all" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>{e.name}</span>
                     {running && <span className="chip">{t("ww.running")} · {e.pid}</span>}
-                    {running && e.port > 0 && <span className="chip">{t("ww.linked")}</span>}
+                    {running && (e.port > 0 || e.mcp_mode === "stdio") && (
+                      <span className="chip">{t("ww.linked")}</span>
+                    )}
+                    {e.mcp_mode === "stdio" && <span className="chip">stdio MCP</span>}
                     {e.auto_with_session && <span className="chip">{t("ww.auto")}</span>}
+                    {e.declared && <span className="chip">{t("ww.declared")}</span>}
                   </div>
                   <p className="mt-1 text-sm text-neutral-600 break-all" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
                     {e.runtime_id === "custom" ? "" : `${e.runtime_id} · `}{e.program}
                     {(e.args || []).length > 0 && ` ${e.args.join(" ")}`}
-                    {e.port > 0 && `  ·  :${e.port}`}
+                    {e.mcp_mode === "stdio" ? "" : e.port > 0 && `  ·  :${e.port}`}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
@@ -253,6 +291,13 @@ export default function WorkWithPage() {
                       <IconPlayTri size={14} className="mx-auto" />
                     </button>
                   )}
+                  {/* 日志随手可看：托管条目（如 dsh 桥）常在会话联动/升级迁移时被自动拉起，
+                      用户没点过"启动"也需要有地方翻它的输出 */}
+                  <button title={t("ww.logs")}
+                    className={`icon-btn hover:bg-neutral-100 ${logId === e.id ? "bg-neutral-100" : ""}`}
+                    onClick={() => setLogId(logId === e.id ? "" : e.id)}>
+                    <IconTerminal size={14} className="mx-auto" />
+                  </button>
                   <button title={t("ww.edit")} disabled={busy || running}
                     className="icon-btn text-sm disabled:opacity-40"
                     onClick={() => startEdit(e)}>

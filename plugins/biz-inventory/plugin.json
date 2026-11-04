@@ -1,0 +1,58 @@
+{
+  "name": "仓库库存盘点",
+  "version": "0.9.1",
+  "description": "仓储场景：Node 工具做库存核对、Python 工具算补货建议，看板页 + 详情状态面板",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "settings", "data"],
+  "tools": [
+    {
+      "name": "stock_check",
+      "description": "对比系统库存与实盘数量，找出差异最大的条目",
+      "kind": "interpreter",
+      "runtime": "node",
+      "file": "tools/stock_check.js",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "array", "description": "系统库存 [{sku, qty}]", "items": { "type": "object" } },
+          "counted": { "type": "array", "description": "实盘数量 [{sku, qty}]", "items": { "type": "object" } }
+        },
+        "required": ["system", "counted"]
+      }
+    },
+    {
+      "name": "reorder_advice",
+      "description": "按安全库存与日均销量给出补货建议清单",
+      "kind": "interpreter",
+      "runtime": "python",
+      "file": "tools/reorder_advice.py",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" }, "description": "[{sku, stock, safety, daily_sales}]" }
+        },
+        "required": ["items"]
+      }
+    }
+  ],
+  "prompts": [
+    "涉及库存时优先调用 stock_check 与 reorder_advice；报告差异时按 |差值| 从大到小排。"
+  ],
+  "skills": [{ "name": "月度盘点", "summary": "导出系统库存 → 实盘 → stock_check 对差异 → reorder_advice 出补货单" }],
+  "jobs": [{ "name": "night-count", "schedule": "daily 22:30", "runtime": "node", "file": "jobs/night_count.js" }],
+  "pages": [
+    {
+      "id": "stock",
+      "label": "库存盘点",
+      "src": "web/stock.html",
+      "paths": ["M4 7 L12 3 L20 7 L20 17 L12 21 L4 17 Z", "M4 7 L12 11 L20 7", "M12 11 L12 21"]
+    }
+  ],
+  "status_page": { "id": "status", "label": "盘点状态", "src": "web/status.html" },
+  "settings": {
+    "entries": [
+      { "id": "lead", "label": "补货提前期", "description": "天数，写在 reorder_lead_days 键上", "kw": "库存 补货 提前期 lead" },
+      { "id": "safety", "label": "安全库存系数", "description": "乘在日均销量上", "kw": "安全库存 safety" }
+    ]
+  }
+}

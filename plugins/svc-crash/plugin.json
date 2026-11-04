@@ -1,0 +1,15 @@
+{
+  "name": "假死巡检服务",
+  "version": "0.1.0",
+  "description": "故意让托管服务秒退，用来验证异常登记与页眉异常灯（健康检查的反面用例）",
+  "permissions": ["workwith"],
+  "services": [
+    {
+      "name": "watchdog",
+      "label": "巡检进程",
+      "runtime": "node",
+      "program": "crash.js",
+      "auto_start": true
+    }
+  ]
+}

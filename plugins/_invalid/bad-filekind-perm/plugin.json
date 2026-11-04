@@ -1,0 +1,10 @@
+{
+  "name": "没申报权限的文件类型",
+  "version": "1.0.0",
+  "description": "负面夹具：登记 file_kinds 却没申请 files 权限位，必须整体拒收",
+  "bridge": { "token": "required" },
+  "permissions": ["data"],
+  "file_kinds": [
+    { "id": "x", "label": "X 文件", "exts": [".x"], "paths": ["M4 4h16v16H4z"] }
+  ]
+}

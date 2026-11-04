@@ -1,0 +1,8 @@
+{
+  "name": "闸门夹具·令牌取值非法",
+  "version": "0.0.1",
+  "description": "bridge.token 写成 optional，唯一合法值是 required",
+  "bridge": { "token": "optional" },
+  "permissions": ["page"],
+  "pages": [{ "id": "p", "label": "页面", "src": "web/p.html" }]
+}

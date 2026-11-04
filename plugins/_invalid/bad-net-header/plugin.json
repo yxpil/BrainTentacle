@@ -1,0 +1,14 @@
+{
+  "name": "请求头名写坏的外部连接",
+  "version": "1.0.0",
+  "description": "负面夹具：头名里有空格（不是合法 HTTP token），必须整体拒收",
+  "permissions": ["net"],
+  "connections": [
+    {
+      "name": "hdr",
+      "label": "坏头名",
+      "url": "https://a.example.com/mcp",
+      "headers": { "Bad Name": "x" }
+    }
+  ]
+}

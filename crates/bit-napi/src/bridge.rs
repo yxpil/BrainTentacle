@@ -74,6 +74,11 @@ fn opt_u64(args: &serde_json::Value, key: &str) -> Option<u64> {
     arg(args, key).and_then(|v| v.as_u64())
 }
 
+/// 可选整数（u32 型配置）：超范围的位宽截断交给核心侧 clamp，不在这里报错
+fn opt_u32(args: &serde_json::Value, key: &str) -> Option<u32> {
+    opt_u64(args, key).map(|v| v.min(u32::MAX as u64) as u32)
+}
+
 /// 任意 JSON 参数：缺省 Null
 fn a_val(args: &serde_json::Value, key: &str) -> serde_json::Value {
     arg(args, key).cloned().unwrap_or(serde_json::Value::Null)
@@ -266,6 +271,39 @@ pub async fn dispatch(
             )
         }
         "get_tool_env_settings" => bit_core::commands_api::get_tool_env_settings(ctx),
+        // 托管服务生命周期调参：启动延时 / 就绪上限 / 崩溃重试 / 停止宽限 / 日志行数
+        "get_service_tuning" => bit_core::commands_api::get_service_tuning(ctx),
+        "set_service_tuning" => bit_core::commands_api::set_service_tuning(
+            ctx,
+            opt_u32(&args, "start_delay_ms"),
+            opt_u32(&args, "ready_secs"),
+            opt_u32(&args, "retries"),
+            opt_u32(&args, "stop_grace_secs"),
+            opt_u32(&args, "log_lines"),
+        ),
+        // 出网代理（企业内网）：读写设置 + 连通性检测
+        "get_proxy_config" => bit_core::commands_api::get_proxy_config(ctx),
+        "set_proxy_config" => {
+            bit_core::commands_api::set_proxy_config(
+                ctx,
+                a_str(&args, "mode")?,
+                opt_str(&args, "url").unwrap_or_default(),
+                opt_str(&args, "user").unwrap_or_default(),
+                opt_str(&args, "pass").unwrap_or_default(),
+                opt_str(&args, "bypass").unwrap_or_default(),
+                opt_bool(&args, "exportEnv").or_else(|| opt_bool(&args, "export_env")),
+                opt_bool(&args, "failOpen").or_else(|| opt_bool(&args, "fail_open")),
+                opt_str(&args, "caFile").unwrap_or_else(|| opt_str(&args, "ca_file").unwrap_or_default()),
+                opt_bool(&args, "insecure"),
+            )
+        }
+        "probe_local_proxy" => bit_core::commands_api::probe_local_proxy(ctx),
+        "test_proxy" => {
+            bit_core::commands_api::test_proxy(ctx, opt_str(&args, "target").unwrap_or_default())
+                .await
+        }
+        "get_tool_loading" => bit_core::commands_api::get_tool_loading(ctx),
+        "set_tool_loading" => bit_core::commands_api::set_tool_loading(ctx, a_bool(&args, "lazy_tools")?),
         "set_tool_env_settings" => {
             bit_core::commands_api::set_tool_env_settings(
                 ctx,
@@ -290,14 +328,65 @@ pub async fn dispatch(
         "set_hotkey" => bit_core::commands_api::set_hotkey(ctx, a_str(&args, "hotkey")?.as_str()),
         "get_syntax_check" => bit_core::commands_api::get_syntax_check(ctx),
         "set_syntax_check" => bit_core::commands_api::set_syntax_check(ctx, a_bool(&args, "enabled")?),
+        // 任务完成提示音：档位 + 音量 + 自定义音频（用户从本机选，落 data_dir/sounds）
+        "get_notify_sound" => bit_core::commands_api::get_notify_sound(ctx),
+        "set_notify_sound" => bit_core::commands_api::set_notify_sound(
+            ctx,
+            a_str(&args, "mode")?,
+            args.get("volume").and_then(|v| v.as_u64()).map(|v| v as u32),
+        ),
+        "set_custom_sound" => bit_core::commands_api::set_custom_sound(ctx, a_str(&args, "name")?, a_str(&args, "data")?),
         "get_system_prompt" => bit_core::commands_api::get_system_prompt(ctx),
         "set_system_prompt" => bit_core::commands_api::set_system_prompt(ctx, a_str(&args, "system_prompt")?),
 
         // ---------- 插件 ----------
         "list_plugins" => bit_core::commands_api::list_plugins(ctx),
         "toggle_plugin" => bit_core::commands_api::toggle_plugin(ctx, a_str(&args, "id")?, a_bool(&args, "enabled")?),
+        "set_plugin_permission" => bit_core::commands_api::set_plugin_permission(
+            ctx,
+            a_str(&args, "id")?,
+            a_str(&args, "perm")?,
+            a_bool(&args, "granted")?,
+        ),
         "refresh_plugins" => bit_core::commands_api::refresh_plugins(ctx),
+        "plugin_health" => bit_core::commands_api::plugin_health(ctx),
         "get_plugin_ui" => bit_core::commands_api::get_plugin_ui(ctx),
+        // 插件自带服务器 + 独立页面（清单声明 server / pages 并过了权限位校验才可用）
+        "get_plugin_pages" => bit_core::commands_api::get_plugin_pages(ctx),
+        // 插件注入设置中心的条目与独立设置页；能力调用与 HTTP /cap 共用同一条实现
+        "get_plugin_settings" => bit_core::commands_api::get_plugin_settings(ctx),
+        // 插件登记到对话页图标排的入口（需 chaticon 权限，清单校验阶段把关）
+        "get_plugin_chat_icons" => bit_core::commands_api::get_plugin_chat_icons(ctx),
+        // 插件接管的宿主内置入口（对话页隐藏 + 设置中心恢复；设置槽位不可接管）
+        "get_plugin_takeovers" => bit_core::commands_api::get_plugin_takeovers(ctx),
+        "set_plugin_takeover" => bit_core::commands_api::set_plugin_takeover(
+            ctx,
+            a_str(&args, "id")?,
+            a_str(&args, "slot")?,
+            a_bool(&args, "granted")?,
+        ),
+        "plugin_cap_call" => bit_core::commands_api::plugin_cap_call(
+            ctx,
+            a_str(&args, "id")?,
+            a_str(&args, "verb")?,
+            a_val(&args, "payload"),
+        )
+        .await,
+        "start_plugin_server" => bit_core::commands_api::start_plugin_server(ctx, a_str(&args, "id")?).await,
+        "stop_plugin_server" => bit_core::commands_api::stop_plugin_server(ctx, a_str(&args, "id")?).await,
+        // 插件清单 connections[] 声明的外部 MCP 连接：手动连/断（列表随 list_plugins 一起下发）
+        "connect_plugin_net" => bit_core::commands_api::connect_plugin_net(
+            ctx,
+            a_str(&args, "id")?,
+            a_str(&args, "name")?,
+        )
+        .await,
+        "disconnect_plugin_net" => bit_core::commands_api::disconnect_plugin_net(
+            ctx,
+            a_str(&args, "id")?,
+            a_str(&args, "name")?,
+        ),
+        "plugin_server_logs" => bit_core::commands_api::plugin_server_logs(a_str(&args, "id")?, opt_u64(&args, "tail")),
 
         // ---------- AI（多协议提供方） ----------
         "list_providers" => bit_core::commands_api::list_providers(ctx),
@@ -367,6 +456,7 @@ pub async fn dispatch(
             .await
         }
         "chat_interrupt" => bit_core::commands_api::chat_interrupt(ctx, a_str(&args, "session_id")?).await,
+        "running_turns" => bit_core::commands_api::running_turns(ctx),
         "regenerate_last" => {
             bit_core::commands_api::regenerate_last(
                 ctx,
@@ -382,7 +472,10 @@ pub async fn dispatch(
         "get_tool_approval" => bit_core::commands_api::get_tool_approval(ctx).await,
 
         // ---------- 附件 / 网页 / 端口 ----------
-        "extract_file" => bit_core::commands_api::extract_file(a_str(&args, "filename")?, a_str(&args, "data")?).await,
+        "extract_file" => bit_core::commands_api::extract_file(ctx, a_str(&args, "filename")?, a_str(&args, "data")?, opt_str(&args, "path")).await,
+        "extract_path" => bit_core::commands_api::extract_path(ctx, a_str(&args, "path")?).await,
+        "stat_path" => bit_core::commands_api::stat_path(a_str(&args, "path")?),
+        "plugin_file_kinds" => bit_core::commands_api::plugin_file_kinds(),
         "fetch_webpage" => bit_core::commands_api::fetch_webpage(a_str(&args, "url")?).await,
         "check_port" => {
             bit_core::commands_api::check_port(a_str(&args, "host")?, a_u64(&args, "port")? as u16).await
@@ -439,8 +532,19 @@ pub async fn dispatch(
             args.get("templates").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
         ),
         "list_sessions" => bit_core::commands_api::list_sessions(ctx),
+        "search_sessions" => bit_core::commands_api::search_sessions(ctx, a_str(&args, "query")?),
         "get_session" => bit_core::commands_api::get_session(ctx, a_str(&args, "session_id")?),
         "create_session" => bit_core::commands_api::create_session(ctx, a_str(&args, "title")?),
+        "fork_session" => bit_core::commands_api::fork_session(
+            ctx,
+            a_str(&args, "session_id")?,
+            arg(&args, "message_index").and_then(|v| v.as_u64()).unwrap_or(u64::MAX) as usize,
+        ),
+        "rollback_session" => bit_core::commands_api::rollback_session(
+            ctx,
+            a_str(&args, "session_id")?,
+            arg(&args, "message_index").and_then(|v| v.as_u64()).unwrap_or(u64::MAX) as usize,
+        ),
         "set_active_session" => bit_core::commands_api::set_active_session(ctx, a_str(&args, "session_id")?),
         "rename_session" => {
             bit_core::commands_api::rename_session(ctx, a_str(&args, "session_id")?, a_str(&args, "title")?)
@@ -451,6 +555,12 @@ pub async fn dispatch(
         }
         "set_session_color" => {
             bit_core::commands_api::set_session_color(ctx, a_str(&args, "session_id")?, a_str(&args, "color")?)
+        }
+        "set_session_group" => {
+            bit_core::commands_api::set_session_group(ctx, a_str(&args, "session_id")?, a_str(&args, "group")?)
+        }
+        "rename_session_group" => {
+            bit_core::commands_api::rename_session_group(ctx, a_str(&args, "from")?, a_str(&args, "to")?)
         }
         "delete_sessions" => bit_core::commands_api::delete_sessions(ctx, a_str_vec(&args, "session_ids")?),
         "clear_session" => bit_core::commands_api::clear_session(ctx, a_str(&args, "session_id")?),
@@ -479,6 +589,17 @@ pub async fn dispatch(
             bit_core::commands_api::update_todo_status(ctx, a_str(&args, "id")?, a_str(&args, "status")?)
         }
         "remove_todo" => bit_core::commands_api::remove_todo(ctx, a_str(&args, "id")?),
+        // 给待办挂定时（到点由 goal::schedule_todos_loop 触发）：此前只有模型侧工具能设，UI 没有入口
+        "schedule_todo" => {
+            let msg = bit_core::goal::schedule_task_set(
+                ctx,
+                &a_str(&args, "id")?,
+                &a_str(&args, "action")?,
+                opt_str(&args, "scheduled_at").as_deref(),
+                opt_str(&args, "schedule").as_deref(),
+            )?;
+            Ok(serde_json::json!({ "message": msg }))
+        }
 
         // ---------- 文件打开 ----------
         "open_path" => bit_core::commands_api::open_path(ctx, a_str(&args, "path")?, opt_bool(&args, "reveal")),
@@ -513,6 +634,7 @@ pub async fn dispatch(
                 opt_bool(&args, "l2pass_enabled"),
                 opt_str(&args, "l2pass_provider_id"),
                 opt_bool(&args, "l2pass_cover_auto"),
+                opt_str(&args, "l2pass_prompt"),
             )
         }
 

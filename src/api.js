@@ -41,12 +41,51 @@ export const api = {
   getToolEnvSettings: () => invoke("get_tool_env_settings"),
   setToolEnvSettings: (tool_timeout_secs, default_shell) =>
     invoke("set_tool_env_settings", { toolTimeoutSecs: tool_timeout_secs, defaultShell: default_shell }),
+  // 托管服务生命周期（启动延时/就绪上限/重试次数/停止宽限/日志行数）：
+  // 只传要改的项，缺省项由核心保持原值；核心钳制后回显真正生效的一组数
+  getServiceTuning: () => invoke("get_service_tuning", {}),
+  setServiceTuning: (patch) =>
+    invoke(
+      "set_service_tuning",
+      Object.fromEntries(
+        Object.entries(patch || {}).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]),
+      ),
+    ),
+  // 出网代理（企业内网）：模式 system/direct/custom；设置成功后 core 立刻改本进程口径
+  getProxyConfig: () => invoke("get_proxy_config"),
+  setProxyConfig: (mode, url, user, pass, bypass, exportEnv, failOpen, caFile, insecure) =>
+    invoke("set_proxy_config", { mode, url, user, pass, bypass, exportEnv, failOpen, caFile, insecure }),
+  // 连通性检测：target 留空 = 探当前激活提供方的端点
+  testProxy: (target) => invoke("test_proxy", { target: target || "" }),
+  // 本机常见代理客户端端口（Clash / v2rayN / Squid…）探活，省得用户猜端口
+  probeLocalProxy: () => invoke("probe_local_proxy"),
+  // 工具按需加载：只常驻 skill 的 schema，其余工具由 AI 用 skill(action=load_tool) 现场调取
+  getToolLoading: () => invoke("get_tool_loading"),
+  setToolLoading: (lazy_tools) => invoke("set_tool_loading", { lazyTools: lazy_tools }),
   // 本地插件（toolhomes/plugins/*/plugin.json）
   listPlugins: () => invoke("list_plugins"),
   togglePlugin: (id, enabled) => invoke("toggle_plugin", { id, enabled }),
+  // 逐权限开关：只影响运行时，不改插件包与哈希基线
+  setPluginPermission: (id, perm, granted) => invoke("set_plugin_permission", { id, perm, granted }),
   refreshPlugins: () => invoke("refresh_plugins"),
+  // 插件运行异常（崩溃 / 启动失败 / 端口未就绪）：页眉异常灯的数据源
+  pluginHealth: () => invoke("plugin_health"),
   // 插件 UI 资源包：启用且通过安全校验的插件 css/js（渲染层插件加载器读取）
   getPluginUi: () => invoke("get_plugin_ui"),
+  // 插件独立页面清单（iframe）+ 插件本机服务基址
+  getPluginPages: () => invoke("get_plugin_pages"),
+  // 插件登记到对话页图标排的入口（需 chaticon 权限）
+  getPluginChatIcons: () => invoke("get_plugin_chat_icons"),
+  // 插件接管的宿主内置入口（需 takeover 权限；设置槽位不可接管）
+  getPluginTakeovers: () => invoke("get_plugin_takeovers"),
+  setPluginTakeover: (id, slot, granted) => invoke("set_plugin_takeover", { id, slot, granted }),
+  // 插件自带服务器：状态在 list_plugins 的 server 字段里，这里只管启停与日志
+  startPluginServer: (id) => invoke("start_plugin_server", { id }),
+  // 插件清单 connections[] 声明的外部 MCP 连接：手动连/断（状态随 list_plugins 一起下发）
+  connectPluginNet: (id, name) => invoke("connect_plugin_net", { id, name }),
+  disconnectPluginNet: (id, name) => invoke("disconnect_plugin_net", { id, name }),
+  stopPluginServer: (id) => invoke("stop_plugin_server", { id }),
+  pluginServerLogs: (id, tail) => invoke("plugin_server_logs", { id, tail: tail || null }),
   // 用户自定义提示词/人设
   getCustomPrompt: () => invoke("get_custom_prompt"),
   setCustomPrompt: (custom_prompt) => invoke("set_custom_prompt", { customPrompt: custom_prompt }),
@@ -62,12 +101,13 @@ export const api = {
   scanHiddenCandidates: (text) => invoke("scan_hidden_candidates", { text }),
   // 安全中心：HiddenCode / L2 PASS 总开关与审核 provider
   getSecuritySettings: () => invoke("get_security_settings"),
-  setSecuritySettings: (hidden_code_enabled, l2pass_enabled, l2pass_provider_id, l2pass_cover_auto) =>
+  setSecuritySettings: (hidden_code_enabled, l2pass_enabled, l2pass_provider_id, l2pass_cover_auto, l2pass_prompt) =>
     invoke("set_security_settings", {
       hiddenCodeEnabled: hidden_code_enabled,
       l2passEnabled: l2pass_enabled,
       l2passProviderId: l2pass_provider_id,
       l2passCoverAuto: l2pass_cover_auto,
+      l2passPrompt: l2pass_prompt,
     }),
   // blocked_words 敏感词表：传数组=整体替换；传 [] = 恢复内置默认；不传 = 保持原值
   setBehaviorSettings: (auto_drive, tool_approval, moderation_enabled, auto_delegate, compat_mode, subagent_max, blocked_words) =>
@@ -133,6 +173,8 @@ export const api = {
   getAppHotkeys: () => invoke("get_app_hotkeys"),
   // 聊天工具栏剪刀按钮：macOS screencapture 框选 → 剪贴板 → 挂输入框附件（Electron 专属）
   screenshotRegion: () => invoke("screenshot_region"),
+  // 内嵌网页截图：按 webview 的 webContentsId 截当前视口，PNG 走 screenshot-capture 事件附到输入框
+  webCapture: (web_contents_id) => invoke("web_capture", { webContentsId: web_contents_id }),
   setAppHotkeys: (screenshot, voice) => invoke("set_app_hotkeys", { screenshot: screenshot ?? null, voice: voice ?? null }),
   // 全局语音转写结果粘贴回原前台应用（macOS osascript；Windows 按 HWND 抢回前台再注入）
   pasteTextToForeground: (text, bundleId, hwnd) =>
@@ -155,11 +197,17 @@ export const api = {
     }
   },
   // 解析上传文件：Excel→Markdown 表格 / Word(.docx)→纯文本 / CSV→原文。data 为 base64（可含 data:URL 前缀）
-  extractFile: (filename, data) => invoke("extract_file", { filename, data }),
+  extractFile: (filename, data, path) => invoke("extract_file", { filename, data, ...(path ? { path } : {}) }),
+  // 只有绝对路径的文件（侧栏预览、AI 发来的文件卡片）走这条：核心读盘解析，界面不搬字节
+  extractPath: (path) => invoke("extract_path", { path }),
+  // 文件基本信息（大小/修改时间/能不能解析）：右键「查看详情」用，不读内容
+  statPath: (path) => invoke("stat_path", { path }),
   // 用系统默认程序打开文件；reveal=true 时打开所在文件夹并定位
   openPath: (path, reveal) => invoke("open_path", { path, reveal: !!reveal }),
   // 另存为：原生保存对话框，path 支持本地路径或 data:URL；返回保存路径（取消 null）
   saveFileAs: (path, suggestedName) => invoke("save_file_as", { path, suggestedName: suggestedName || null }),
+  // 右侧预览面板编辑后回写（宿主侧命令，非 Rust）
+  fsWriteText: (path, content) => invoke("fs_write_text", { path, content }),
   // 抓取网页正文，返回 { title, text }
   fetchWebpage: (url) => invoke("fetch_webpage", { url }),
   // 端口冲突检测：返回 { available, addr, reason? }
@@ -227,12 +275,24 @@ export const api = {
 
   // ── 中断 / 工具审批 / 上下文预览 ──
   chatInterrupt: (session_id) => invoke("chat_interrupt", { sessionId: session_id || "" }),
+  // 回合真相：核心此刻确实有回合在跑的会话 id（渲染层的忙表靠它纠偏）
+  getRunningTurns: () => invoke("running_turns", {}),
   toolApprove: (id, allow) => invoke("tool_approve", { id, allow }),
   setToolApproval: (mode) => invoke("set_tool_approval", { mode }),
   getToolApproval: () => invoke("get_tool_approval"),
   askAnswer: (id, choices, supplement) => invoke("ask_answer", { id, choices, supplement }),
   getAutostart: () => invoke("get_autostart"),
   setAutostart: (enabled) => invoke("set_autostart", { enabled }),
+  // 阻止系统休眠（Electron powerSaveBlocker）：长任务期间不让系统睡眠，屏幕仍可关闭
+  getPreventSleep: () => invoke("get_prevent_sleep"),
+  setPreventSleep: (enabled) => invoke("set_prevent_sleep", { enabled }),
+  // 任务完成提示音：档位 default/custom/error-only + 音量（0–100）+ 自定义音频文件
+  getNotifySound: () => invoke("get_notify_sound"),
+  setNotifySound: (mode, volume) => invoke("set_notify_sound", { mode, volume }),
+  setCustomSound: (name, data) => invoke("set_custom_sound", { name, data }),
+  // 托盘悬浮预览：鼠标停在托盘图标上多久才弹状态小窗（0 = 关闭）
+  getTrayHover: () => invoke("get_tray_hover"),
+  setTrayHover: (delay) => invoke("set_tray_hover", { delay }),
   // 全局快捷键：唤出主界面（空 = 关闭）
   getHotkey: () => invoke("get_hotkey"),
   setHotkey: (hotkey) => invoke("set_hotkey", { hotkey }),
@@ -257,8 +317,16 @@ export const api = {
   contextPreview: (session_id) => invoke("context_preview", { sessionId: session_id || "" }),
   contextMetrics: (session_id) => invoke("context_metrics", { sessionId: session_id || "" }),
   listSessions: () => invoke("list_sessions"),
+  // 会话搜索：标题 + 消息正文（core 侧扫内存 SessionStore，返回 id 与命中片段）
+  searchSessions: (query) => invoke("search_sessions", { query }),
   getSession: (session_id) => invoke("get_session", { sessionId: session_id || "" }),
   createSession: (title) => invoke("create_session", { title: title || "" }),
+  // 从某条消息分叉：复制到该条（含）的历史到新会话，并激活它
+  forkSession: (session_id, message_index) =>
+    invoke("fork_session", { sessionId: session_id, messageIndex: message_index }),
+  // 从此处回退：删除这条之后的消息，并恢复这些步骤改过的文件（只支持最近 10 条）
+  rollbackSession: (session_id, message_index) =>
+    invoke("rollback_session", { sessionId: session_id, messageIndex: message_index }),
   setActiveSession: (session_id) => invoke("set_active_session", { sessionId: session_id }),
   renameSession: (session_id, title) => invoke("rename_session", { sessionId: session_id, title }),
   deleteSession: (session_id) => invoke("delete_session", { sessionId: session_id }),
@@ -266,6 +334,9 @@ export const api = {
   setSessionFavorite: (session_id, favorite) =>
     invoke("set_session_favorite", { sessionId: session_id, favorite }),
   setSessionColor: (session_id, color) => invoke("set_session_color", { sessionId: session_id, color }),
+  // 会话分组：空串 = 移出分组；分组只存在会话上的名字里，不单独建表
+  setSessionGroup: (session_id, group) => invoke("set_session_group", { sessionId: session_id, group }),
+  renameSessionGroup: (from, to) => invoke("rename_session_group", { from, to }),
   clearSession: (session_id) => invoke("clear_session", { sessionId: session_id || "" }),
   listMemories: () => invoke("list_memories"),
   addMemory: (content) => invoke("add_memory", { content }),
@@ -281,5 +352,7 @@ export const api = {
   addTodo: (content, goal_id) => invoke("add_todo", { content, goalId: goal_id }),
   updateTodoStatus: (id, status) => invoke("update_todo_status", { id, status }),
   removeTodo: (id) => invoke("remove_todo", { id }),
+  scheduleTodo: (id, action, scheduled_at, schedule) =>
+    invoke("schedule_todo", { id, action, scheduledAt: scheduled_at ?? null, schedule: schedule ?? null }),
   quitApp: () => invoke("quit_app"),
 };

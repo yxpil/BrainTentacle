@@ -87,7 +87,13 @@ window.__TAURI_INTERNALS__ = {
       return eventId;
     }
     if (cmd === 'plugin:event|unlisten') {
-      eventListeners.get(args.event)?.delete(args.eventId);
+      const m = eventListeners.get(args.event);
+      const handlerId = m?.get(args.eventId);
+      m?.delete(args.eventId);
+      // 只删监听表会漏掉 callbacks：@tauri-apps/api 的 unlisten 不保证回调注销，
+      // 而 ChatPage 每次切会话都成批 listen/unlisten —— 不补这一刀就是无界增长。
+      // 重复 delete 无害（Map.delete 对不存在的 key 是空操作），所以不必判断调用方。
+      if (handlerId) callbacks.delete(handlerId);
       return null;
     }
     if (cmd === 'plugin:event|emit' || cmd === 'plugin:event|emit_to') {

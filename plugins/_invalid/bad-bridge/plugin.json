@@ -1,0 +1,7 @@
+{
+  "name": "闸门夹具·缺令牌声明",
+  "version": "0.0.1",
+  "description": "声明了 pages 却没写 bridge.token，应当被要求明示令牌契约",
+  "permissions": ["page"],
+  "pages": [{ "id": "p", "label": "页面", "src": "web/p.html" }]
+}

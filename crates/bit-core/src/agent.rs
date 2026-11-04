@@ -45,6 +45,84 @@ fn register_interrupt(ctx: &Arc<Ctx>, target: &str) -> Arc<AtomicBool> {
     flag
 }
 
+/// 首条消息的会话标题：与 Autopilot 提炼 SKILL「短名称」同一套思路——让模型概括内容，
+/// 而不是把首句截断当标题。后台执行，不拖慢本轮回复；模型不可用或调用失败时保留占位标题。
+/// provisional 是写入时截取的占位标题：生成期间用户手动改名（或别的逻辑改了名）就放弃覆盖。
+fn spawn_auto_title(ctx: &Arc<Ctx>, target: &str, seed: &str, provisional: &str) {
+    if !ctx.ai_config.lock().unwrap().is_configured() {
+        return;
+    }
+    let ctx2 = ctx.clone();
+    let sid = target.to_string();
+    let seed = seed.to_string();
+    let provisional = provisional.to_string();
+    crate::task::spawn(async move {
+        let prompt = format!(
+            "根据用户的第一条消息，为这段对话起一个简短标题，概括这段对话的主题，\
+             不超过 12 个汉字（或 40 个字符），使用与消息相同的语言。\
+             只输出标题本身，不要引号、标点、序号或任何前后缀：\n{seed}"
+        );
+        let reply = match ai::chat(&ctx2, &[ChatMessage::user(prompt)]).await {
+            Ok(r) => r,
+            Err(_) => return, // 标题属于锦上添花：失败静默，保留占位
+        };
+        let Some(title) = clean_generated_title(&reply) else { return };
+        // 先合并宿主进程的最新会话：用户若在生成期间改了名，这里才能看到并放弃覆盖
+        crate::session::merge_external(&ctx2);
+        let changed = {
+            let mut store = ctx2.sessions.lock().unwrap();
+            match store.sessions.iter_mut().find(|s| s.id == sid) {
+                Some(s) if s.title == provisional => {
+                    s.title = title;
+                    // 标题生成跑在 worker 进程：宿主按「updated 新者胜」合并。同秒完成时把
+                    // 时间戳严格推进 1 秒，否则这次只改标题的变更会被宿主旧缓存盖回去
+                    let now = chrono::Local::now();
+                    let stamp = now.format("%Y-%m-%d %H:%M:%S").to_string();
+                    s.updated = if stamp > s.updated {
+                        stamp
+                    } else {
+                        (now + chrono::Duration::seconds(1))
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string()
+                    };
+                    true
+                }
+                _ => false, // 会话已删或标题已被改：不覆盖
+            }
+        };
+        if changed {
+            crate::session::persist(&ctx2);
+            ctx2.emit("sessions-updated", json!(sid));
+        }
+    });
+}
+
+/// 清洗模型返回的标题：取首个非空行，去掉列表符号/包裹引号与句末标点，限长 24 字符
+fn clean_generated_title(reply: &str) -> Option<String> {
+    let line = reply.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let t = line
+        .trim_start_matches(|c: char| {
+            c.is_whitespace() || matches!(c, '#' | '-' | '>' | '·' | '•')
+        })
+        .trim_matches(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '"' | '\'' | '`' | '*' | '“' | '”' | '‘' | '’' | '「' | '」' | '《' | '》'
+                )
+        })
+        .trim_end_matches(|c: char| {
+            matches!(c, '。' | '！' | '？' | '.' | '!' | '?' | '：' | ':' | '、' | '，' | ',')
+        })
+        .trim();
+    let t: String = t.chars().take(24).collect();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
 pub fn clear_interrupt(ctx: &Arc<Ctx>, target: &str, flag: &Arc<AtomicBool>) {
     let mut map = ctx.interrupts.lock().unwrap();
     // 仅当映射中仍是本回合注册的标志时才摘除：防止误删并发/更新回合刚注册的
@@ -106,6 +184,20 @@ fn history_window<'a>(msgs: &'a [ChatMessage]) -> &'a [ChatMessage] {
 fn opt_thinking(t: &std::sync::Mutex<String>) -> Option<String> {
     let s = t.lock().unwrap().trim().to_string();
     (!s.is_empty()).then_some(s)
+}
+
+/// 取出工具结果里的文件快照 id（核心内部字段）：挂到记录上供「回退到此」恢复文件，
+/// 留在 result 里会污染前端展示与模型回喂，所以取完即删
+fn take_checkpoints(result: &mut serde_json::Value) -> Vec<String> {
+    let ids = result
+        .get("_checkpoints")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    if let Some(obj) = result.as_object_mut() {
+        obj.remove("_checkpoints");
+    }
+    ids
 }
 
 /// 给 `round_tools_starting` 事件生成工具的简短描述（前端 spinner 卡片显示）
@@ -261,10 +353,10 @@ pub(crate) async fn request_approval(
     outcome
 }
 
-/// auto 模式下自动通过的工具：沉淀类（记忆/技能/目标/待办/AI 自写工具）与只读类查询
 /// 审批判定：该模式下此工具是否免询问自动放行
 /// - allow_all：全部放行
 /// - auto：安全工具（沉淀类 / 只读类）放行，其余询问
+/// - l2pass：全部交给 L2 审核模型判定，不直接放行（见 execute_tool_call）
 /// - ask（及其他值）：一律询问
 pub(crate) fn auto_pass(mode: &str, tool: &str) -> bool {
     mode == "allow_all" || (mode == "auto" && is_safe_tool(tool))
@@ -326,11 +418,14 @@ pub async fn execute_tool_call(
     // 后续 L2 审核用原始 params（占位符态，真实值不外发），审批展示与所有执行分支用 real
     let params_real = crate::hidden_code::unmask_params(ctx, params);
     let mode = ctx.config.lock().unwrap().tool_approval.clone();
+    // l2pass 审批模式：所有工具都先过 L2 审核（不依赖 L2 总开关），
+    // Allow → 直接执行，Deny → 拒绝，Unavailable（未选 provider/超时）→ 回退人工审批
+    let l2pass_mode = mode == "l2pass";
     if auto_pass(&mode, name) {
         // 自动放行工具可选 L2 审核覆盖：Deny → 拦截；
         // Unavailable（未启用/未选 provider/超时）→ 保持原自动放行语义，不回退人工
         if ctx.config.lock().unwrap().l2pass_cover_auto {
-            match crate::l2pass::audit(ctx, name, params).await {
+            match crate::l2pass::audit(ctx, name, params, false).await {
                 crate::l2pass::Verdict::Allow => {
                     crate::l2pass::record_audit(ctx, "tool.l2pass_allow", name, None, true);
                 }
@@ -344,10 +439,13 @@ pub async fn execute_tool_call(
             }
         }
     } else {
-        // L2 PASS 二级模型审核（实验）：Deny → 拒绝；Unavailable（未启用/超时/报错）→ 落回人工审批
-        match crate::l2pass::audit(ctx, name, params).await {
+        // L2 PASS 二级模型审核：Allow → 直接执行（不再人工审批）；Deny → 拒绝；
+        // Unavailable（未启用/超时/报错）→ 落回人工审批
+        let mut l2_allowed = false;
+        match crate::l2pass::audit(ctx, name, params, l2pass_mode).await {
             crate::l2pass::Verdict::Allow => {
                 crate::l2pass::record_audit(ctx, "tool.l2pass_allow", name, None, true);
+                l2_allowed = true;
             }
             crate::l2pass::Verdict::Deny(reason) => {
                 crate::l2pass::record_audit(ctx, "tool.l2pass_deny", name, Some(&reason), false);
@@ -357,7 +455,9 @@ pub async fn execute_tool_call(
                 crate::l2pass::record_audit(ctx, "tool.l2pass_unavailable", name, None, true);
             }
         }
-        request_approval(ctx, name, &params_real, session_id, "ai-self").await?;
+        if !l2_allowed {
+            request_approval(ctx, name, &params_real, session_id, "ai-self").await?;
+        }
     }
     match name {
         // ---- AI 基础能力：用本机解释器直接执行一段 JS/PY 代码（临时，不落地） ----
@@ -794,6 +894,7 @@ pub async fn chat_turn(
         crate::workwith::ensure_auto_started(ctx);
     }
     // 1) 追加用户消息到目标会话
+    let mut title_seed: Option<(String, String)> = None;
     {
         let mut store = ctx.sessions.lock().unwrap();
         let sess = if session_id.is_empty() {
@@ -801,12 +902,15 @@ pub async fn chat_turn(
         } else {
             store.get_mut(session_id).ok_or("会话不存在")?
         };
-        // 首条用户消息用于自动命名会话（仅当仍是默认标题：不覆盖 sub_agent 传入的标题与用户手动改名）
+        // 首条用户消息用于自动命名会话（仅当仍是默认标题：不覆盖 sub_agent 传入的标题与用户手动改名）。
+        // 先截首句占位保证侧栏立刻有名字，随后交给 AI 概括成短标题（见 spawn_auto_title）
         if sess.title.trim().is_empty() || sess.title == "新对话" {
             let title: String = user_input.chars().take(20).collect();
             sess.title = title.replace('\n', " ");
+            title_seed = Some((sess.title.clone(), user_input.to_string()));
         }
-        sess.messages.push(ChatMessage::user(user_input));
+        // 图片同时记在消息上：气泡要能回显发出去的图（模型侧仍用独立 images 参数）
+        sess.messages.push(ChatMessage { images: images.clone(), ..ChatMessage::user(user_input) });
         sess.touch();
         if sess.messages.len() > CHAT_MAX {
             let drop_n = sess.messages.len() - CHAT_MAX;
@@ -814,6 +918,9 @@ pub async fn chat_turn(
         }
     }
     crate::session::persist(ctx);
+    if let Some((provisional, seed)) = title_seed {
+        spawn_auto_title(ctx, &target, &seed, &provisional);
+    }
 
     let iflag = register_interrupt(ctx, &target);
 
@@ -848,7 +955,7 @@ pub async fn chat_turn(
         let mut v = vec![ChatMessage::system(sys)];
         // 只取最近若干条，且剥离 tool_calls（模型请求只需 role/content）
         for (role, content) in history {
-            v.push(ChatMessage { role, content, tool_calls: Vec::new(), thinking: None, ts: None, diagram: None });
+            v.push(ChatMessage { role, content, tool_calls: Vec::new(), thinking: None, ts: None, diagram: None, images: Vec::new() });
         }
         v
     };
@@ -879,7 +986,7 @@ pub async fn chat_turn(
         let (reply, native_calls): (String, Vec<ai::NativeToolCall>) = if native_mode {
             // 流式原生请求（文本/思考增量实时到达；HTTP API 无事件通道，回调仅作聚合）
             let attempt = tokio::select! {
-                r = ai::chat_native_round_stream(ctx, &convo, round_images, &native_exchanges, |_ev| true) => r,
+                r = ai::chat_native_round_stream(ctx, &convo, round_images, &native_exchanges, Some(&target), |_ev| true) => r,
                 _ = wait_interrupt(ctx, &target) => Err(ai::NativeErr::Other(String::new())),
             };
             if interrupted(ctx, &target) {
@@ -1039,11 +1146,13 @@ pub async fn chat_turn(
                 if let Some(p) = result.get("path").and_then(|x| x.as_str()) {
                     emit_preview_card(ctx, &target, p);
                 }
+                let checkpoints = take_checkpoints(&mut result);
                 records.push(crate::ai::ToolCallRecord {
                     tool: call.name.clone(),
                     params: call.args.clone(),
                     ok,
                     result,
+                    checkpoints,
                 });
             }
 
@@ -1239,6 +1348,7 @@ async fn chat_turn_stream_inner(
         crate::workwith::ensure_auto_started(ctx);
     }
     // 1) 追加用户消息（重生成路径 user_input=None：历史已就位，直接跑回合不写消息）
+    let mut title_seed: Option<(String, String)> = None;
     if let Some(ui) = user_input {
         {
             let mut store = ctx.sessions.lock().unwrap();
@@ -1247,12 +1357,15 @@ async fn chat_turn_stream_inner(
             } else {
                 store.get_mut(session_id).ok_or("会话不存在")?
             };
-            // 首条用户消息用于自动命名会话（仅当仍是默认标题：不覆盖 sub_agent 传入的标题与用户手动改名）
+            // 首条用户消息用于自动命名会话（仅当仍是默认标题：不覆盖 sub_agent 传入的标题与用户手动改名）。
+            // 先截首句占位保证侧栏立刻有名字，随后交给 AI 概括成短标题（见 spawn_auto_title）
             if sess.title.trim().is_empty() || sess.title == "新对话" {
                 let title: String = ui.chars().take(20).collect();
                 sess.title = title.replace('\n', " ");
+                title_seed = Some((sess.title.clone(), ui.to_string()));
             }
-            sess.messages.push(ChatMessage::user(ui));
+            // 图片同时记在消息上：气泡要能回显发出去的图（模型侧仍用独立 images 参数）
+            sess.messages.push(ChatMessage { images: images.clone(), ..ChatMessage::user(ui) });
             sess.touch();
             if sess.messages.len() > CHAT_MAX {
                 let drop_n = sess.messages.len() - CHAT_MAX;
@@ -1260,6 +1373,9 @@ async fn chat_turn_stream_inner(
             }
         }
         crate::session::persist(ctx);
+        if let Some((provisional, seed)) = title_seed {
+            spawn_auto_title(ctx, &target, &seed, &provisional);
+        }
     }
 
     let iflag = register_interrupt(ctx, &target);
@@ -1292,7 +1408,7 @@ async fn chat_turn_stream_inner(
         };
         let mut v = vec![ChatMessage::system(sys)];
         for (role, content) in history {
-            v.push(ChatMessage { role, content, tool_calls: Vec::new(), thinking: None, ts: None, diagram: None });
+            v.push(ChatMessage { role, content, tool_calls: Vec::new(), thinking: None, ts: None, diagram: None, images: Vec::new() });
         }
         v
     };
@@ -1331,7 +1447,7 @@ async fn chat_turn_stream_inner(
             let emit_native = &emit;
             let think_native = round_thinking.clone();
             let attempt = tokio::select! {
-                r = ai::chat_native_round_stream(ctx, &convo, round_images, &native_exchanges, move |ev| {
+                r = ai::chat_native_round_stream(ctx, &convo, round_images, &native_exchanges, Some(&target), move |ev| {
                     match ev {
                         ai::NativeEvent::Think(t) => {
                             think_native.lock().unwrap().push_str(t);
@@ -1577,11 +1693,13 @@ async fn chat_turn_stream_inner(
                 if let Some(p) = result.get("path").and_then(|x| x.as_str()) {
                     emit_preview_card(ctx, &target, p);
                 }
+                let checkpoints = take_checkpoints(&mut result);
                 records.push(crate::ai::ToolCallRecord {
                     tool: call.name.clone(),
                     params: call.args.clone(),
                     ok,
                     result,
+                    checkpoints,
                 });
             }
 
@@ -1752,7 +1870,7 @@ pub fn build_context(
         ai::system_prompt_native(ctx, Some(&target))
     })];
     for m in recent {
-        v.push(ChatMessage { role: m.role.clone(), content: m.content.clone(), tool_calls: m.tool_calls.clone(), thinking: None, ts: None, diagram: None });
+        v.push(ChatMessage { role: m.role.clone(), content: m.content.clone(), tool_calls: m.tool_calls.clone(), thinking: None, ts: None, diagram: None, images: Vec::new() });
     }
     Ok((v, ai::tools_manifest(ctx)))
 }
@@ -2168,6 +2286,28 @@ mod tests {
         assert_eq!(calls[0]["tool"], "shell");
     }
 
+    /// AI 标题清洗：模型可能加引号/列表符/句号或多行解释，只能取一行干净短标题
+    #[test]
+    fn test_clean_generated_title() {
+        // 正常单行
+        assert_eq!(clean_generated_title("修复登录超时"), Some("修复登录超时".into()));
+        // 包裹引号 + 句末标点 + 列表符号
+        assert_eq!(clean_generated_title("\"修复登录超时。\""), Some("修复登录超时".into()));
+        assert_eq!(clean_generated_title("- **修复登录超时**"), Some("修复登录超时".into()));
+        // 多行只取第一行非空内容
+        assert_eq!(
+            clean_generated_title("\n  标题：修复登录超时\n说明：..."),
+            Some("标题：修复登录超时".into())
+        );
+        // 中文书名号/角括号包裹
+        assert_eq!(clean_generated_title("「修复登录超时」"), Some("修复登录超时".into()));
+        // 空回复 → None（保留占位标题）
+        assert_eq!(clean_generated_title("  \n\n"), None);
+        // 超长截到 24 字符
+        let long = "这是一个非常非常非常非常非常非常非常非常长的标题";
+        assert_eq!(clean_generated_title(long).unwrap().chars().count(), 24);
+    }
+
     /// ai.rs 原生调用桥接（OpenAI tool_calls / Claude tool_use / Gemini functionCall
     /// → 文本协议 JSON 行）的产物必须能被解析端接住执行：
     /// 正文与调用行分离、键序按 serde_json 字母序（params 在前）、纯调用行无正文
@@ -2211,6 +2351,10 @@ mod tests {
         assert!(!auto_pass("ask", "shell"));
         assert!(!auto_pass("ask", "add_memory"));
         assert!(!auto_pass("ask", "list_tools"));
+        // l2pass：不直接放行，统一交给 L2 审核后再决定
+        assert!(!auto_pass("l2pass", "shell"));
+        assert!(!auto_pass("l2pass", "add_memory"));
+        assert!(!auto_pass("l2pass", "list_tools"));
         // 未知模式按 ask 处理（保守）
         assert!(!auto_pass("", "shell"));
         assert!(!auto_pass("unknown", "add_memory"));

@@ -1,0 +1,53 @@
+<!doctype html>
+<!-- 独立设置页：设置中心左栏那条「跟进台设置」条目点开的就是这一页。
+     所有值都存在宿主里、按插件命名空间隔离，和插件自己 cap 读写的是同一份。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>跟进台设置</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --accent:#7c3aed; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --accent:#a78bfa; } }
+      body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h2 { margin:0 0 10px; font-size:14px; }
+      .field { margin-bottom:12px; }
+      label { display:block; color:var(--muted); margin-bottom:4px; }
+      select, input { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--fg); font:inherit; }
+      button { padding:6px 14px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; font:inherit; }
+      pre { margin-top:14px; padding:8px; border:1px dashed var(--line); border-radius:8px; color:var(--muted); font-size:12px; white-space:pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h2>跟进台设置</h2>
+    <div class="field">
+      <label for="grade">新建纪要的默认客户分级</label>
+      <select id="grade"><option value="A">A · 当天回</option><option value="B">B · 三天内</option><option value="C">C · 周会处理</option></select>
+    </div>
+    <div class="field">
+      <label for="sign">回复署名</label>
+      <input id="sign" placeholder="例：小枕" />
+    </div>
+    <button id="save">保存</button>
+    <pre id="all">读取中…</pre>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      async function load() {
+        const [grade, sign] = await Promise.all([Bit.settings.get("default_grade"), Bit.settings.get("signature")]);
+        if (grade) $("grade").value = grade;
+        $("sign").value = sign || "";
+        const all = await Bit.settings.all();
+        $("all").textContent = "当前命名空间下的键：\n" + JSON.stringify(all, null, 2);
+      }
+      $("save").addEventListener("click", async () => {
+        await Bit.settings.set("default_grade", $("grade").value);
+        await Bit.settings.set("signature", $("sign").value);
+        await load();
+      });
+      Bit.on((name, payload) => {
+        // 申报了 chat 但没有 events：这里的回调只会在宿主转发时触发，用作链路自检
+        if (name === "host") $("all").textContent = "收到宿主事件：" + JSON.stringify(payload).slice(0, 200);
+      });
+      load().catch((e) => ($("all").textContent = "读取失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

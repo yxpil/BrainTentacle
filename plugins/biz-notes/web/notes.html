@@ -1,0 +1,97 @@
+<!doctype html>
+<!-- 便签本：一张便签一个文件（notes/<目录>/<标题>.md），全部落在插件自己的数据目录里。
+     这个目录在插件包之外，所以随便写都不会触发防篡改基线。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>便签本</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#4f46e5; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#818cf8; } }
+      * { box-sizing:border-box; }
+      body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 10px; font-size:16px; }
+      .wrap { display:grid; grid-template-columns:220px minmax(0,1fr); gap:12px; }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+      ul { margin:0; padding-left:16px; }
+      li { cursor:pointer; border-bottom:1px solid var(--line); padding:3px 0; }
+      li.sel { color:var(--accent); }
+      input, textarea, button { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--fg); }
+      textarea { width:100%; min-height:160px; }
+      button { border-color:var(--accent); background:var(--accent); color:#fff; cursor:pointer; margin-right:6px; }
+      .row { display:flex; gap:6px; margin-bottom:8px; }
+      .tip { color:var(--muted); font-size:12px; margin-top:6px; }
+    </style>
+  </head>
+  <body>
+    <h1>便签本</h1>
+    <div class="wrap">
+      <div class="card">
+        <div class="row"><input id="newTitle" placeholder="新便签标题" size="14" /></div>
+        <div class="row">
+          <select id="dir"><option>notes</option><option>archive</option><option>ideas</option></select>
+          <button id="create">新建</button>
+        </div>
+        <ul id="list"></ul>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="card">
+        <div class="row"><button id="save">保存当前</button><button id="del">删除当前</button><span class="tip" id="cur">未选择</span></div>
+        <textarea id="body" placeholder="写点什么…"></textarea>
+      </div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let files = [];
+      let current = "";
+
+      const slug = (s) => String(s || "").trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 40);
+
+      async function refresh() {
+        const r = await Bit.data.list();
+        files = (r.files || []).map((f) => f.path);
+        $("tip").textContent = `数据目录：${(r.dir || "").split("\\").slice(-3).join("\\")}（${files.length} 个文件）`;
+        $("list").innerHTML = "";
+        for (const p of files) {
+          const li = document.createElement("li");
+          li.textContent = p;
+          li.className = p === current ? "sel" : "";
+          li.onclick = () => open(p);
+          $("list").appendChild(li);
+        }
+      }
+
+      async function open(p) {
+        current = p;
+        $("cur").textContent = p;
+        $("body").value = (await Bit.data.read(p)) || "";
+        await refresh();
+      }
+
+      $("create").addEventListener("click", async () => {
+        const t = slug($("newTitle").value);
+        if (!t) return ($("tip").textContent = "先起个标题");
+        const p = `${$("dir").value}/${t}.md`;
+        await Bit.data.write(p, `# ${t}\n\n`);
+        $("newTitle").value = "";
+        await open(p);
+      });
+      $("save").addEventListener("click", async () => {
+        if (!current) return ($("tip").textContent = "先选一张便签");
+        await Bit.data.write(current, $("body").value);
+        $("tip").textContent = `已保存 ${current}`;
+      });
+      $("del").addEventListener("click", async () => {
+        if (!current) return;
+        await Bit.cap("data.remove", { path: current });
+        $("body").value = "";
+        const gone = current;
+        current = "";
+        $("tip").textContent = `已删除 ${gone}`;
+        await refresh();
+      });
+
+      refresh().catch((e) => ($("tip").textContent = "读取失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

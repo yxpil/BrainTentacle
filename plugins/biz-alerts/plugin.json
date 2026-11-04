@@ -1,0 +1,19 @@
+{
+  "name": "告警中心",
+  "version": "1.0.0",
+  "description": "订阅宿主事件并转成系统通知：会话更新、服务状态、工具变化都能在这一页看到流水",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "events", "notify", "settings", "storage"],
+  "pages": [
+    {
+      "id": "alerts",
+      "label": "告警中心",
+      "src": "web/alerts.html",
+      "paths": ["M12 3 L21 19 L3 19 Z", "M12 9 L12 14", "M12 16 L12 16.5"]
+    }
+  ],
+  "settings": {
+    "entries": [{ "id": "mute", "label": "静音事件", "description": "逗号分隔的事件名，命中的不弹通知（键 muted_events）", "kw": "告警 通知 静音 mute" }]
+  },
+  "prompts": ["告警中心只转发白名单里的宿主事件，看到它报的编号可以直接问用户发生了什么。"]
+}

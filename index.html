@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>触手怪</title>
     <style>
-      #boot-mask { position: fixed; inset: 0; z-index: 2147483647; background: #ffffff; border-radius: var(--win-radius, 16px); opacity: 1; transition: opacity .25s ease; pointer-events: auto; }
+      /* 默认深色：新装首帧与推荐外观一致；缓存里有浅色时下面同步改成浅色底 */
+      #boot-mask { position: fixed; inset: 0; z-index: 2147483647; background: #18181b; border-radius: var(--win-radius, 16px); opacity: 1; transition: opacity .25s ease; pointer-events: auto; }
       #boot-mask.gone { opacity: 0; pointer-events: none; }
-      @media (prefers-color-scheme: dark) { #boot-mask:not([style*="background"]) { background: #18181b; } }
     </style>
   </head>
   <body>
@@ -35,7 +35,7 @@
 
         // 遮罩底色：同步读 localStorage 首帧缓存（与应用实际主题一致），避免刷新瞬间闪色
         try {
-          var mode = localStorage.getItem("bit.theme.v1") || "light";
+          var mode = localStorage.getItem("bit.theme.v1") || "dark";
           if (mode === "auto") mode = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
           var look = JSON.parse(localStorage.getItem("bit.look.v1") || "null");
           var bg = look && look.enabled ? (mode === "dark" ? look.bgColorDark : look.bgColorLight) : null;

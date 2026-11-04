@@ -70,7 +70,7 @@ export default function ConfirmHost() {
         ref={cardRef}
         role="dialog"
         aria-modal="true"
-        className="card w-[340px] max-w-[calc(100vw-24px)]"
+        className="card max-h-[calc(100vh-48px)] w-[340px] max-w-[calc(100vw-24px)] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {dlg.title && (
@@ -78,7 +78,7 @@ export default function ConfirmHost() {
         )}
         {dlg.message && (
           <p
-            className={`text-sm leading-relaxed text-neutral-500 dark:text-neutral-400 ${
+            className={`text-sm leading-relaxed whitespace-pre-wrap text-neutral-500 dark:text-neutral-400 ${
               dlg.title ? "mt-1.5" : ""
             }`}
           >

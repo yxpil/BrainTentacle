@@ -1,0 +1,109 @@
+<!doctype html>
+<!-- 工单收件箱：全部动作都只在自己的会话命名空间里，页面上能看到宿主列表里多了几条会话。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>工单收件箱</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#0f766e; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#2dd4bf; } }
+      * { box-sizing:border-box; }
+      body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 4px; font-size:16px; }
+      h2 { margin:0 0 6px; font-size:12px; color:var(--muted); }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:12px; }
+      .row { display:flex; gap:6px; flex-wrap:wrap; }
+      input, select, button, textarea { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--fg); }
+      button { border-color:var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+      table { width:100%; border-collapse:collapse; }
+      td { padding:4px 6px; border-bottom:1px solid var(--line); font-size:12px; }
+      td.act { text-align:right; white-space:nowrap; }
+      pre { margin:6px 0 0; padding:8px; border:1px dashed var(--line); border-radius:8px; white-space:pre-wrap; font:12px/1.5 ui-monospace,Consolas,monospace; }
+      .tip { color:var(--muted); font-size:12px; }
+    </style>
+  </head>
+  <body>
+    <h1>工单收件箱</h1>
+    <div class="tip" id="who">正在握手…</div>
+    <div class="card">
+      <h2>录一张工单</h2>
+      <div class="row">
+        <input id="title" placeholder="摘要，例：夜班打印机卡纸" size="34" />
+        <select id="p"><option>P1</option><option selected>P2</option><option>P3</option></select>
+        <button id="new">写入会话</button>
+        <button id="wake">唤醒最近一张</button>
+      </div>
+      <div class="tip" id="tip"></div>
+    </div>
+    <div class="card">
+      <h2>我的会话（点标题读消息）</h2>
+      <table><tbody id="rows"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>消息内容</h2>
+      <pre id="msgs">—</pre>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      async function refresh() {
+        const r = await Bit.sessions.list();
+        const rows = r.sessions || [];
+        $("rows").innerHTML = "";
+        for (const s of rows) {
+          const tr = document.createElement("tr");
+          const t = document.createElement("td");
+          t.textContent = s.title || s.session_id;
+          const m = document.createElement("td");
+          m.textContent = `${s.messages} 条`;
+          const a = document.createElement("td");
+          a.className = "act";
+          const b = document.createElement("button");
+          b.textContent = "读";
+          b.onclick = () => read(s.session_id);
+          const w = document.createElement("button");
+          w.textContent = "唤醒";
+          w.onclick = async () => { await Bit.sessions.wake(s.session_id, "工单收件箱：这张工单需要有人接。"); $("tip").textContent = `已唤醒 ${s.session_id}`; };
+          a.append(b, w);
+          tr.append(t, m, a);
+          $("rows").appendChild(tr);
+        }
+        $("tip").textContent = `本插件名下 ${rows.length} 个会话（非空的会带拼图图标出现在左侧列表）`;
+      }
+
+      async function read(sid) {
+        const h = await Bit.sessions.read(sid);
+        $("msgs").textContent = (h.messages || []).map((x) => `[${x.ts || ""}] ${x.role}: ${x.content}`).join("\n") || "（空会话）";
+      }
+
+      $("new").addEventListener("click", async () => {
+        const t = $("title").value.trim();
+        if (!t) return ($("tip").textContent = "先写摘要");
+        const grade = $("p").value;
+        const r = await Bit.sessions.append("user", `工单 ${grade} - ${t}`);
+        await Bit.sessions.append("system", `分级：${grade}；来源：工单收件箱页面`);
+        $("title").value = "";
+        await refresh();
+        await read(r.session_id);
+      });
+
+      $("wake").addEventListener("click", async () => {
+        const r = await Bit.sessions.list();
+        const first = (r.sessions || [])[0];
+        if (!first) return ($("tip").textContent = "还没有工单");
+        await Bit.sessions.wake(first.session_id, "工单收件箱：到了处理时间，请给出下一步。");
+        $("tip").textContent = `已唤醒 ${first.session_id}`;
+      });
+
+      Bit.on((event, payload) => {
+        if (event === "host" && payload.name === "sessions-updated") refresh().catch(() => {});
+      });
+
+      (async () => {
+        const info = await Bit.ready();
+        $("who").textContent = info ? `${info.plugin_name} · 会话前缀 plugin:${info.plugin_id}` : "握手尚未完成";
+        await refresh();
+      })().catch((e) => ($("who").textContent = "初始化失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

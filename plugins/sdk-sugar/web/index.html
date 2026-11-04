@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<!-- yxpil · 开发糖示例页面：SDK 由宿主自动注入（含令牌），这里只用 window.Bit
+     页面把自检结果同时画在屏上并写进插件数据目录（page-sugar.json），
+     验收探针从宿主侧读那个文件，比跨 iframe 取 DOM 稳。 -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>开发糖</title>
+    <style>
+      body { font: 13px/1.6 system-ui, sans-serif; margin: 16px; color: #222; background: #fafafa; }
+      h1 { font-size: 15px; margin: 0 0 4px; }
+      .row { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px solid #eee; }
+      .k { width: 130px; color: #888; flex: none; }
+      .v { flex: 1; word-break: break-all; }
+      button { margin: 10px 0; padding: 6px 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>插件开发糖 · 页面侧</h1>
+    <div id="rows"></div>
+    <button id="again">再跑一遍</button>
+
+    <script>
+      const rows = document.getElementById("rows");
+      function put(k, v) {
+        const d = document.createElement("div");
+        d.className = "row";
+        d.innerHTML = '<span class="k"></span><span class="v"></span>';
+        d.children[0].textContent = k;
+        d.children[1].textContent = typeof v === "string" ? v : JSON.stringify(v);
+        rows.appendChild(d);
+      }
+
+      async function run() {
+        rows.textContent = "";
+        const info = await Bit.ready();
+        put("握手", info ? info.plugin_id : "未连上宿主");
+        put("Bit.can(exec)", Bit.can("exec"));
+        put("Bit.can(root)", Bit.can("root"));
+        put("Bit.env", Bit.env);
+
+        // 具名订阅：宿主事件按内层名字命中（notify-done 在白名单里）
+        let got = "未触发";
+        Bit.on("notify-done", (data) => {
+          got = "收到 notify-done: " + JSON.stringify(data).slice(0, 60);
+          put("Bit.on(notify-done)", got);
+        });
+        await Bit.notify("开发糖", "来自页面的一次通知");
+        // 开机十几个帧一起抢宿主，事件可能晚于 1.2 秒才到：等到它来，最多 5 秒
+        for (let i = 0; i < 20 && got === "未触发"; i += 1) await Bit.sleep(250);
+        put("具名订阅", got);
+
+        const runtimes = await Bit.runtime.list();
+        put("Bit.runtime.list", runtimes.map((r) => r.id).slice(0, 10));
+
+        const node = await Bit.exec.node(["-e", "console.log('page-sugar')"]);
+        put("Bit.exec.node", { code: node.code, out: String(node.stdout || "").trim() });
+
+        await Bit.storage.setJSON("last-run", { at: Date.now() });
+        put("Bit.storage.setJSON", (await Bit.storage.getJSON("last-run")) || "读不回来");
+
+        const proof = {
+          from: "web/index.html",
+          plugin_id: info && info.plugin_id,
+          perms: (info && info.permissions) || [],
+          can_exec: Bit.can("exec"),
+          notify_seen: got.indexOf("收到") === 0,
+          runtime_ids: runtimes.map((r) => r.id),
+          exec_node_code: node.code,
+          at: new Date().toISOString(),
+        };
+        await Bit.data.writeJSON("page-sugar.json", proof);
+        put("写回数据目录", "page-sugar.json 已写入");
+      }
+
+      // Bit.boot：握手落地后再开工，省掉每个页面自己写 ready().then 的样板
+      Bit.boot(() => run().catch((e) => put("出错", String(e && e.message ? e.message : e))));
+      document.getElementById("again").onclick = () => run().catch((e) => put("出错", String(e)));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,29 @@
+/* 投研流水线的样式：给自己页面的元素用（.bit-flow-*），
+   另设两个自定义属性作为「样式确实注入过」的可测量标记。 */
+#root {
+  --bit-flow-mark: 1;
+}
+.bit-flow {
+  padding: 16px;
+  font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.bit-flow h1 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+.bit-flow .lede {
+  color: var(--muted, #6b7280);
+  margin-bottom: 12px;
+}
+.bit-flow .stat {
+  display: inline-block;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-right: 6px;
+  font-size: 12px;
+}
+.bit-flow .stat[data-hot="1"] {
+  border-color: #dc2626;
+  color: #dc2626;
+}

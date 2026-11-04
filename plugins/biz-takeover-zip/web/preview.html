@@ -1,0 +1,70 @@
+<!doctype html>
+<!-- 预览坞：演示 pagectl 的两项能力——唤醒宿主页面、改掉自己这一页的标题（只许改自己的）。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>预览坞</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#0369a1; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#38bdf8; } }
+      * { box-sizing:border-box; }
+      body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 4px; font-size:16px; }
+      .sub { color:var(--muted); margin-bottom:12px; }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:12px; }
+      .row { display:flex; gap:6px; flex-wrap:wrap; }
+      input, button { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--fg); }
+      button { border-color:var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+      pre { margin:6px 0 0; padding:8px; border:1px dashed var(--line); border-radius:8px; white-space:pre-wrap; font:12px/1.5 ui-monospace,Consolas,monospace; }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">预览坞</h1>
+    <div class="sub" id="who">正在握手…</div>
+    <div class="card">
+      <div class="row">
+        <input id="label" placeholder="新的页面标题" size="20" />
+        <button id="rename">改掉这一页的名字</button>
+        <button id="other">试着改别人的页</button>
+      </div>
+      <pre id="out">—</pre>
+    </div>
+    <div class="card">
+      <div class="row">
+        <button id="goplugins">去「插件」页</button>
+        <button id="goparams">去设置中心</button>
+      </div>
+      <div class="sub">pagectl 只允许跳到已有入口，不能凭空造页。</div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      async function boot() {
+        const info = await Bit.ready();
+        $("who").textContent = info ? `${info.plugin_name} · 本页 key 是 ${info.plugin_id}:preview` : "握手尚未完成";
+      }
+
+      $("rename").addEventListener("click", async () => {
+        try {
+          const r = await Bit.setTitle("preview", $("label").value.trim() || "预览坞（改名）");
+          $("out").textContent = JSON.stringify(r, null, 2);
+          $("title").textContent = $("label").value.trim() || "预览坞（改名）";
+        } catch (e) {
+          $("out").textContent = "改名失败：" + String(e.message || e);
+        }
+      });
+      $("other").addEventListener("click", async () => {
+        try {
+          const r = await Bit.setTitle("dash-kanban:board", "被我改了");
+          $("out").textContent = "竟然改掉了（不该发生）：" + JSON.stringify(r);
+        } catch (e) {
+          $("out").textContent = "如期被拒：" + String(e.message || e);
+        }
+      });
+      $("goplugins").addEventListener("click", () => Bit.openPage("plugins"));
+      $("goparams").addEventListener("click", () => Bit.openPage("settings", "appearance"));
+
+      boot().catch((e) => ($("who").textContent = "握手失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

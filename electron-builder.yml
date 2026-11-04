@@ -22,6 +22,12 @@ files:
   - package.json
   - "!**/*.map"
   - "!node_modules/**"
+  # 依赖自带的测试与示例：files 一旦被自定义，electron-builder 默认的 node_modules
+  # 清理规则就不再套用，dsh-bridge/node_modules 里 zod / MCP SDK / fast-uri 等自带的
+  # test/、examples/、*.test.js 会原样进包（实测 464 个文件、2.6 MB，运行期没人 require）。
+  # 只按「测试形状」清，LICENSE/README 保留 —— MIT 许可要求随包带上许可证文本。
+  - "!**/node_modules/**/{test,tests,__tests__,example,examples,spec,fixture,fixtures}/**"
+  - "!**/node_modules/**/*.{test,spec}.{js,mjs,cjs,ts}"
 extraResources:
   - from: packaging/native
     to: .
@@ -53,6 +59,8 @@ nsis:
   oneClick: true
   perMachine: false
   deleteAppDataOnUninstall: false
+  # customInit 里拦下"ARM64 包下到 x64 电脑"：见 packaging/nsis/installer.nsh
+  include: packaging/nsis/installer.nsh
 
 mac:
   # CI 用 --dir 出 .app 后手工 ad-hoc 深签名 + hdiutil/ditto（对齐旧 Tauri 流程，防 Gatekeeper"已损坏"）
