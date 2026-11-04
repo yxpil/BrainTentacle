@@ -9,7 +9,7 @@ const path = require('path');
 const { check, listAsar } = require('./check-pack-contents.cjs');
 
 exports.default = async function afterPack(context) {
-  const resourcesDir = path.join(context.appOutDir, 'resources');
+  const resourcesDir = findResourcesDir(context.appOutDir);
   for (const name of ['default_app.asar', 'default_app.asar.unpacked']) {
     const p = path.join(resourcesDir, name);
     if (fs.existsSync(p)) {
@@ -19,6 +19,13 @@ exports.default = async function afterPack(context) {
   }
   checkPackContents(resourcesDir);
 };
+
+// mac 的 --mac --dir 产物是 BIT.app/Contents/Resources，win/linux 是 <out>/resources
+function findResourcesDir(appOutDir) {
+  const mac = path.join(appOutDir, 'Contents', 'Resources');
+  if (fs.existsSync(mac)) return mac;
+  return path.join(appOutDir, 'resources');
+}
 
 // 内容闸门：夹具/测试只要漏进产物就让打包失败，别等用户装完才发现
 function checkPackContents(resourcesDir) {
