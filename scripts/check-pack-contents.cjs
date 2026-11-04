@@ -48,8 +48,19 @@ function check(files, packedPackage) {
     bad.push('产物 package.json 仍带 scripts/devDependencies（仓库测试命令会跟着装到用户机上）');
   }
 
-  const licenses = files.filter((f) => /licen[cs]e$/i.test(f));
-  if (licenses.length === 0) bad.push('产物里没有任何 LICENSE：MIT 依赖必须随包附许可文本');
+  // 许可文本：MIT 依赖的许可文件名不统一（LICENSE / LICENSE.md / LICENSE-MIT / licence.txt），
+  // 按「文件名含 license/licence」判，别只认无扩展名的 LICENSE。
+  const licenses = files.filter((f) => {
+    const base = segments(f).pop() || '';
+    return /licen[cs]e/i.test(base);
+  });
+  if (licenses.length === 0) {
+    // 失败时把「闸门到底扫了哪里、扫到些什么」打出来：mac 的 .app 布局与 win/linux 不同，
+    // 光报「没有 LICENSE」定位不了是 resources 找错目录还是依赖真没进包。
+    const dsh = files.filter((f) => /dsh-bridge/i.test(f));
+    console.error(`[pack-check] 诊断：条目 ${files.length} 个，dsh-bridge ${dsh.length} 个，样例 ${JSON.stringify(files.slice(0, 8))}，dsh 样例 ${JSON.stringify(dsh.slice(0, 6))}`);
+    bad.push('产物里没有任何 LICENSE：MIT 依赖必须随包附许可文本');
+  }
 
   return bad;
 }
