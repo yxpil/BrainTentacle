@@ -2144,7 +2144,9 @@ export default function AiSettingsPage({ onStats, stats, group }) {
           {/* 提供方列表 */}
           <div className="flex flex-col gap-2">
             {providers.length === 0 && (
-              <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-neutral-300 p-6 text-center dark:border-neutral-700">
+              /* 空态框不是 .card，拿不到行卡自带的 0.9rem 上下留白：
+                 不加边距时它的上檐贴着分隔线、下檐直接顶到面板下边，四边看着不一致。 */
+              <div className="my-[0.9rem] flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-neutral-300 p-6 text-center dark:border-neutral-700">
                 <IconSettings size={18} className="text-neutral-400" />
                 <p className="text-sm text-neutral-500 dark:text-neutral-400">{t("ai.emptyProviders")}</p>
                 <p className="text-xs text-neutral-400 dark:text-neutral-500">
