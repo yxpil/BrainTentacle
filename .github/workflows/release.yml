@@ -427,10 +427,11 @@ jobs:
           gh release upload "$TAG" packaging/musl/out/bit-cli_*-musl.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
 
   # 国产/新兴架构（riscv64 / loongarch64 / ppc64le）：只编 bit-cli + deb（无 GUI，QEMU 模拟编译较慢）
+  # 钉在 24.04：ubuntu-latest 切到 26.04 后 qemu-user-static 无安装候选（0.7.3 首跑踩到）
   linux-exotic:
     needs: [ensure-release, compile-check]
     if: github.event_name == 'push' || inputs.include_exotic != false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

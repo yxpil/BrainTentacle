@@ -89,7 +89,9 @@ if (require.main === module) {
     console.error('用法：node scripts/check-pack-contents.cjs <appOutDir>');
     process.exit(2);
   }
-  const resources = path.join(appOutDir, 'resources');
+  const resources = fs.existsSync(path.join(appOutDir, 'Contents', 'Resources'))
+    ? path.join(appOutDir, 'Contents', 'Resources')
+    : path.join(appOutDir, 'resources');
   const asarPath = path.join(resources, 'app.asar');
   const unpacked = path.join(resources, 'app.asar.unpacked');
 
