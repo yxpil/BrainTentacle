@@ -9,7 +9,7 @@ members = ["crates/bit-core", "crates/bit-napi", "src-tauri"]
 # 版本号单源：升级时改这里 + tauri.conf.json + package.json，再跑一次 cargo check 让 Cargo.lock 跟上
 # （release.yml 的版本一致性闸门会核对 tag/package.json/Cargo.toml/Cargo.lock/tauri.conf.json 五处）
 [workspace.package]
-version = "0.7.5"
+version = "0.7.6"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
