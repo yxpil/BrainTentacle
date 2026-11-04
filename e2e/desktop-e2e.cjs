@@ -422,57 +422,6 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
       return `title=${st.title} tools=${ov.tool_count} 截图=${caps.screenshot_backend || "-"} 粘贴=${caps.paste_tool || "-"}`;
     });
 
-    // ── P6 远程访问监听 + TUI 并行互不干扰 ─────────────────────
-    // 承接 tui.cjs 原 T7（M4 后 bit-cli 无桌面形态，桌面侧只能在这套里验）：
-    // config.json 首启导入开启 remote_enabled → HTTP 服务真监听；
-    // bit-cli TUI 共用同一数据目录并发对话（WAL 多进程共享）；TUI 退出后桌面端健在
-    await probe("P6 远程访问监听 + TUI 并行互不干扰", async () => {
-      const health = await until(
-        "远程服务 /api/health",
-        async () => {
-          try {
-            return await getJson(`http://127.0.0.1:${remotePort}/api/health`);
-          } catch {
-            return null;
-          }
-        },
-        60000,
-        500
-      );
-      const bin = path.join(ROOT, "target", "debug", process.platform === "win32" ? "bit-cli.exe" : "bit-cli");
-      const tui = spawn(bin, ["tui"], {
-        env: { ...process.env, NO_AT_BRIDGE: "1", BIT_DATA_DIR: dataDir },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let tuiOut = "";
-      tui.stdout.on("data", (d) => (tuiOut += d));
-      tui.stderr.on("data", (d) => (tuiOut += d));
-      tui.stdin.on("error", () => {});
-      const tuiExit = new Promise((res) => {
-        const t = setTimeout(() => {
-          try { tui.kill("SIGKILL"); } catch {}
-          res(-1);
-        }, 30000);
-        tui.on("exit", (c) => { clearTimeout(t); res(c); });
-      });
-      try {
-        const ready = await until("TUI 就绪", () => (tuiOut.includes("bit> ") ? true : null), 60000, 200);
-        if (!ready) throw new Error(`TUI 未就绪：${tuiOut.slice(-300)}`);
-        tui.stdin.write("TUI-PARALLEL-CHECK\n");
-        const replied = await until("TUI 并行对话回复", () => (tuiOut.includes("好的。") ? true : null), 30000, 500);
-        if (!replied) throw new Error(`TUI 无回复：${tuiOut.slice(-300)}`);
-        tui.stdin.write("/quit\n");
-        const code = await tuiExit;
-        if (code !== 0) throw new Error(`TUI 退出码 ${code}`);
-        // TUI 退出后桌面端仍健在（不抢实例、不抢端口）
-        const alive = await getJson(`http://127.0.0.1:${remotePort}/api/health`).then(() => true).catch(() => false);
-        if (!alive) throw new Error("TUI 退出后 /api/health 不再响应");
-        return `health=${JSON.stringify(health).slice(0, 80)} tuiExit=${code} 桌面端仍健在`;
-      } finally {
-        try { tui.kill(); } catch {}
-      }
-    });
-
     // 复用：把当前窗口抬到最前（真实桌面语义：激活 + 输入焦点）
     const focusWindow = async () => {
       const title = await cdp.js("document.title");
@@ -820,6 +769,64 @@ $h.ToString()`);
       },
       { hard: false }
     );
+
+    // ── P6 远程访问监听 + TUI 并行互不干扰 ─────────────────────
+    // 承接 tui.cjs 原 T7（M4 后 bit-cli 无桌面形态，桌面侧只能在这套里验）：
+    // config.json 首启导入开启 remote_enabled → HTTP 服务真监听；
+    // bit-cli TUI 共用同一数据目录并发对话（WAL 多进程共享）；TUI 退出后桌面端健在。
+    // 刻意排在所有探针之后：开机那几秒 Chromium/renderer/core 同时冷启动，CI 的
+    // 4 核被抢光，debug 版 TUI（比 release 慢一个量级）可能 60s 内吐不出首个提示符，
+    // 且「并行互不干扰」要验的是共存，不是开机争抢，等桌面端静下来再验更真实
+    await probe("P6 远程访问监听 + TUI 并行互不干扰", async () => {
+      const health = await until(
+        "远程服务 /api/health",
+        async () => {
+          try {
+            return await getJson(`http://127.0.0.1:${remotePort}/api/health`);
+          } catch {
+            return null;
+          }
+        },
+        60000,
+        500
+      );
+      const bin = path.join(ROOT, "target", "debug", process.platform === "win32" ? "bit-cli.exe" : "bit-cli");
+      const tui = spawn(bin, ["tui"], {
+        env: { ...process.env, NO_AT_BRIDGE: "1", BIT_DATA_DIR: dataDir },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let tuiOut = "";
+      tui.stdout.on("data", (d) => (tuiOut += d));
+      tui.stderr.on("data", (d) => (tuiOut += d));
+      tui.stdin.on("error", () => {});
+      const tuiExit = new Promise((res) => tui.on("exit", (c) => res(c)));
+      // 失败诊断用：进程还活着还是已经退了（退出的错误码就是死因线索）
+      const tuiState = () =>
+        Promise.race([tuiExit.then((c) => `exit=${c}`), sleep(300).then(() => "alive")]);
+      try {
+        // debug 版冷启动 + 与桌面端共享 WAL：首个提示符放宽到 120s；
+        // until 超时会自带报错，这里补上进程状态与输出尾巴，失败才看得见死因
+        await until("TUI 就绪", () => (tuiOut.includes("bit> ") ? true : null), 120000, 500)
+          .catch(async (e) => {
+            throw new Error(`TUI 未就绪：${e.message}；进程=${await tuiState()}；输出尾部：${tuiOut.slice(-400) || "（无输出）"}`);
+          });
+        tui.stdin.write("TUI-PARALLEL-CHECK\n");
+        await until("TUI 并行对话回复", () => (tuiOut.includes("好的。") ? true : null), 60000, 500)
+          .catch(async (e) => {
+            throw new Error(`TUI 无回复：${e.message}；进程=${await tuiState()}；输出尾部：${tuiOut.slice(-400)}`);
+          });
+        tui.stdin.write("/quit\n");
+        const code = await Promise.race([tuiExit, sleep(15000).then(() => "timeout")]);
+        if (code === "timeout") throw new Error("TUI /quit 后 15s 未退出");
+        if (code !== 0) throw new Error(`TUI 退出码 ${code}`);
+        // TUI 退出后桌面端仍健在（不抢实例、不抢端口）
+        const alive = await getJson(`http://127.0.0.1:${remotePort}/api/health`).then(() => true).catch(() => false);
+        if (!alive) throw new Error("TUI 退出后 /api/health 不再响应");
+        return `health=${JSON.stringify(health).slice(0, 80)} tuiExit=${code} 桌面端仍健在`;
+      } finally {
+        try { tui.kill(); } catch {}
+      }
+    });
 
     const hard = results.filter((r) => r.hard);
     const bad = hard.filter((r) => !r.ok);
