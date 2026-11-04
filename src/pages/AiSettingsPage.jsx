@@ -3757,7 +3757,7 @@ export default function AiSettingsPage({ onStats, stats, group }) {
                 <p className="mt-0.5 text-xs text-neutral-500">{t("ai.trayHoverDesc")}</p>
               </div>
               <select
-                className="field shrink-0"
+                className="field w-auto shrink-0"
                 value={String(trayHover.delay ?? 5000)}
                 onChange={(e) => saveTrayHover(Number(e.target.value))}
               >
