@@ -1,18 +1,15 @@
-// 简约 TUI E2E：`bit tui` 终端模式功能完整性 + 与桌面端同数据目录并行运行无冲突
-// 覆盖：/help 对话 工具调用 会话管理 记忆 已删命令回归 桌面端/TUI 同跑
+// 简约 TUI E2E：`bit tui` 终端模式功能完整性 + 多实例并行共存
+// 覆盖：/help 对话 工具调用 会话管理 记忆 已删命令回归 双 TUI 并行
 // 用法：mock-ai(9901) 就绪后：node e2e/tui.cjs [BIT 二进制路径]
 const { spawn, execSync } = require("child_process");
 const { StringDecoder } = require("string_decoder");
-const http = require("http");
 const fs = require("fs");
 const os = require("os");
-const net = require("net");
 const path = require("path");
 
 // 必须解析为绝对路径：launchTui 支持给子进程指定 cwd（工作区沙箱用例），
 // 相对 BIN 会从该 cwd 解析导致 ENOENT
 const BIN = path.resolve(process.argv[2] || path.join(__dirname, "../src-tauri/target/release/bit"));
-const PORT = 8611; // 桌面端实例远程访问端口（避开默认 8600，防止撞上日常实例）
 const results = [];
 const record = (name, ok, detail) => {
   results.push({ name, ok, detail });
@@ -20,25 +17,6 @@ const record = (name, ok, detail) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tail = (out) => out.slice(-400).replace(/\n+/g, " | ");
-
-function portOpen(port) {
-  return new Promise((resolve) => {
-    const s = net.connect({ host: "127.0.0.1", port, timeout: 1500 });
-    s.on("connect", () => { s.destroy(); resolve(true); });
-    s.on("error", () => resolve(false));
-    s.on("timeout", () => { s.destroy(); resolve(false); });
-  });
-}
-
-function get(port, p) {
-  return new Promise((resolve, reject) => {
-    const req = http.request({ host: "127.0.0.1", port, path: p, method: "GET", timeout: 5000 },
-      (res) => { let b = ""; res.on("data", (c) => (b += c)); res.on("end", () => resolve({ code: res.statusCode, body: b })); });
-    req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
-    req.end();
-  });
-}
 
 // 运行中同路径 BIT 实例的 PID 列表（避免日常实例的单实例保护干扰测试）
 function findConflicts() {
@@ -398,58 +376,13 @@ async function main() {
     record("T19d 流式 500 容错", errOk, errOk ? "" : `exit=${code}`);
   }
 
-  // ── T7 桌面端 + TUI 同数据目录并行：互不干扰 ──
-  {
-    // 全新目录：SQLite 迁移后 db 内 config 文档优先于 config.json，
-    // DIR 的 bit.db 已被前面的用例初始化（remote 关闭），写 config.json 不会再生效。
-    // 首启导入（>3 键的 config.json 会进库）才能让远程配置如约生效
-    const FDIR = fs.mkdtempSync(path.join(os.tmpdir(), "bit-tui-t7-"));
-    fs.writeFileSync(
-      path.join(FDIR, "config.json"),
-      JSON.stringify({ compat_mode: true, remote_enabled: true, host: "127.0.0.1", port: PORT, client_key: "bit_e2e_tui_key", password_enabled: false, revision: 1 })
-    );
-    fs.writeFileSync(
-      path.join(FDIR, "ai_config.json"),
-      JSON.stringify({ providers: [{ id: "mock", name: "mock", protocol: "openai", base_url: "http://127.0.0.1:9901/v1", api_key: "e2e", model: "mock", active: true }] })
-    );
-    const desktop = spawn(BIN, [], {
-      env: { ...process.env, BIT_DATA_DIR: FDIR, BIT_HEADLESS: "1" },
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    let deskErr = "";
-    desktop.stderr.on("data", (d) => (deskErr += d.toString()));
-
-    // 等桌面端 HTTP 服务就绪（xvfb/无 GPU 环境 webkit 首次启动可达数十秒）
-    let up = false;
-    for (let i = 0; i < 120; i++) {
-      try { const r = await get(PORT, "/api/health"); if (r.code === 200) { up = true; break; } } catch {}
-      await sleep(500);
-    }
-    record("T7a 桌面端启动并监听", up && !desktop.killed, up ? `port=${PORT}` : (deskErr.slice(-200) || "60s 内未监听"));
-
-    if (up) {
-      // TUI 与桌面端同时运行：对话仍可用（共用数据目录无冲突）
-      const tui = launchTui(FDIR);
-      await tui.ready();
-      tui.send("TUI-PARALLEL-CHECK");
-      // 轮询等待回复（最多 30s）
-      for (let i = 0; i < 60 && !tui.out.includes("好的。"); i++) await sleep(500);
-      tui.send("/quit");
-      const code = await tui.waitExit(60000);
-      const tuiOk = code === 0 && tui.out.includes("好的。");
-      record("T7b 并行时 TUI 对话可用", tuiOk, `exit=${code}`);
-
-      // TUI 退出后桌面端仍健在（TUI 没有抢实例/抢端口）
-      let alive = false;
-      try { const r = await get(PORT, "/api/health"); alive = r.code === 200; } catch {}
-      record("T7c TUI 退出后桌面端健在", alive && !desktop.killed, "");
-    }
-
-    // 桌面端再起的反向验证：TUI 已退出，此时新桌面端能被单实例接管（健康检查可用）
-    // （T7b/c 已覆盖核心冲突面，此处清理）
-    try { desktop.kill(); } catch {}
-    await sleep(500);
-  }
+  // ── T7 桌面端 + TUI 并行：场景已随 M4 架构迁移移除 ──
+  // M4 起 GUI 宿主归 Electron（BIT.exe），bit-cli 成为纯 TUI 入口
+  // （crates/bit-core/src/bin/bit-cli.rs 只有 worker/guardian/TUI 三种模式，
+  // 无窗口、无 HTTP 服务、无单实例注册），在这里拿 bit-cli 伪造「桌面实例」
+  // 等 /api/health 永远不可能成立——T7a 因此长期失败。
+  // 等价覆盖迁移到 e2e/desktop-e2e.cjs 的 P6（真 Electron 起远程服务 +
+  // TUI 同数据目录并行、退出不扰桌面端）；CLI 层面的并行共存由 T24 承接。
 
   // ── T20 缓存结构：Claude system 双块（静态前缀打 cache_control，动态尾段不打），
   // 记忆写入只改变动态块——三次请求的静态块必须逐字节一致 ──
@@ -545,17 +478,21 @@ async function main() {
     fs.writeFileSync(path.join(CDIR, "ai_config.json"), JSON.stringify({ providers: [{ id: "mock", name: "mock", protocol: "openai", base_url: "http://127.0.0.1:9901/v1", api_key: "e2e", model: "mock", active: true }] }));
     const escapeFile = path.join(os.tmpdir(), `bit-escape-${Date.now()}.txt`);
     const norm = (s) => String(s).replace(/\\/g, "/").toLowerCase();
+    // Windows 的 TEMP 可能带 8.3 短名（RUNNER~1），shell 的 pwd 却输出长名：
+    // 比较前一律 realpath 归一到长名（解析失败退回原文），否则 cd 断言会假失败
+    const canon = (s) => { try { return norm(fs.realpathSync.native(String(s).trim())); } catch { return norm(String(s)); } };
+    const pathHit = (hay, target) => norm(hay).includes(norm(target)) || norm(hay).includes(canon(target));
     const waitFor = async (tui, needle, ms = 30000) => { for (let i = 0; i < ms / 500; i++) { if (tui.out.includes(needle)) return true; await sleep(500); } return false; };
     const tui = launchTui(CDIR, {}, { cwd: WS });
     await tui.ready();
 
     tui.send("/pwd");
     await sleep(500);
-    const pwdOk = norm(tui.out).includes(norm(WS));
+    const pwdOk = pathHit(tui.out, WS);
 
     tui.send("E2E-WS-PWD 默认cwd");
     await waitFor(tui, "E2E-FINAL-OK");
-    const shellCwdOk = norm(tui.out).includes(norm(WS));
+    const shellCwdOk = pathHit(tui.out, WS);
 
     tui.send("E2E-WS-WRITE 相对路径写文件");
     await waitFor(tui, "E2E-FINAL-OK");
@@ -579,17 +516,17 @@ async function main() {
     for (let i = 0; i < 60; i++) {
       const finals = [...tui.out.matchAll(/E2E-FINAL-OK stdout=「([^」]*)」/g)].map((m) => m[1]);
       allFinals = finals;
-      lastStdout = norm(finals.at(-1) || "");
-      if (lastStdout.includes(norm(CDIR))) break;
+      lastStdout = canon(finals.at(-1) || "");
+      if (lastStdout.includes(canon(CDIR))) break;
       await sleep(500);
     }
-    const cdOk = lastStdout.includes(norm(CDIR));
+    const cdOk = lastStdout.includes(canon(CDIR));
 
     tui.send("/quit");
     await tui.waitExit(30000);
     try { fs.rmSync(escapeFile, { force: true }); } catch {}
     const ok = pwdOk && shellCwdOk && writeOk && rejectOk && cdOk;
-    record("T22 工作区沙箱(cwd/相对/逃逸/cd)", ok, `pwd=${pwdOk} shellCwd=${shellCwdOk} write=${writeOk} reject=${rejectOk} cd=${cdOk} lastStdout="${lastStdout}" expect="${norm(CDIR)}" finals_count=${allFinals.length}`);
+    record("T22 工作区沙箱(cwd/相对/逃逸/cd)", ok, `pwd=${pwdOk} shellCwd=${shellCwdOk} write=${writeOk} reject=${rejectOk} cd=${cdOk} lastStdout="${lastStdout}" expect="${canon(CDIR)}" finals_count=${allFinals.length}`);
   }
 
   // ── T23 新增 TUI 命令：rename/approval/goals/todo/interrupt/clear/delete/runtimes ──
@@ -645,6 +582,41 @@ async function main() {
     await tui.waitExit(30000);
     const ok = renameOk && listOk && approvalOk && interruptOk && runtimesOk && clearOk && deleteOk;
     record("T23 新增命令(rename/approval/goals/todo/interrupt/clear/delete)", ok, `rename=${renameOk} list=${listOk} approval=${approvalOk} interrupt=${interruptOk} runtimes=${runtimesOk} clear=${clearOk} delete=${deleteOk}`);
+  }
+
+  // ── T24 双 TUI 并行共享同一数据目录：无单实例互斥、退出互不影响 ──
+  // 「与桌面端并行互不干扰」的面已迁 desktop-e2e P6（bit-cli 无桌面形态）；
+  // 这里保留 CLI 层面的并行共存：两个 TUI 同目录并发对话（WAL 多进程共享），
+  // 一方退出后另一方仍可继续对话
+  {
+    const PDIR = fs.mkdtempSync(path.join(os.tmpdir(), "bit-tui-par-"));
+    fs.writeFileSync(
+      path.join(PDIR, "config.json"),
+      JSON.stringify({ compat_mode: true, remote_enabled: false, host: "127.0.0.1", port: 8617, client_key: "bit_e2e_par_key", revision: 1 })
+    );
+    fs.writeFileSync(
+      path.join(PDIR, "ai_config.json"),
+      JSON.stringify({ providers: [{ id: "mock", name: "mock", protocol: "openai", base_url: "http://127.0.0.1:9901/v1", api_key: "e2e", model: "mock", active: true }] })
+    );
+    const tuiA = launchTui(PDIR);
+    const tuiB = launchTui(PDIR);
+    const aReady = await tuiA.ready();
+    const bReady = await tuiB.ready();
+    tuiA.send("TUI-PARALLEL-A");
+    tuiB.send("TUI-PARALLEL-B");
+    // 并发对话：两个实例都要拿到回复（mock 默认回复「好的。」）
+    for (let i = 0; i < 60 && !(tuiA.out.includes("好的。") && tuiB.out.includes("好的。")); i++) await sleep(500);
+    const bothChat = tuiA.out.includes("好的。") && tuiB.out.includes("好的。");
+    // A 先退：B 不受影响（无单实例/互斥锁牵制），还能继续对话
+    tuiA.send("/quit");
+    const codeA = await tuiA.waitExit(60000);
+    tuiB.send("TUI-PARALLEL-B2");
+    for (let i = 0; i < 60; i++) { await sleep(500); if ((tuiB.out.match(/好的。/g) || []).length >= 2) break; }
+    const bAlive = (tuiB.out.match(/好的。/g) || []).length >= 2 && tuiB.proc.exitCode === null;
+    tuiB.send("/quit");
+    const codeB = await tuiB.waitExit(60000);
+    const ok = aReady && bReady && bothChat && codeA === 0 && codeB === 0 && bAlive;
+    record("T24 双 TUI 并行共享数据目录", ok, `ready=${aReady}/${bReady} bothChat=${bothChat} exit=${codeA}/${codeB} bAlive=${bAlive}`);
   }
 
   const pass = results.filter((r) => r.ok).length;

@@ -94,6 +94,11 @@ jobs:
           cp target/debug/libbit_napi.so crates/bit-napi/bit_napi.node
           ls -l crates/bit-napi/bit_napi.node dist/index.html
 
+      # P6 探针要 bit-cli（TUI）与桌面端并行跑同一数据目录；bit-core 已编译，
+      # 只多一次 bin 链接
+      - name: 编译 bit-cli（P6 TUI 并行探针用）
+        run: cargo build --locked -p bit-core --bin bit-cli
+
       # 假麦克风素材固定 16k 单声道；Chromium 会循环回放，录音时长由脚本控制
       - name: 整应用无头端到端
         env:
@@ -140,6 +145,9 @@ jobs:
           cargo build --locked -p bit-napi
           Copy-Item target/debug/bit_napi.dll crates/bit-napi/bit_napi.node -Force
           Get-Item crates/bit-napi/bit_napi.node, dist/index.html | Format-Table Name,Length
+
+      - name: 编译 bit-cli（P6 TUI 并行探针用）
+        run: cargo build --locked -p bit-core --bin bit-cli
 
       - name: 整应用端到端（真窗口 + 剪贴板还原）
         env:
