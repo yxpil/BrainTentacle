@@ -312,6 +312,24 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
   // 所以每趟挑一个空闲端口自己用
   const cdpPort = await pickPort();
 
+  // 远程访问端口（P6 用）：随机挑防冲突。config.json 首启导入（>3 键进库）
+  // 开启 remote_enabled；ai_config 指向 mock 上游（P6 的 TUI 并行对话用）。
+  // 其余字段缺省 = 出厂默认，不影响 P0-P4 探针
+  const remotePort = await pickPort();
+  fs.writeFileSync(
+    path.join(dataDir, "config.json"),
+    JSON.stringify({ remote_enabled: true, host: "127.0.0.1", port: remotePort, client_key: "bit_e2e_desktop_key", password_enabled: false, revision: 1 })
+  );
+  fs.writeFileSync(
+    path.join(dataDir, "ai_config.json"),
+    JSON.stringify({ providers: [{ id: "mock", name: "mock", protocol: "openai", base_url: "http://127.0.0.1:9901/v1", api_key: "e2e", model: "mock", active: true }] })
+  );
+
+  // mock 上游 AI（P6 的 TUI 对话用）；随应用一起收掉
+  const mock = spawn(process.execPath, [path.join(__dirname, "mock-ai.cjs")], { stdio: ["ignore", "pipe", "pipe"] });
+  mock.stdout.on("data", () => {});
+  mock.stderr.on("data", () => {});
+
   // 窗口管理器：Electron 焦点/激活行为在有 WM 时才是真实桌面语义（Xvfb 默认没有）
   let wm = null;
   if (process.env.DISPLAY) {
@@ -346,6 +364,7 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
   app.on("exit", (c) => say(`(electron 退出 code=${c})`));
   // 外部中断也要把应用带走，否则下一趟会连到残留实例
   const sweep = () => {
+    try { mock.kill(); } catch {}
     if (process.platform === "win32") {
       // Windows 没有进程组信号：taskkill /T 按父子树收掉 Electron 与它的 worker
       try {
@@ -401,6 +420,57 @@ const WAIT_ASR = Number(process.env.BIT_E2E_WAIT_ASR || 180 * 1000);
         if (!caps.paste_supported) throw new Error(`粘贴通道不可用：${caps.paste_hint || "无提示"}`);
       }
       return `title=${st.title} tools=${ov.tool_count} 截图=${caps.screenshot_backend || "-"} 粘贴=${caps.paste_tool || "-"}`;
+    });
+
+    // ── P6 远程访问监听 + TUI 并行互不干扰 ─────────────────────
+    // 承接 tui.cjs 原 T7（M4 后 bit-cli 无桌面形态，桌面侧只能在这套里验）：
+    // config.json 首启导入开启 remote_enabled → HTTP 服务真监听；
+    // bit-cli TUI 共用同一数据目录并发对话（WAL 多进程共享）；TUI 退出后桌面端健在
+    await probe("P6 远程访问监听 + TUI 并行互不干扰", async () => {
+      const health = await until(
+        "远程服务 /api/health",
+        async () => {
+          try {
+            return await getJson(`http://127.0.0.1:${remotePort}/api/health`);
+          } catch {
+            return null;
+          }
+        },
+        60000,
+        500
+      );
+      const bin = path.join(ROOT, "target", "debug", process.platform === "win32" ? "bit-cli.exe" : "bit-cli");
+      const tui = spawn(bin, ["tui"], {
+        env: { ...process.env, NO_AT_BRIDGE: "1", BIT_DATA_DIR: dataDir },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let tuiOut = "";
+      tui.stdout.on("data", (d) => (tuiOut += d));
+      tui.stderr.on("data", (d) => (tuiOut += d));
+      tui.stdin.on("error", () => {});
+      const tuiExit = new Promise((res) => {
+        const t = setTimeout(() => {
+          try { tui.kill("SIGKILL"); } catch {}
+          res(-1);
+        }, 30000);
+        tui.on("exit", (c) => { clearTimeout(t); res(c); });
+      });
+      try {
+        const ready = await until("TUI 就绪", () => (tuiOut.includes("bit> ") ? true : null), 60000, 200);
+        if (!ready) throw new Error(`TUI 未就绪：${tuiOut.slice(-300)}`);
+        tui.stdin.write("TUI-PARALLEL-CHECK\n");
+        const replied = await until("TUI 并行对话回复", () => (tuiOut.includes("好的。") ? true : null), 30000, 500);
+        if (!replied) throw new Error(`TUI 无回复：${tuiOut.slice(-300)}`);
+        tui.stdin.write("/quit\n");
+        const code = await tuiExit;
+        if (code !== 0) throw new Error(`TUI 退出码 ${code}`);
+        // TUI 退出后桌面端仍健在（不抢实例、不抢端口）
+        const alive = await getJson(`http://127.0.0.1:${remotePort}/api/health`).then(() => true).catch(() => false);
+        if (!alive) throw new Error("TUI 退出后 /api/health 不再响应");
+        return `health=${JSON.stringify(health).slice(0, 80)} tuiExit=${code} 桌面端仍健在`;
+      } finally {
+        try { tui.kill(); } catch {}
+      }
     });
 
     // 复用：把当前窗口抬到最前（真实桌面语义：激活 + 输入焦点）
