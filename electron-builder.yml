@@ -69,6 +69,13 @@ mac:
   category: public.app-category.productivity
   target:
     - target: dir
+  # universal 合并（--universal）逐文件比对两份构建：单架构 Mach-O 若在 x64 与 arm64
+  # 包里内容完全相同，@electron/universal 会直接报错（它没法 lipo 两份一样的东西）。
+  # 按平台分包的原生模块正是这种形状——sherpa-onnx-darwin-<arch>/sherpa-onnx.node、
+  # @koromix/koffi-darwin-<arch>/darwin_<arch>/koffi.node 都被两份构建原样带上，
+  # 运行期由包名/目录名挑自己那一份。这里声明为「按架构各自保留」，跳过 lipo。
+  # 注意：两架构的文件清单必须完全一致（多一个少一个都会判失败），所以不能靠打包前删包。
+  x64ArchFiles: '**/*darwin*/*.node'
 
 linux:
   icon: src-tauri/icons/256x256.png
