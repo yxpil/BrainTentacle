@@ -197,6 +197,77 @@ print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=Fals
 - 插件的会话（`plugin:<插件id>`）会带**拼图图标**出现在左侧对话列表：插件聊天、唤回注入的回复都能直接点开回看；还没产生消息的空会话不占位。它们仍与你的普通对话隔离，插件只能读写自己的命名空间
 - 插件工具走的是既有执行链，自动继承 `toolhomes` 环境与超时配置，安全策略一视同仁
 
+#### 写给插件作者：从零开发一个扩展
+
+**脚手架一条命令起手**（在仓库源码里）：
+
+```bash
+node scripts/plugin-init.cjs --name hello --kind page --dest ../drafts
+```
+
+`--kind` 六种形态，生成即可跑的完整插件包：
+
+| kind | 形态 | 示范内容 |
+|---|---|---|
+| `page` | 静态页 + 宿主代管存储（preset: page） | `web/index.html` + `window.Bit` 用法 |
+| `service` | 常驻 node 服务（preset: service） | 进程里 `require("bit")` 回连能力 |
+| `tool` | 解释器工具 | stdin 收 JSON、stdout 出 JSON |
+| `filekind` | 认领一种宿主读不了的文件 | 图标 + 解析工具（需 `files` 权限） |
+| `net` | 连外部 MCP（preset: connect） | `connections[]` + `{setting:KEY}` 占位 |
+| `full` | 全套语法糖示范 | 自带服务器（ESM `import "bit"`）+ 页面 + 工具 |
+
+脚手架会**拒绝直接写真实数据目录**（`%APPDATA%\com.bit.hub`），先 `--dest` 到别处再拷进 `toolhomes/plugins/`。生成器的输出刻意用简写形式（preset / 单数 `page` / 一行式 `server`），和仓库 `plugins/sdk-sugar` 一起当「语法糖怎么写都行」的活文档。
+
+**进程侧 SDK**（清单 `server` / `services[]` 进程与解释器工具里用）。宿主把 SDK 物化在 toolhomes 下，进程里直接引用，不需要自己拼 HTTP：
+
+- node（CJS）：`const bit = require("bit")`；node（ESM）：`import bit from "bit"`（`server` / `services` 进程可用；解释器工具源码只支持 `require`）
+- python：`import bit`
+
+凭据从环境变量来：宿主拉起进程时注入 `BIT_PLUGIN_API`（宿主插件 API 地址）/ `BIT_PLUGIN_TOKEN`（本插件令牌）/ `BIT_PLUGIN_ID` / `BIT_PLUGIN_SERVICE` / `BIT_PLUGIN_PORT` / `BIT_PLUGIN_DIR` / `BIT_PLUGIN_PERMS`（生效权限列表）。非托管进程没有这些变量，SDK 直接抛错而不是假装能跑。方法名与页面侧共用一套词汇：
+
+| SDK | 方法 | 权限位 |
+|---|---|---|
+| `bit.info()` / `bit.caps()` / `bit.runtime.list()` | 本插件身份与申报 / 当前申报下实际可用的动词 / 本机解释器清单 | 无需申报 |
+| `bit.settings` | `all` / `get` / `set` / `getJSON` / `setJSON` ——只读本插件自己的键值，可存连接密钥（填进 `{setting:KEY}` 占位） | `settings` |
+| `bit.data` | `list` / `read` / `write` / `remove` / `readJSON` / `writeJSON` ——落在本插件数据目录 | `data` |
+| `bit.fs` | `list` / `stat` / `exists` / `read` / `write` / `append` / `remove` / `mkdir` / `move` + JSON 糖。相对路径落在插件数据目录，绝对路径可到任意位置 | `write` |
+| `bit.sessions` | `list` / `read` / `append` / `wake`——`wake` 把一段后台产物送回本插件会话，让那边的 AI 下一轮看到 | `session` |
+| `bit.services` | `list` / `save` / `start` / `stop` / `remove`（WorkWith 条目） | `workwith` |
+| `bit.server` | `status` / `start` / `stop`（本插件自带服务器） | `server` |
+| `bit.net` | `connections` / `connect` / `disconnect` ——只回本插件清单 `connections[]` 的实时状态，看不到别人的连接、拿不到密钥值 | `net` |
+| `bit.exec` | `run`（交给 shell）/ `program`（直接起程序：裸名走系统 PATH、带目录成分按插件目录展开）/ `node` / `python` / `powershell` / `nodeEval`，都可传参数、工作目录、超时与 stdin | `exec` |
+| `bit.files.kinds()` | 本插件登记且当前生效的文件类型（宿主实际生效的那份，不是清单原文） | `files` |
+| `bit.notify(title, body)` | 系统通知 | `notify` |
+| `bit.chat(message, opts)` / `bit.history(session_id)` | 向本插件会话发消息 / 读历史 | `chat` |
+| `bit.can(perm)` / `bit.sleep(ms)` / `bit.log/warn/error` | 查询权限是否仍被放行 / 等待 / 带插件前缀的日志（「服务」页日志面板原样收下） | — |
+
+未申报的动词由宿主拒绝并抛 `BitError`（`status=403` = 去清单申报权限，`400` = 改参数），SDK 不放宽任何能力。
+
+**页面侧 SDK**：插件页（静态页 / 动态页 / 设置页 / 状态面板）里宿主自动注入 `window.Bit`，命名空间与上表一致，另有开局糖：`Bit.ready()`（握手回执确定落地，5 秒超时也放行不吊死页面）、`Bit.boot(fn)`（等握手完成再跑）、`Bit.on(name, fn)` / `Bit.once(...)`（订阅宿主事件，停用插件即收回）。页面帧与每条消息都带插件令牌（静态页走 `?bit_token=`、动态页走 `#bit_token=`、注入脚本兜底），宿主既认「这个帧是我创建的」也认「它带着凭据」——两条通道共用同一枚令牌，停用即收回。
+
+**权限申报可以用 preset 少抄十几行**：`"preset": "page"` 一个词换一组权限，与手写 `permissions` 取并集（只加不减）。`bridge.token` 不在 preset 代填范围——声明了 `server` / `pages` / `settings.page` 的插件必须自己写 `"bridge": { "token": "required" }`。
+
+| preset | 展开的权限位 |
+|---|---|
+| `page` | page, storage, settings, data, events, notify, pagectl |
+| `ui` | css, js, settings, storage, events, notify, data |
+| `server` | server, page, data, settings, events, notify |
+| `service` | workwith, data, settings, events, notify |
+| `ai` | chat, session, data, settings, notify |
+| `tool` | data, settings, notify |
+| `device` | invoke, exec, write, data, notify |
+| `connect` | net, settings, data, notify, events |
+| `full` | all（展开成全部权限，仍可逐项关闭） |
+
+**清单语法糖**（同一字段多种写法，解析后完全等价）：单数字段（`tool` / `page` / `service` / `job` / `skill` / `memory` / `chat_icon` / `connection` / `file_kind` / `takeover`）单个对象免套数组；`permissions` 与 `interpreters` 可写成 `"exec, data"` 逗号串；`server` 可写一行 `"node server.js"`；`file_kinds[].exts` 写 `"fz"` / `".fz"` / 数组都认（统一洗成小写带点）。
+
+**调试要点**：
+
+- 扫描错误不静默：`plugin.json` 校验失败（权限没申报、`bridge.token` 缺失、路径逃逸、图标路径数据含非法字符等）会在「工具」页插件区块列出具体原因，照提示改完点「重扫插件」即可
+- **文件一改就要重新信任**：首次启用时宿主对插件目录全部文件录 SHA-256 基线，之后任何改动（新增 / 修改 / 删除文件）都会让插件按「未启用」处理（防篡改，同时收回令牌与托管进程）——开发迭代时每次改完文件，去插件详情点「信任并启用」重录基线
+- 解释器工具与手写工具同一约定：stdin 收 JSON、stdout 出结果；`file` 相对插件目录、优先于内联 `code`
+- 仓库 `plugins/` 目录就是验证套件：21 个正例 + `_invalid/` 27 个拒收夹具，`node scripts/install-plugin-suite.cjs --dest "<隔离实例的 toolhomes/plugins>" [--with-invalid] [--list] [--clean]` 可整套装进任意隔离验证实例（强制显式 `--dest`，认出真实数据目录直接拒绝）；出包时 files 白名单已保证套件与夹具不会进安装包
+
 ### 二、MCP 扩展（接入现成的 MCP 服务器）
 
 如果你的能力已经是（或能拿到）一个标准 MCP 服务器，直接在「工具」页下方接入，**不需要写任何代码**：

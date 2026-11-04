@@ -186,6 +186,77 @@ Back on the **Tools** page → **Local plugins** → click **Rescan plugins**. T
 - Plugins that fail to scan are **skipped and listed with the reason**, never silently dropped — fix `plugin.json` per the message and rescan
 - Plugin tools run through the existing execution chain and inherit the `toolhomes` environment and timeout settings, so security policy applies equally
 
+#### For plugin authors: build an extension from scratch
+
+**Scaffold with one command** (inside the repo):
+
+```bash
+node scripts/plugin-init.cjs --name hello --kind page --dest ../drafts
+```
+
+Six `--kind` shapes, each generating a complete, runnable package:
+
+| kind | Shape | Generated demo |
+|---|---|---|
+| `page` | Static page + host-managed storage (preset: page) | `web/index.html` + `window.Bit` usage |
+| `service` | Long-running node service (preset: service) | `require("bit")` calling back into host capabilities |
+| `tool` | Interpreter tool | stdin JSON in, stdout JSON out |
+| `filekind` | Claim a file type the host cannot read | Icon + parser tool (needs the `files` permission) |
+| `net` | Connect to an external MCP (preset: connect) | `connections[]` + `{setting:KEY}` placeholders |
+| `full` | Full syntax-sugar demo | Own server (ESM `import "bit"`) + page + tool |
+
+The scaffolder **refuses to write into the real data directory** (`%APPDATA%\com.bit.hub`) — generate elsewhere with `--dest`, then copy into `toolhomes/plugins/`. Its output deliberately uses shorthand forms (preset / singular `page` / one-line `server`) and, together with `plugins/sdk-sugar` in the repo, doubles as living documentation of the sugar.
+
+**Process-side SDK** (for `server` / `services[]` processes and interpreter tools). The host materializes the SDK under toolhomes — reference it directly instead of hand-rolling HTTP:
+
+- node (CJS): `const bit = require("bit")`; node (ESM): `import bit from "bit"` (available to `server` / `services` processes; interpreter tool sources support `require` only)
+- python: `import bit`
+
+Credentials come from the environment: the host injects `BIT_PLUGIN_API` (the host plugin API address) / `BIT_PLUGIN_TOKEN` (this plugin's token) / `BIT_PLUGIN_ID` / `BIT_PLUGIN_SERVICE` / `BIT_PLUGIN_PORT` / `BIT_PLUGIN_DIR` / `BIT_PLUGIN_PERMS` (effective permission list). A non-hosted process has none of these and the SDK throws instead of pretending to work. Method names share one vocabulary with the page side:
+
+| SDK | Methods | Permission |
+|---|---|---|
+| `bit.info()` / `bit.caps()` / `bit.runtime.list()` | This plugin's identity & declaration / verbs currently available under the declaration / local interpreter list | none needed |
+| `bit.settings` | `all` / `get` / `set` / `getJSON` / `setJSON` — reads only this plugin's own keys; a good place for connection secrets that fill `{setting:KEY}` placeholders | `settings` |
+| `bit.data` | `list` / `read` / `write` / `remove` / `readJSON` / `writeJSON` — inside the plugin's data folder | `data` |
+| `bit.fs` | `list` / `stat` / `exists` / `read` / `write` / `append` / `remove` / `mkdir` / `move` + JSON sugar. Relative paths land in the plugin data folder; absolute paths can reach anywhere | `write` |
+| `bit.sessions` | `list` / `read` / `append` / `wake` — `wake` sends background output back to the plugin session so its AI sees it next turn | `session` |
+| `bit.services` | `list` / `save` / `start` / `stop` / `remove` (WorkWith entries) | `workwith` |
+| `bit.server` | `status` / `start` / `stop` (this plugin's own server) | `server` |
+| `bit.net` | `connections` / `connect` / `disconnect` — only this plugin's declared `connections[]` with live status; no other plugin's links, no secret values | `net` |
+| `bit.exec` | `run` (through the shell) / `program` (launch a binary: bare name via system PATH, relative path with directory parts resolved inside the plugin folder) / `node` / `python` / `powershell` / `nodeEval` — args, cwd, timeout and stdin supported | `exec` |
+| `bit.files.kinds()` | This plugin's registered file kinds as currently effective (the host's live view, not the manifest text) | `files` |
+| `bit.notify(title, body)` | System notification | `notify` |
+| `bit.chat(message, opts)` / `bit.history(session_id)` | Send a message to the plugin session / read its history | `chat` |
+| `bit.can(perm)` / `bit.sleep(ms)` / `bit.log/warn/error` | Check whether a permission is still granted / wait / prefixed logs (shown in the Services page log panel) | — |
+
+Undeclared verbs are rejected by the host with a `BitError` (`status=403` = declare the permission in the manifest, `400` = fix the arguments). The SDK itself never widens anything.
+
+**Page-side SDK**: the host auto-injects `window.Bit` into plugin pages (static / dynamic / settings / status), with the same namespaces as above plus boot sugar: `Bit.ready()` (resolves once the handshake round-trip lands; times out after 5 s so the page never hangs), `Bit.boot(fn)` (run after the handshake), `Bit.on(name, fn)` / `Bit.once(...)` (subscribe to host events; revoked when the plugin is disabled). The frame and every message carry the plugin token (static pages via `?bit_token=`, dynamic pages via `#bit_token=`, injected script as fallback) — the host verifies both "this frame is mine" and "it holds the credential". Both channels share one token, revoked on disable.
+
+**Presets cut down permission boilerplate**: `"preset": "page"` declares a group in one word, unioned with any hand-written `permissions` (additive only). `bridge.token` is never filled by a preset — a plugin declaring `server` / `pages` / `settings.page` must write `"bridge": { "token": "required" }` itself.
+
+| preset | Expanded permissions |
+|---|---|
+| `page` | page, storage, settings, data, events, notify, pagectl |
+| `ui` | css, js, settings, storage, events, notify, data |
+| `server` | server, page, data, settings, events, notify |
+| `service` | workwith, data, settings, events, notify |
+| `ai` | chat, session, data, settings, notify |
+| `tool` | data, settings, notify |
+| `device` | invoke, exec, write, data, notify |
+| `connect` | net, settings, data, notify, events |
+| `full` | all (expands to every permission, still individually toggleable) |
+
+**Manifest sugar** (multiple spellings, identical after parsing): singular fields (`tool` / `page` / `service` / `job` / `skill` / `memory` / `chat_icon` / `connection` / `file_kind` / `takeover`) accept a single object without an array; `permissions` and `interpreters` accept a comma string like `"exec, data"`; `server` accepts the one-liner `"node server.js"`; `file_kinds[].exts` accepts `"fz"` / `".fz"` / arrays (all normalized to lowercase with a dot).
+
+**Debugging notes**:
+
+- Scan errors are never silent: `plugin.json` validation failures (missing permission, missing `bridge.token`, path escape, illegal icon path data, …) are listed with the exact reason in the Tools page plugin section — fix and rescan
+- **Any file change requires re-trust**: on first enable the host records a SHA-256 baseline of every file in the plugin folder; afterwards any change (added / modified / removed file) treats the plugin as not enabled (tamper protection — the token and hosted processes are revoked at the same time). While iterating, click **Trust & enable** in the plugin details after each edit to re-record the baseline
+- Interpreter tools follow the same contract as hand-written tools: JSON on stdin, result on stdout; `file` is plugin-relative and wins over inline `code`
+- The repo's `plugins/` directory is the validation suite: 21 positive examples + 27 rejection fixtures under `_invalid/`. `node scripts/install-plugin-suite.cjs --dest "<isolated instance's toolhomes/plugins>" [--with-invalid] [--list] [--clean]` installs the whole set into any isolated test instance (explicit `--dest` required; the real data directory is refused); the packaging `files` allowlist keeps the suite and fixtures out of installers
+
 ### 2. MCP extensions (wire up an existing MCP server)
 
 If the capability you want already is (or can be) a standard MCP server, connect it at the bottom of the **Tools** page — **no code required**:
