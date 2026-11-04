@@ -1,0 +1,171 @@
+name: voice-crosscheck
+
+# 多端联调前置自检：用真机 runner 跑「不需要人坐在屏幕前」的链路——
+#   1) 桌面能力探测矩阵（截图后端 / 粘贴工具的选择与缺工具提示）
+#   2) 本地合成内核按平台真下载 → 解档 → 选名 → 执行（含 Windows DLL / Linux .so 加载）
+#   3) 跨架构识别原生包补装（electron-builder beforePack 的同一段逻辑）
+#   4) 识别 worker 起停 + 固定素材 WAV 转写（含 Linux LD_LIBRARY_PATH / Windows PATH）
+#   5) 在线合成桥真出声（edge 音频非空可解码 + 无 Key/非法引擎的错误分支）
+# 触发：手动 dispatch + 语音相关文件变更时自动跑（见下方 on: 说明）。
+# 不打 tag、不出包、不上传任何产物，也不接进发布链。
+# 交互部分（真实框选、抢焦点粘贴、辅助功能/UAC 弹窗）在这里验不了：
+# 框选与粘贴注入改由 desktop-e2e 在 Xvfb 里真跑，辅助功能/UAC 弹窗仍需目标机器人工点一遍。
+# 触发说明：workflow_dispatch 要求工作流文件存在于**默认分支**才会在 Actions 里注册；
+# 本文件只在 windows 分支上，光有 dispatch 是点不起来的。故再加一个按路径收窄的 push 触发——
+# 只有语音/桌面能力相关代码变更才会跑这条自检，且它不出包、不上传产物、不参与发布链。
+# 等这套逻辑合进默认分支后，可以把 push 去掉只留手动。
+on:
+  workflow_dispatch:
+    inputs:
+      with_asr:
+        description: "跑识别端到端（各平台下载约 240MB 模型）"
+        type: boolean
+        default: true
+      with_kernel:
+        description: "跑合成内核端到端（各平台下载约 20-28MB）"
+        type: boolean
+        default: true
+  push:
+    branches:
+      - windows
+    paths:
+      - "crates/bit-core/src/voice.rs"
+      - "crates/bit-core/src/tts.rs"
+      - "crates/bit-core/src/download.rs"
+      - "voice-bridge/**"
+      - "electron/desktop-capabilities.cjs"
+      - "electron/main.cjs"
+      - "scripts/before-pack.cjs"
+      - "e2e/**"
+      - ".github/workflows/voice-crosscheck.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-crosscheck-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  crosscheck:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # Windows runner 上 bit-core 那棵依赖树要编译很久（这一趟 40 分钟被吃掉在编译上），留出余量
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # xcheck_* = beforePack 要补装的目标，故意选不等于 runner 自身的架构，
+          # 才能证明跨架构补装在各 OS 上成立；skip_* 必须是 registry 里不存在的组合
+          - name: windows-x64
+            os: windows-latest
+            xcheck_platform: win32
+            xcheck_arch: 0 # Arch.ia32 —— 真实发布，应补装成功
+            skip_platform: win32
+            skip_arch: 3 # Arch.arm64 —— sherpa 无此包，应明确跳过
+          - name: linux-x64
+            os: ubuntu-24.04
+            xcheck_platform: linux
+            xcheck_arch: 3 # Arch.arm64
+            skip_platform: linux
+            skip_arch: 2 # Arch.armv7l —— 无此包
+          - name: macos-arm64
+            os: macos-15
+            xcheck_platform: darwin
+            xcheck_arch: 1 # Arch.x64
+            skip_platform: darwin
+            skip_arch: 4 # Arch.universal —— 无此包
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: voice-bridge/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 只缓存 crate 下载（registry + git），不缓存 target/：位核编译每次重来，
+      # 但省掉几百个 crate 的拉取，且不会因增量编译的陈旧产物给出假绿。
+      - name: 缓存 cargo 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.name }}-
+
+      # 只装 voice-bridge：识别原生包（sherpa-onnx-<os>-<arch>）由 npm 按 runner 自身平台落位。
+      # 不跑根 npm ci——这条自检用不到根依赖（electron/vite/esbuild）：能力单测、探针、
+      # beforePack 检查都只 require 仓库内 .cjs，不读根 node_modules。
+      - name: 依赖安装（voice-bridge）
+        working-directory: voice-bridge
+        run: npm ci --no-audit --no-fund
+
+      # 两个用途：
+      #   1) 让「真机能探到截图后端 / 粘贴工具」在 Linux 上成为阳性断言（scrot + xdotool）
+      #   2) bit-core 在 Linux 链接 -lxcb / -lxdo（截图与模拟按键依赖），缺 dev 包则链接期就红
+      - name: 系统截图/粘贴工具与链接依赖（Linux）
+        if: matrix.name == 'linux-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y scrot xdotool libxcb1-dev libxdo-dev
+
+      - name: 能力探测单测
+        run: node --test e2e/capabilities-test.cjs
+
+      - name: 本机真实探测结果（三端对照）
+        run: node e2e/capabilities-probe.cjs
+
+      # 在线引擎此前只有「node_modules 里有没有包」这一条状态位断言，从没真出过声音。
+      # 这一步拉起出厂同一条 tts-worker 桥，edge 合成必须拿回可解码音频；
+      # 排在 beforePack 之前：那两步会 pruneForeign 掉本机识别包，桥依赖虽不受影响，
+      # 但顺序统一成「所有要用本机依赖的步骤在前」更省心。
+      - name: 在线合成真出声（edge / 错误分支）
+        run: node e2e/tts-online-check.cjs
+
+      # ↓ 顺序约束：端到端要用 runner 自己那一份识别原生包，beforePack 检查会往里装 foreign 包
+      # 并（CI=true 时）pruneForeign 删掉本机那份，所以 beforePack 必须排在端到端之后；
+      # 而它又不影响 Rust 单测（单测只用临时目录构造原生包路径），故放在单测之前，
+      # 免得某个单测红了把 beforePack 的结论一起挡掉。
+      # push 事件下 inputs.* 恒为空，直接写 if: inputs.x 会让端到端在自动触发里静默跳过，
+      # 所以只在手动触发时才看开关。
+      - name: 内核端到端（真下载 + 解档 + 执行）
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.with_kernel }}
+        run: cargo test -p bit-core --lib tts::tests::e2e_cli_install_real_and_runs -- --ignored --nocapture
+
+      - name: 识别端到端（模型下载 + worker + 固定素材转写）
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.with_asr }}
+        run: cargo test -p bit-core --lib voice::tests::e2e_download_and_transcribe -- --ignored --nocapture
+
+      - name: beforePack 跨架构补装（存在的目标包）
+        env:
+          BIT_XCHECK_PLATFORM: ${{ matrix.xcheck_platform }}
+          BIT_XCHECK_ARCH: ${{ matrix.xcheck_arch }}
+          BIT_XCHECK_EXPECT: install
+        run: node e2e/before-pack-check.cjs
+
+      - name: beforePack 对未发布架构明确跳过
+        env:
+          BIT_XCHECK_PLATFORM: ${{ matrix.skip_platform }}
+          BIT_XCHECK_ARCH: ${{ matrix.skip_arch }}
+          BIT_XCHECK_EXPECT: skip
+        run: node e2e/before-pack-check.cjs
+
+      - name: 相关单测（tts）
+        run: "cargo test -p bit-core --lib tts::"
+
+      - name: 相关单测（voice，含下载续传与就绪判定）
+        run: "cargo test -p bit-core --lib voice::"
+
+      # 全量单测仅作参考：既有的 Windows 路径/工具门控用例在非 Windows 上本就红
+      - name: 全量单测（信息性，不作为闸门）
+        continue-on-error: true
+        run: cargo test -p bit-core --lib

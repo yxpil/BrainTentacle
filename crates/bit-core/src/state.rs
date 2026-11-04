@@ -135,6 +135,10 @@ pub struct Ctx {
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
     /// 审批请求自增 id
     pub approval_seq: AtomicU64,
+    /// ask_user 待应答提问（ask_id → 应答通道）。模型主动向用户提问（选项 + 补充）的挂起表
+    pub asks: Mutex<HashMap<String, PendingAsk>>,
+    /// 提问自增 id
+    pub ask_seq: AtomicU64,
     pub server_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// 云中继客户端循环句柄（随远程服务启停）
     pub relay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -150,6 +154,9 @@ pub struct Ctx {
     pub nonce_seen: Mutex<crate::security::NonceCache>,
     /// 工具质量统计：tool_id → 成功率等（内存态 + tool_stats.json 落盘）
     pub tool_stats: Mutex<toolstats::Store>,
+    /// 工具按需加载（config.lazy_tools）：会话 → 本会话已调取完整 schema 的工具名集合。
+    /// 内存态：重启或新会话都回到「只有 skill」的起点，模型要用再调（见 tool_load.rs）
+    pub tool_loaded: Mutex<HashMap<String, std::collections::HashSet<String>>>,
     /// 工作区沙箱根（运行时）：TUI 启动时默认锚定进程 cwd；None = 不限制（桌面端默认）。
     /// config.workspace_root 可显式指定；shell 未传 cwd 时以此兜底，文件工具路径禁止逃逸
     pub workspace_root: Mutex<Option<PathBuf>>,
@@ -200,11 +207,26 @@ pub struct PendingApproval {
     pub created: std::time::Instant,
 }
 
+/// ask_user 的一条待应答提问：应答通道 + 会话归属（中断联动清理用）
+pub struct PendingAsk {
+    pub tx: tokio::sync::oneshot::Sender<serde_json::Value>,
+    pub session: String,
+    pub created: std::time::Instant,
+}
+
 impl Ctx {
     /// 图片缓存目录（数据目录下 images/）：模型生成图片 / 工具产图的统一落盘位置，
     /// 系统提示词会把该路径告知模型作为工作区
     pub fn image_dir(&self) -> PathBuf {
         let d = self.data_dir.join("images");
+        fs::create_dir_all(&d).ok();
+        d
+    }
+
+    /// 用户自选的提示音文件存放处（data_dir/sounds）：与 images 同一口径，
+    /// 只在需要时创建，不放素材进安装包。
+    pub fn sound_dir(&self) -> PathBuf {
+        let d = self.data_dir.join("sounds");
         fs::create_dir_all(&d).ok();
         d
     }
@@ -240,6 +262,9 @@ impl Ctx {
         // 全量数据存储：先开 bit.db，再由 Config::load 处理引导锚点与配置迁移
         let mut db = crate::store::open(&data_dir);
         let config = crate::config::Config::load(&data_dir, &db);
+        // 出网代理随配置装载生效（本进程环境 + 进程内决策）：host / worker / TUI / CLI
+        // 都从这一条路径起，所以自定义代理对全进程 reqwest、webview 与 shell 子进程口径一致
+        crate::netproxy::apply(&config);
         let device_key = config.device_key.clone();
         // 一次性导入遗留 JSON 文件（幂等；导入后原文件改名 .migrated 留档）
         crate::store::import_legacy(&db, &data_dir, device_key.as_deref());
@@ -298,6 +323,11 @@ impl Ctx {
         // 移除历史遗留的内置项，保留用户 / AI 自建的工具，再把最新内置放到最前。
         let tools = {
             let builtin = crate::registry::builtin_tools();
+            // 先记下磁盘旧清单里各工具的 enabled（按 name 对齐，参照 refresh_runtimes 的
+            // prev_enabled 模式）：重建内置工具后沿用用户开关——新装的内置工具（磁盘无记录）
+            // 用代码默认值（schedule_task 默认关，其余内置默认开），老内置的用户开关重启后保持。
+            let prev_enabled: std::collections::HashMap<String, bool> =
+                tools.iter().map(|t| (t.name.clone(), t.enabled)).collect();
             let builtin_names: std::collections::HashSet<String> =
                 builtin.iter().map(|t| t.name.clone()).collect();
             let mut custom: Vec<ToolDef> = tools
@@ -308,6 +338,11 @@ impl Ctx {
                 })
                 .collect();
             let mut merged = builtin;
+            for t in merged.iter_mut() {
+                if let Some(&en) = prev_enabled.get(&t.name) {
+                    t.enabled = en;
+                }
+            }
             merged.append(&mut custom);
             crate::store::put_json(&db, "tools", &merged);
             merged
@@ -355,6 +390,8 @@ impl Ctx {
             cache_stats: Mutex::new(HashMap::new()),
             approvals: Mutex::new(HashMap::new()),
             approval_seq: AtomicU64::new(1),
+            asks: Mutex::new(HashMap::new()),
+            ask_seq: AtomicU64::new(1),
             autopilot_running: AtomicBool::new(false),
             server_task: Mutex::new(None),
             relay_task: Mutex::new(None),
@@ -367,6 +404,7 @@ impl Ctx {
                 8192,
             )),
             tool_stats: Mutex::new(tool_stats),
+            tool_loaded: Mutex::new(HashMap::new()),
             workspace_root: Mutex::new(None),
             started: std::time::Instant::now(),
         })

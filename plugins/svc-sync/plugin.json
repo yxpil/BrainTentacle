@@ -1,0 +1,36 @@
+{
+  "name": "数据同步服务组",
+  "version": "1.1.0",
+  "description": "两个常驻服务：一个是普通托管进程，一个端口就绪后自动接入为 MCP 服务器（Streamable HTTP）",
+  "permissions": ["workwith", "settings", "chaticon"],
+  "services": [
+    {
+      "name": "replicator",
+      "label": "增量同步器",
+      "runtime": "node",
+      "program": "svc/replicator.js",
+      "env": { "MODE": "local", "BATCH": "250" },
+      "auto_start": true
+    },
+    {
+      "name": "indexer",
+      "label": "全文索引（MCP）",
+      "runtime": "node",
+      "program": "svc/indexer.js",
+      "cwd": "svc",
+      "port": 0,
+      "mcp_mode": "http",
+      "auto_start": true
+    }
+  ],
+  "chat_icons": [
+    {
+      "id": "sync-now",
+      "label": "催一次同步",
+      "label_en": "Sync now",
+      "paths": ["M20 12 A8 8 0 1 1 8 5", "M20 4 L20 12 L12 12"],
+      "action": "prompt",
+      "text": "帮我看一眼「数据同步服务组」的同步器和索引服务现在是否在跑。"
+    }
+  ]
+}

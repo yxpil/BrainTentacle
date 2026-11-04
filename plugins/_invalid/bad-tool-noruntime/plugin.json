@@ -1,0 +1,9 @@
+{
+  "name": "闸门夹具·工具没运行时",
+  "version": "0.0.1",
+  "description": "interpreter 型工具不写 runtime 就跑不起来，别到调用时才给用户报错",
+  "permissions": ["invoke"],
+  "tools": [
+    { "name": "orphan", "description": "缺 runtime 的工具", "kind": "interpreter", "code": "print(1)" }
+  ]
+}

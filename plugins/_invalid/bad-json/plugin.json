@@ -1,0 +1,5 @@
+{
+  "name": "闸门夹具·清单不是合法 JSON",
+  "version": "0.0.1",
+  "description": "少一个右括号，解析失败必须留在错误列表里而不是静默跳过",
+  "permissions": ["page"]

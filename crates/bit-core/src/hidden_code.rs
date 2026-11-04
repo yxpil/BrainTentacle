@@ -6,7 +6,8 @@
 //! - 占位符按内容 hash 派生（非自增 id）：同一敏感值永远得到同一占位符，
 //!   与条目顺序/增删无关，多轮对话与历史重发天然一致，无需持久化映射。
 //! - 条目双语义：kind=value（精确替换）/ kind=pattern（内置正则掩全部匹配）。
-//! - 会话历史存原文；掩码只作用于发送副本（chat_with_images 入口统一拦截）。
+//! - 会话历史存原文；掩码只作用于发送副本（chat_with_images / 流式 / 原生 Function
+//!   Calling / simple_chat 各发送入口统一拦截，工具结果回喂同样掩码）。
 //! - 还原在 execute_tool_call 顶部统一做（深度遍历参数 JSON），未知占位符原样保留。
 
 use rand::Rng;
@@ -155,6 +156,57 @@ fn unmask_text(text: &str, map: &HashMap<String, String>) -> String {
         }
     }
     out
+}
+
+/// 深度遍历 JSON：Object 递归 value、Array 递归元素、String 按启用条目掩码。
+/// 用于工具结果回喂（原生 function calling 的 tool_result 载荷）。
+pub fn mask_json(v: &mut serde_json::Value, entries: &[HiddenCodeEntry], hex_len: usize) {
+    match v {
+        serde_json::Value::String(s) => {
+            *s = mask_text(s, entries, hex_len);
+        }
+        serde_json::Value::Object(m) => {
+            for val in m.values_mut() {
+                mask_json(val, entries, hex_len);
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for val in a.iter_mut() {
+                mask_json(val, entries, hex_len);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 原生 Function Calling 的工具交换回喂前掩码：工具结果里可能是本机还原后的真实值，
+/// 不回喂给模型（调用参数保留原样：模型输出本就只见别名/占位符）。
+pub fn maybe_mask_exchanges(
+    ctx: &Arc<Ctx>,
+    exchanges: &[crate::ai::ToolExchange],
+) -> Vec<crate::ai::ToolExchange> {
+    let entries = active_entries(ctx);
+    if entries.is_empty() {
+        return exchanges.to_vec();
+    }
+    let hex_len = hash_hex_len(
+        &entries.iter().map(|e| e.value.as_str()).collect::<Vec<_>>(),
+    );
+    exchanges
+        .iter()
+        .map(|ex| crate::ai::ToolExchange {
+            calls: ex.calls.clone(),
+            results: ex
+                .results
+                .iter()
+                .map(|r| {
+                    let mut value = r.value.clone();
+                    mask_json(&mut value, &entries, hex_len);
+                    crate::ai::ToolResult { ok: r.ok, value }
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// 深度遍历 JSON：Object 递归 value、Array 递归元素、String 还原占位符。

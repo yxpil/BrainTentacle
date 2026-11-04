@@ -1,0 +1,10 @@
+{
+  "name": "重名的外部连接",
+  "version": "1.0.0",
+  "description": "负面夹具：两条连接同名，宿主侧条目 id 会撞车，必须整体拒收",
+  "permissions": ["net"],
+  "connections": [
+    { "name": "dup", "label": "第一条", "url": "https://a.example.com/mcp" },
+    { "name": "dup", "label": "第二条", "url": "https://b.example.com/mcp" }
+  ]
+}

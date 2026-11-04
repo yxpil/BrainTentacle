@@ -1,0 +1,8 @@
+{
+  "name": "闸门夹具·路径越界",
+  "version": "0.0.1",
+  "description": "页面 src 用 .. 往插件目录外爬一层，静态托管的目录闸门必须拒绝",
+  "bridge": { "token": "required" },
+  "permissions": ["page"],
+  "pages": [{ "id": "p", "label": "越界页", "src": "../escape.html" }]
+}

@@ -76,7 +76,10 @@ pub fn open(data_dir: &Path) -> Connection {
             content TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'pending',
             source TEXT NOT NULL DEFAULT '',
-            session_id TEXT
+            session_id TEXT,
+            scheduled_at TEXT,
+            schedule TEXT,
+            last_run TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_todos_goal ON todos(goal_id);
         CREATE INDEX IF NOT EXISTS idx_todos_session ON todos(session_id);
@@ -91,6 +94,20 @@ pub fn open(data_dir: &Path) -> Connection {
         );",
     )
     .expect("[store] schema init failed");
+    // 已有库幂等补列：todos 计划执行三字段（新库走上面的 CREATE 已带列，
+    // 旧库 ALTER 到 "duplicate column" 视为已迁移；其余错误必须冒泡）
+    for ddl in [
+        "ALTER TABLE todos ADD COLUMN scheduled_at TEXT",
+        "ALTER TABLE todos ADD COLUMN schedule TEXT",
+        "ALTER TABLE todos ADD COLUMN last_run TEXT",
+    ] {
+        if let Err(e) = conn.execute_batch(ddl) {
+            let msg = e.to_string().to_lowercase();
+            if !msg.contains("duplicate column") {
+                panic!("[store] schema migrate failed ({ddl}): {e}");
+            }
+        }
+    }
     conn
 }
 
@@ -365,8 +382,8 @@ pub fn import_legacy(conn: &Connection, data_dir: &Path, device_key: Option<&str
                 }
                 "todos" => {
                     let _ = conn.execute(
-                        "INSERT OR IGNORE INTO todos(id,ts,goal_id,content,status,source,session_id)
-                         VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                        "INSERT OR IGNORE INTO todos(id,ts,goal_id,content,status,source,session_id,scheduled_at,schedule,last_run)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                         rusqlite::params![
                             id,
                             item.get("ts").and_then(|x| x.as_str()).unwrap_or(""),
@@ -375,6 +392,9 @@ pub fn import_legacy(conn: &Connection, data_dir: &Path, device_key: Option<&str
                             item.get("status").and_then(|x| x.as_str()).unwrap_or("pending"),
                             item.get("source").and_then(|x| x.as_str()).unwrap_or(""),
                             item.get("session_id").and_then(|x| x.as_str()),
+                            item.get("scheduled_at").and_then(|x| x.as_str()),
+                            item.get("schedule").and_then(|x| x.as_str()),
+                            item.get("last_run").and_then(|x| x.as_str()),
                         ],
                     );
                 }
@@ -655,7 +675,7 @@ mod tests {
         // 模拟崩溃：不做任何 flush 直接 drop（WAL 保证已提交事务不丢）。
         // todos 行级表写入
         let _ = conn.execute(
-            "INSERT INTO todos(id,ts,goal_id,content,status,source,session_id) VALUES('t1','','','x','pending','','')",
+            "INSERT INTO todos(id,ts,goal_id,content,status,source,session_id,scheduled_at,schedule,last_run) VALUES('t1','','','x','pending','','',NULL,NULL,NULL)",
             [],
         );
         drop(conn);

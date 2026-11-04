@@ -92,6 +92,8 @@ Enable the **Remote** page and scan the QR code with the [bit-mobile](https://gi
 - **File encoding auto-detection**: read / write / edit auto-detect BOM / UTF-16 / GBK encodings, preserve source encoding on edit, adapt `.bat`/`.cmd`/`.ps1` script encoding on Windows, or take an explicit `encoding` parameter
 - **Audit log**: all tool calls and key operations are logged, filterable by actor / action / target on the **Audit** page.
 - **System tray**: closing the window keeps BIT in the tray without dropping tasks; right-click for the task panel (session turns / background commands / sub-agents / active goals), hover for a read-only preview; the status dot is white = idle, yellow = working, green = last task succeeded, red = blocked.
+- **Task-completion chime**: three tiers under “Settings → Voice & chime” — built-in chime (synthesized on the fly, no audio asset shipped), custom audio (pick an mp3/wav/ogg/m4a/aac/flac from your machine, ≤2 MB), or only when a turn fails (silent on success; a failed turn makes sound and raises the bubble). Volume and preview included. The notification bubble still comes from the tray only — never twice. Bubble text has markdown stripped, so no `##`, `**` or `|` noise.
+- **Queued sends keep attachments honest**: a message sent while the session is running joins the wait queue; the queue pill reads like human text (attachment names · image count · what you typed) instead of leaking the internal attachment marker. The “queued” bubble in the transcript is derived from the queue itself — remove the pill and it goes away, drag to reorder and it reorders with it, switch sessions and both stay in sync. Which sessions really have a turn in flight is answered by the core turn lock (`running_turns`): after a full page reload the UI still knows the previous turn is running, so the new message joins the queue instead of being silently dropped by the core's rejection.
 - **Auto update**: checks, downloads, and swaps in new versions automatically on all platforms (can be disabled).
 - **Local-first data**: sessions, memory, skills, and settings all stay on your machine.
 
@@ -164,6 +166,8 @@ Field reference (**everything except `name` is optional**; `plugin.json` is the 
 | `skills[]` | Injected into the skill list (`name` + `summary`), structurally identical to AI-distilled skills |
 | `memories[]` | Injected as memory entries |
 | `jobs[]` | Scheduled jobs. `schedule` accepts `every 30m` / `every 2h` / `every 90s` / `daily 09:00`; set `session` to a session id to inject the result there (empty = audit log only) |
+| `services[]` | Declared long-running services (requires the `workwith` permission, max 16): each becomes a fixed WorkWith entry `psvc-<plugin-id>-<name>` with managed process, logs and port. Fields: `name` (unique per plugin) / `label` / `runtime` / `program` (plugin-relative or absolute) / `args` / `cwd` / `env` / `port` (0 = allocate and pass via `BIT_PLUGIN_PORT`) / `mcp_mode` (`http` links MCP once the port is ready; `stdio` means the process itself is the MCP server) / `auto_start` (start when the plugin is enabled or the app launches). The host injects `BIT_PLUGIN_ID` / `BIT_PLUGIN_TOKEN` / `BIT_PLUGIN_API` / `BIT_PLUGIN_DIR` / `BIT_PLUGIN_PERMS`; same-named keys in `env` are overridden |
+| `permissions` | Capability declarations (an unknown name rejects the whole plugin). Besides `css` / `js` / `invoke` / `server` / `page` / `chat` / `settings` / `session` / `workwith` / `pagectl` / `events` / `notify` / `data` / `storage` / `chaticon` / `takeover`, it supports **`exec`** (run commands/programs through the console: `bit.exec.run` / `bit.exec.program`, with args, cwd, timeout and stdin; a bare `program` name resolves through the system PATH, while relative paths with directory parts resolve inside the plugin folder) and **`write`** (read/modify/delete files and programs: `bit.fs.*`; relative paths resolve inside the plugin data folder, absolute paths can reach any location). Use **`all`** to declare everything at once, but it is still an explicit declaration; Settings expands it into individual toggles |
 
 **Tool script contract** (identical to hand-written tools): **read the argument JSON from stdin, print the result to stdout**. So `disk_usage.py` looks like:
 
@@ -250,6 +254,20 @@ The page shows **live logs** (stdout / stderr, polled once a second with event-d
 
 > Typical use: have BIT **automatically start your own local MCP service / database gateway / build-script service** before a conversation, and stop it when done — convenient, with no leftover processes.
 > In one line: **just add it in WorkWith — it scans, runs and links automatically.**
+
+### Lifecycle knobs (Settings → AI → Execution & safety → Managed service lifecycle)
+
+The defaults are fine for most machines, but slow disks, heavy services and models that take half a minute to load are not rare — so these five knobs live in settings, and **Services-page entries and plugin-declared `services[]` share one set**:
+
+| Knob | Default | What it does |
+|---|---|---|
+| Startup delay | 300 ms | Wait before launching, so ports and dependencies can settle; also the base for retry backoff |
+| Readiness limit | 60 s | How long port probing and the MCP handshake may wait before it counts as failed, **measured in wall-clock time** (a connect attempt every 250 ms, each attempt itself capped at 250 ms — otherwise an idle local port can stretch a "5 s" budget to 25 s). Raise it for slow-booting model servers, drop it to make failures surface instantly |
+| Crash retries | 2 | Auto-restarts after a hosted process **exits unexpectedly**; the gap doubles from the startup delay and caps at 15 s. `0` turns auto-restart off. A process alive past 60 s counts as steady: the counter resets, so the next crash gets a fresh budget |
+| Stop grace | 5 s | After you press Stop the process is first asked to shut itself down (SIGTERM on Unix; Windows has no equivalent, so it terminates directly) — this window is the grace; only when it expires is the process force-killed |
+| Log lines | 1000 | Recent output lines each service keeps in the UI; older ones are dropped |
+
+Auto-restart only applies to entries that are **supposed to be running** (plugin-declared services, entries with "link to session") — a process you started manually and that then exits is not quietly relaunched. Both the retry and the give-up emit an event and land in the **Audit** page (`workwith.retry` / `workwith.retry-giveup`, with attempt number, limit and wait in ms). Out-of-range numbers never error out: they are clamped into range on save, and the UI shows you the value that actually took effect.
 
 ### Troubleshooting
 

@@ -1,0 +1,7 @@
+{
+  "name": "闸门夹具·UI 文件缺失",
+  "version": "0.0.1",
+  "description": "权限都报了，文件却不在盘上：不能让「声明了脚本但脚本丢了」的插件半死不活地加载",
+  "permissions": ["js"],
+  "ui": { "js": ["ui/missing.js"] }
+}

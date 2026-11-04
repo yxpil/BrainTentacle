@@ -1,0 +1,218 @@
+<!doctype html>
+<!-- 价格盯盘看板：静态页（宿主插件服务托管，SDK 自动注入，Bit 直接可用）。
+     业务动作都在这一页完成：调阈值、看今天的复核清单、把异常写进自己的数据目录并提醒。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>价格盯盘</title>
+    <style>
+      :root {
+        --bg: #fafafa;
+        --fg: #171717;
+        --muted: #6b7280;
+        --line: #e5e5e5;
+        --card: #fff;
+        --accent: #2563eb;
+        --warn: #b45309;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #171717;
+          --fg: #f5f5f5;
+          --muted: #a3a3a3;
+          --line: #333;
+          --card: #1f1f1f;
+          --accent: #60a5fa;
+          --warn: #fbbf24;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 18px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+      h1 {
+        margin: 0 0 2px;
+        font-size: 16px;
+      }
+      .sub {
+        color: var(--muted);
+        margin-bottom: 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      .card h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      label {
+        display: block;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      input,
+      button {
+        font: inherit;
+      }
+      input {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--fg);
+      }
+      button {
+        margin-top: 10px;
+        padding: 6px 12px;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button.ghost {
+        background: transparent;
+        color: var(--accent);
+      }
+      ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .warn {
+        color: var(--warn);
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-all;
+        color: var(--muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>价格盯盘</h1>
+    <div class="sub" id="who">正在与宿主握手…</div>
+    <div class="grid">
+      <div class="card">
+        <h2>复核阈值</h2>
+        <label>离散度（0–1，对应工具里的 volatility_threshold）</label>
+        <input id="th" type="number" step="0.01" min="0.01" max="1" />
+        <button id="save">保存设置</button>
+        <button id="notify" class="ghost">发一条提醒</button>
+        <div id="msg" class="warn"></div>
+      </div>
+      <div class="card">
+        <h2>今天的复核清单</h2>
+        <ul id="list"><li>还没有记录</li></ul>
+        <button id="scan">记一批报价</button>
+      </div>
+      <div class="card">
+        <h2>我的数据目录</h2>
+        <pre id="files">—</pre>
+      </div>
+      <div class="card">
+        <h2>能力与身份</h2>
+        <pre id="caps">—</pre>
+      </div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const DATA = "review-list.json";
+
+      async function load() {
+        const info = await Bit.ready();
+        $("who").textContent = info
+          ? `${info.plugin_name} · 令牌已就绪 · 申报权限 ${info.permissions.length} 项`
+          : "握手尚未完成";
+        const cap = await Bit.caps();
+        $("caps").textContent = cap.caps.join(", ");
+        const th = await Bit.settings.get("volatility_threshold");
+        $("th").value = th === null || th === undefined ? 0.15 : th;
+        await renderFiles();
+        await renderList();
+      }
+
+      async function renderFiles() {
+        const r = await Bit.data.list();
+        $("files").textContent = (r.files || []).map((f) => `${f.path}  ${f.bytes}B`).join("\n") || "（空）";
+        $("files").dataset.dir = r.dir || "";
+      }
+
+      async function readList() {
+        try {
+          return JSON.parse((await Bit.data.read(DATA)) || "[]");
+        } catch {
+          return [];
+        }
+      }
+
+      async function renderList() {
+        const rows = await readList();
+        $("list").innerHTML = "";
+        if (!rows.length) {
+          $("list").appendChild(Object.assign(document.createElement("li"), { textContent: "还没有记录" }));
+          return;
+        }
+        for (const r of rows) {
+          const li = document.createElement("li");
+          li.textContent = `${r.sku} 报价 ${r.price}（偏离均值 ${(r.dev * 100).toFixed(1)}%）`;
+          li.className = "warn";
+          $("list").appendChild(li);
+        }
+      }
+
+      // 「记一批报价」用一份写死的样例报价：算出均值与偏离，超阈值的进复核清单文件
+      async function scan() {
+        const quotes = [
+          { sku: "A101", price: 19.9 },
+          { sku: "A205", price: 96.4 },
+          { sku: "B310", price: 12.5 },
+          { sku: "C777", price: 305.0 },
+          { sku: "D004", price: 45.8 },
+        ];
+        const mean = quotes.reduce((s, q) => s + q.price, 0) / quotes.length;
+        const th = Number($("th").value) || 0.15;
+        const flagged = quotes
+          .map((q) => ({ ...q, dev: Math.abs(q.price - mean) / mean }))
+          .filter((q) => q.dev >= th);
+        await Bit.data.write(DATA, JSON.stringify(flagged, null, 2));
+        await Bit.settings.set("volatility_threshold", th);
+        $("msg").textContent = `均值 ${mean.toFixed(2)}，阈值 ${th}：复核 ${flagged.length} 个`;
+        await renderList();
+        await renderFiles();
+      }
+
+      $("save").addEventListener("click", async () => {
+        const th = Number($("th").value) || 0.15;
+        await Bit.settings.set("volatility_threshold", th);
+        $("msg").textContent = `已保存：volatility_threshold = ${th}`;
+      });
+      $("scan").addEventListener("click", () => scan().catch((e) => ($("msg").textContent = String(e.message || e))));
+      $("notify").addEventListener("click", async () => {
+        const th = Number($("th").value) || 0.15;
+        await Bit.notify("价格盯盘", `复核阈值已设为 ${th}`);
+        $("msg").textContent = "系统通知已发出";
+      });
+
+      load().catch((e) => ($("who").textContent = "握手失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

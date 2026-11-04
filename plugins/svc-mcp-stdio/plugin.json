@@ -1,0 +1,16 @@
+{
+  "name": "设备桥（stdio MCP）",
+  "version": "1.0.3",
+  "description": "进程本身就是 MCP 服务器：不开端口，JSON-RPC 走 stdin/stdout，由宿主接管管道",
+  "permissions": ["workwith"],
+  "services": [
+    {
+      "name": "bridge",
+      "label": "设备桥",
+      "runtime": "node",
+      "program": "mcp.js",
+      "mcp_mode": "stdio",
+      "auto_start": true
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "运维速记台",
+  "version": "0.7.0",
+  "description": "JS 型插件：注入样式与脚本，在宿主里注册一个 React 页面和一页设置，并订阅宿主事件",
+  "permissions": ["css", "js", "page", "settings", "storage", "notify", "events", "data", "pagectl"],
+  "ui": { "css": ["ui/theme.css"], "js": ["ui/main.js"] },
+  "prompts": ["速记台（运维）的笔记存在插件数据目录 notes.log；问到运维记录时可以先看它。"]
+}

@@ -50,8 +50,8 @@ const connectPage = async (match) => {
   await new Promise(r => setTimeout(r, 1500));
   const p2 = await readPanel();
   log("PANEL_AFTER_LIGHT:", JSON.stringify(p2));
-  // 库还原 light（供后续重启验证前端 sync 链路时状态干净）
-  const set2 = await main.evl(`window.__TAURI_INTERNALS__.invoke('set_theme', { theme: 'light' })`);
+  // 库还原 dark（新装默认档，供后续重启验证前端 sync 链路时状态干净）
+  const set2 = await main.evl(`window.__TAURI_INTERNALS__.invoke('set_theme', { theme: 'dark' })`);
   log("SET_RESTORE:", JSON.stringify(set2));
 
   let pass = 0, fail = 0;

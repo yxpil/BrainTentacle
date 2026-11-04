@@ -1,0 +1,29 @@
+{
+  "name": "语音转写台",
+  "version": "1.0.0",
+  "description": "接管对话页的语音输入按钮：内置话筒消失，改由本页提供的入口顶上（id 排在前面，争抢同一槽位时它赢）",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "chaticon", "takeover", "settings", "pagectl", "session", "storage"],
+  "takeover": ["chat.voice"],
+  "pages": [
+    {
+      "id": "voice",
+      "label": "语音转写",
+      "src": "web/voice.html",
+      "paths": ["M12 3 A4 4 0 0 1 16 7 V12 A4 4 0 0 1 8 12 V7 A4 4 0 0 1 12 3 Z", "M5 12 A7 7 0 0 0 19 12", "M12 19 V22"]
+    }
+  ],
+  "chat_icons": [
+    {
+      "id": "voice",
+      "label": "转写台",
+      "label_en": "Transcribe",
+      "paths": ["M12 3 A4 4 0 0 1 16 7 V12 A4 4 0 0 1 8 12 V7 A4 4 0 0 1 12 3 Z", "M5 12 A7 7 0 0 0 19 12"],
+      "action": "page",
+      "page_key": "voice"
+    }
+  ],
+  "settings": {
+    "entries": [{ "id": "lang", "label": "转写语言", "description": "键 transcribe_lang，例：zh / en", "kw": "语音 转写 语言" }]
+  }
+}

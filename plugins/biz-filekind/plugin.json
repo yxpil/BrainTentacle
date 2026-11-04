@@ -1,0 +1,44 @@
+{
+  "name": "文件类型工坊",
+  "version": "1.0.0",
+  "description": "登记两类文件：.fz/.fzz 由本插件的 node 工具解析正文，.ztl 只换图标",
+  "permissions": ["files", "page", "data"],
+  "bridge": { "token": "required" },
+  "page": {
+    "id": "kinds",
+    "label": "登记一览",
+    "src": "web/kinds.html",
+    "paths": ["M6 4h9l3 3v13H6z", "M9 10h6", "M9 14h6"]
+  },
+  "tool": {
+    "name": "parse_fz",
+    "runtime": "node",
+    "file": "tools/parse_fz.js",
+    "description": "把 .fz 脚本（key: value 行 + # 注释）读成 Markdown 正文",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filename": { "type": "string", "description": "文件名（含后缀）" },
+        "path": { "type": "string", "description": "本地绝对路径；拖进来的文件走这条" },
+        "base64": { "type": "string", "description": "没有本地路径时（粘贴/URL）文件的 base64" }
+      }
+    }
+  },
+  "file_kinds": [
+    {
+      "id": "fz",
+      "label": "FZ 脚本",
+      "label_en": "FZ script",
+      "exts": "fz, fzz",
+      "paths": ["M6 4h9l3 3v13H6z", "M9 10h6", "M9 14h6"],
+      "tool": "parse_fz"
+    },
+    {
+      "id": "ztl",
+      "label": "Z 模板",
+      "label_en": "Z template",
+      "exts": [".ztl"],
+      "paths": ["M4 7h16v10H4z", "M4 11h16"]
+    }
+  ]
+}

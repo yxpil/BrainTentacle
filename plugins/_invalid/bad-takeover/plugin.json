@@ -1,0 +1,7 @@
+{
+  "name": "闸门夹具·未知槽位",
+  "version": "0.0.1",
+  "description": "接管目录里没有 chat.mic，插件不能凭想象藏掉宿主按钮",
+  "permissions": ["takeover"],
+  "takeover": ["chat.mic"]
+}

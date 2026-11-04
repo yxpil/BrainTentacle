@@ -9,6 +9,19 @@
 //!   - data-tauri-drag-region 拖拽区（mousedown 左键 → start_dragging，双击 → 最大化切换）
 const { ipcRenderer, contextBridge } = require('electron');
 
+// ── 原生提示框防呆：alert/confirm/prompt 在 Electron 下渲染为 Chrome 样式弹层，
+// 与 BIT 自绘 UI 割裂。UI 一律走 ConfirmHost（React）/ 页内确认（托盘面板），
+// 残留或第三方误调用在这里静默降级，确保永远不会弹出来。
+// contextIsolation:false，preload 与页面同世界，覆盖对页面脚本同样生效。
+try {
+  window.alert = (msg) => console.warn('[BIT] alert 已禁用:', msg);
+  window.confirm = (msg) => { console.warn('[BIT] confirm 已禁用:', msg); return false; };
+  window.prompt = (msg) => { console.warn('[BIT] prompt 已禁用:', msg); return null; };
+} catch {}
+
+// ── Electron 环境标记：前端据此启用 Electron 专属能力（如 macOS 剪刀截图按钮）──
+window.__BIT_ELECTRON__ = true;
+
 // ── 回调注册表：transformCallback 返回 id，事件到达时按 id 取回调用 ──
 const callbacks = new Map(); // handlerId -> { fn }
 let seq = 0;
@@ -74,7 +87,13 @@ window.__TAURI_INTERNALS__ = {
       return eventId;
     }
     if (cmd === 'plugin:event|unlisten') {
-      eventListeners.get(args.event)?.delete(args.eventId);
+      const m = eventListeners.get(args.event);
+      const handlerId = m?.get(args.eventId);
+      m?.delete(args.eventId);
+      // 只删监听表会漏掉 callbacks：@tauri-apps/api 的 unlisten 不保证回调注销，
+      // 而 ChatPage 每次切会话都成批 listen/unlisten —— 不补这一刀就是无界增长。
+      // 重复 delete 无害（Map.delete 对不存在的 key 是空操作），所以不必判断调用方。
+      if (handlerId) callbacks.delete(handlerId);
       return null;
     }
     if (cmd === 'plugin:event|emit' || cmd === 'plugin:event|emit_to') {
@@ -151,7 +170,7 @@ document.addEventListener('drop', (e) => {
 // 左键按在带属性元素上 → 跟踪 mousemove 增量发主进程平移窗口；双击 → 最大化切换
 let dragOrigin = null; // 起始屏幕坐标
 document.addEventListener('mousedown', (e) => {
-  if (e.button !== 0 || !e.target?.closest?.('[data-tauri-drag-region]')) return;
+  if (e.button !== 0 || !e.target?.hasAttribute?.('data-tauri-drag-region')) return;
   dragOrigin = { x: e.screenX, y: e.screenY };
   ipcRenderer.send('bit:drag-start');
 });
@@ -168,7 +187,7 @@ document.addEventListener('mouseup', () => {
   ipcRenderer.send('bit:drag-end');
 });
 document.addEventListener('dblclick', (e) => {
-  if (!e.target?.closest?.('[data-tauri-drag-region]')) return;
+  if (!e.target?.hasAttribute?.('data-tauri-drag-region')) return;
   window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize', {});
 });
 

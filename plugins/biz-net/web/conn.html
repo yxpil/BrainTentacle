@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>连接台</title>
+    <style>
+      body { font: 13px/1.6 system-ui, sans-serif; margin: 16px; color: #1f2430; }
+      h1 { font-size: 15px; margin: 0 0 8px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border-bottom: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; font-size: 12px; vertical-align: top; }
+      th { color: #6b7280; font-weight: 600; }
+      code { font-family: ui-monospace, Consolas, monospace; }
+      #status { color: #6b7280; margin-bottom: 8px; }
+      button { font: inherit; padding: 2px 10px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .on { color: #047857; }
+      .off { color: #6b7280; }
+    </style>
+  </head>
+  <body>
+    <h1>本插件声明的外部 MCP 连接</h1>
+    <p id="status">正在与宿主握手…</p>
+    <table>
+      <thead><tr><th>名称</th><th>地址（清单原文）</th><th>请求头</th><th>状态</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p id="hint">令牌写在「网关凭据」设置项里，插件包内没有它；地址取不到值时那一行会点名要填哪个键。</p>
+
+    <script>
+      // 开局先等握手回执（Bit.ready），否则 info()/cap() 拿到的是 null
+      (async function () {
+        const rows = document.getElementById("rows");
+        const status = document.getElementById("status");
+        const info = await window.Bit.ready();
+        status.textContent = info ? "已连上宿主：" + info.plugin_id : "未连上宿主";
+
+        const render = async () => {
+          let list = [];
+          try {
+            list = await window.Bit.net.connections();
+          } catch (e) {
+            status.textContent = "读取连接失败：" + (e && e.message ? e.message : e);
+            return;
+          }
+          rows.textContent = "";
+          for (const c of list) {
+            const tr = document.createElement("tr");
+            const name = document.createElement("td");
+            name.textContent = c.label;
+            const url = document.createElement("td");
+            const code = document.createElement("code");
+            code.textContent = c.url_template;
+            url.appendChild(code);
+            const heads = document.createElement("td");
+            heads.textContent = (c.header_names || []).join(", ") || "—";
+            const state = document.createElement("td");
+            state.className = c.connected ? "on" : "off";
+            state.textContent = c.connected
+              ? "已连接 · " + c.tools + " 个工具"
+              : c.missing_settings && c.missing_settings.length
+                ? "待填设置：" + c.missing_settings.join(", ")
+                : "未连接";
+            const act = document.createElement("td");
+            const btn = document.createElement("button");
+            btn.textContent = c.connected ? "断开" : "连接";
+            btn.disabled = !c.granted;
+            btn.addEventListener("click", async () => {
+              btn.disabled = true;
+              try {
+                if (c.connected) await window.Bit.net.disconnect(c.name);
+                else await window.Bit.net.connect(c.name);
+              } catch (e) {
+                status.textContent = c.name + " 操作失败：" + (e && e.message ? e.message : e);
+              }
+              await render();
+            });
+            act.appendChild(btn);
+            tr.append(name, url, heads, state, act);
+            rows.appendChild(tr);
+          }
+          // 留一份实据给探针：当前连接状态写进自己的数据目录
+          await window.Bit.data.writeJSON("net-proof.json", {
+            from: "biz-net",
+            count: list.length,
+            connected: list.filter((x) => x.connected).map((x) => x.name),
+            tools: list.reduce((n, x) => n + (x.tools || 0), 0),
+            missing: list.map((x) => ({ name: x.name, miss: x.missing_settings || [] })),
+          });
+        };
+        await render();
+      })();
+    </script>
+  </body>
+</html>

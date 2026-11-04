@@ -119,7 +119,7 @@ export function Mermaid({ code, dark, onSvg }) {
     return () => { alive = false; clearTimeout(timer); };
   }, [cacheKey]);
   // 渲染中/失败统一显示源码（同一样式）：流式期间无闪烁，渲染成功后无感替换为图
-  if (!svg) return <pre className="my-1.5 overflow-x-auto rounded-lg bg-neutral-100 p-2.5 text-[0.85em] dark:bg-black/40"><code className="font-mono text-[0.85em]">{code}</code></pre>;
+  if (!svg) return <pre className="my-1.5 overflow-x-auto rounded-2xl bg-neutral-100 p-2.5 text-[0.85em] dark:bg-black/40"><code className="font-mono text-[0.85em]">{code}</code></pre>;
   // securityLevel strict + sanitize 同源：mermaid 输出的 svg 已自净，这里再用 div 承载双保险
   return <div className="my-2 overflow-x-auto" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
@@ -263,7 +263,7 @@ export default function Markdown({ children }) {
             }
             return (
               <pre
-                className="my-1.5 overflow-x-auto rounded-lg bg-neutral-100 p-2.5 text-[0.85em] leading-relaxed dark:bg-black/40 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0"
+                className="my-1.5 overflow-x-auto rounded-2xl bg-neutral-100 p-2.5 text-[0.85em] leading-relaxed dark:bg-black/40 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0"
                 {...p}
               >
                 {children}

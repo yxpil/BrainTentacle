@@ -6,7 +6,7 @@
 //!   3) invoke 路由：B 类宿主命令（对话框/自启/热键/提权/换装重启）JS 拦截，
 //!      其余透传 Rust dispatch（白名单查表）
 //!   4) bit-asset 协议替代 Tauri assetProtocol（convertFileSrc 的文件图片访问）
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, Notification, Tray, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, globalShortcut, powerSaveBlocker, Notification, Tray, Menu, nativeTheme, shell, clipboard, ClipboardItem, systemPreferences, session, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -16,13 +16,18 @@ if (process.env.BIT_DATA_DIR) {
   app.setPath('userData', path.join(process.env.BIT_DATA_DIR, 'electron-userdata'));
 }
 
+// ── worker/guardian sidecar 文件名按平台取：Windows 才有 .exe。
+// 打包物料（scripts/stage-pack.cjs 与 CI 的 napi 矩阵）在 Linux/macOS 就叫 bit-cli，
+// 这里写死 bit-cli.exe 会让 existsSync 恒 false → workerExe=null，子代理/后台 shell 静默降级
+const CLI_NAME = process.platform === 'win32' ? 'bit-cli.exe' : 'bit-cli';
+
 // ── 守护进程兜底转交：electron.exe 不含 --bit-guardian 主循环（在 bit-cli 里）。
 // arm() 正常经 worker_exe 直接拉 bit-cli；走到这里说明 sidecar 缺失——找得到就转交，找不到直接退出
 // （由主进程 watchdog 5s 后重布防），绝不带着该参数进 GUI（否则无限重生循环）
 if (process.argv.slice(1).includes('--bit-guardian')) {
   const cli = app.isPackaged
-    ? path.join(process.resourcesPath, 'bit-cli.exe')
-    : path.join(__dirname, '..', 'src-tauri', 'target', 'debug', 'bit-cli.exe');
+    ? path.join(process.resourcesPath, CLI_NAME)
+    : path.join(__dirname, '..', 'src-tauri', 'target', 'debug', CLI_NAME);
   if (fs.existsSync(cli)) {
     require('child_process')
       .spawn(cli, process.argv.slice(process.argv.indexOf('--bit-guardian')), { stdio: 'ignore', detached: true, windowsHide: true })
@@ -41,23 +46,42 @@ if (!gotLock) {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'bit-asset',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true },
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true, corsEnabled: true },
   },
 ]);
 
 const isDev = !app.isPackaged;
 const ROOT = path.join(__dirname, '..');
-const VERSION = app.getVersion();
+// 版本号只认 package.json：`electron electron/main.cjs` 这种开发启动方式下 app 根目录
+// 被解析成 electron/，app.getVersion() 会退化成 Electron 自身的版本（44.x），
+// 而该值同时喂给 UI 版本徽标和 Rust 侧的更新比较，错了就永远判"无新版本"。
+const VERSION = (() => {
+  for (const p of [path.join(ROOT, 'package.json'), path.join(process.resourcesPath || '', 'package.json')]) {
+    try {
+      const v = JSON.parse(fs.readFileSync(p, 'utf8')).version;
+      if (v) return v;
+    } catch {}
+  }
+  return app.getVersion();
+})();
 // napi 原生模块：开发期在 crates/bit-napi/，打包后在 resources
-const NODE_PATH = isDev
-  ? path.join(ROOT, 'crates', 'bit-napi', 'bit_napi.node')
-  : path.join(process.resourcesPath, 'bit.node');
+// [boot-dbg] isPackaged 在本环境误判为 true（execPath 位于 Electron.app 内），改为按存在性探测
+const NODE_PATH = [
+  path.join(ROOT, 'crates', 'bit-napi', 'bit_napi.node'),
+  path.join(process.resourcesPath, 'bit.node'),
+].find((p) => fs.existsSync(p)) || path.join(ROOT, 'crates', 'bit-napi', 'bit_napi.node');
 // worker sidecar（bit-cli）：存在即传给 Rust（子代理/后台 shell 用）；缺省 None 由 core 自行解析
+// dev 路径按 workspace 布局探测：根 target/ 才是 workspace 构建的落点，
+// src-tauri/target/ 是迁移前的老路径，留着兼容仍在成员目录里构建的机器
 const WORKER_EXE = isDev
-  ? path.join(ROOT, 'src-tauri', 'target', 'debug', 'bit-cli.exe')
-  : path.join(process.resourcesPath, 'bit-cli.exe');
+  ? [
+      path.join(ROOT, 'target', 'debug', CLI_NAME),
+      path.join(ROOT, 'target', 'release', CLI_NAME),
+      path.join(ROOT, 'src-tauri', 'target', 'debug', CLI_NAME),
+    ].find((p) => fs.existsSync(p)) || path.join(ROOT, 'target', 'debug', CLI_NAME)
+  : path.join(process.resourcesPath, CLI_NAME);
 // 应用图标：开发期在 src-tauri/icons，打包后在 resources（extraResources 注入）
-// Linux 托盘（StatusNotifierItem）不支持 .ico，必须按平台选（Electron 0.6.42 修复）
+// Linux/macOS 托盘（nativeImage）不支持 .ico，必须按平台选（与仓库修复一致）
 const ICON = isDev
   ? path.join(ROOT, 'src-tauri', 'icons', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
   : path.join(process.resourcesPath, process.platform === 'win32' ? 'icon.ico' : 'icon.png');
@@ -65,10 +89,17 @@ const ICON = isDev
 let bit = null; // bit.node 导出：hostStart / invoke / onUiEvent
 let win = null;
 let tray = null;
+// [boot-dbg] 临时启动诊断日志（定位启动断点用，定位后删除）
+console.log('[boot-dbg] 顶层模块加载完成, isPackaged=', app.isPackaged, 'defaultApp=', !!process.defaultApp, 'execPath=', process.execPath);
+process.on('uncaughtException', (e) => console.error('[boot-dbg] uncaught:', e && e.stack || e));
+process.on('unhandledRejection', (e) => console.error('[boot-dbg] unhandled-rejection:', e && e.stack || e));
 let statusWin = null; // 任务面板窗口（托盘打开的网页）
 let hoverWin = null;  // 托盘悬浮预览小窗（同一 tray-status.html 的 hover 紧凑模式）
 let hoverShowTimer = null; // hover 防抖：快速划过不弹
 let hoverPollTimer = null; // 光标轮询：离开托盘图标与预览窗即收起
+// 悬浮预览的弹出延迟（毫秒，0 = 关掉这个功能）。划过托盘是高频动作，一碰到就糊出
+// 一块状态窗很吵；默认停满 5 秒才弹，时长与关闭都在「设置 → 启动与托盘」里改。
+let trayHoverDelay = 5000;
 
 // ── 托盘任务状态（从 core 事件流推导，纯内存；推送给任务面板网页） ──
 const trayState = {
@@ -222,9 +253,19 @@ function startGoalsPolling() {
 let quitting = false; // 真正退出（quit_app / app.quit）时置位：窗口关闭不再隐藏到托盘
 
 // ── 托盘常驻（M3）：点击/菜单唤起主界面，退出走真正退出链 ──
+// macOS 菜单栏图标标准 16pt（Retina 32px）：icon.png 512px / 状态灯 64px 直接上栏过大 → 缩到 20px（10pt，比系统图标小约 30%）
+function traySized(img) {
+  if (process.platform !== 'darwin') return img;
+  const s = img.getSize();
+  return s.width > 20 || s.height > 20 ? img.resize({ width: 20, height: 20 }) : img;
+}
+
 function createTray() {
   try {
-    tray = new Tray(ICON);
+    const { nativeImage } = require('electron');
+    const trayImg = traySized(nativeImage.createFromPath(ICON));
+    console.info(`[BIT] 托盘图标 ${trayImg.getSize().width}x${trayImg.getSize().height}`);
+    tray = new Tray(trayImg);
   } catch (e) {
     console.warn('[BIT] 托盘创建失败（不影响主流程）:', e.message);
     return;
@@ -233,18 +274,33 @@ function createTray() {
   // 右键托盘 = 直接弹出任务面板网页（无原生菜单）；左键 = 主界面；悬浮 = 小窗预览
   tray.on('right-click', () => { hideHoverWindow(); showStatusWindow(true); });
   tray.on('click', () => { hideHoverWindow(); showWindow(); }); // Windows 单击托盘图标
-  // Windows 托盘 mouse-move：悬浮 500ms 防抖后弹出小窗预览当前任务
-  tray.on('mouse-move', onTrayMouseMove);
+  tray.on('mouse-move', onTrayMouseMove); // Windows 托盘 mouse-move：停够 trayHoverDelay 才弹小窗
 }
 
 // ── 托盘悬浮预览小窗（同一网页的 hover 紧凑模式：只读总览 + 会话 + 后台命令） ──
+// 光标是否仍在托盘图标上（含 6px 容差）。Windows 没有托盘 mouse-leave 事件，
+// 弹出前与轮询时都得自己判一次——延迟越长，防抖到点时人早就走了的可能性越大。
+function cursorOnTray() {
+  try {
+    if (!tray) return false;
+    const { screen } = require('electron');
+    const p = screen.getCursorScreenPoint();
+    const b = tray.getBounds();
+    return p.x >= b.x - 6 && p.x <= b.x + b.width + 6 && p.y >= b.y - 6 && p.y <= b.y + b.height + 6;
+  } catch {
+    return false;
+  }
+}
+
 function onTrayMouseMove() {
+  if (trayHoverDelay <= 0) return; // 用户关掉了悬浮预览
   if (hoverWin && !hoverWin.isDestroyed() && hoverWin.isVisible()) return; // 已显示：轮询负责收起
   if (hoverShowTimer) return;
   hoverShowTimer = setTimeout(() => {
     hoverShowTimer = null;
+    if (!cursorOnTray()) return;
     showHoverWindow();
-  }, 500);
+  }, trayHoverDelay);
 }
 
 function hideHoverWindow() {
@@ -255,6 +311,12 @@ function hideHoverWindow() {
   }
 }
 
+// 置顶到最高层（screen-saver 级）：保证压住系统 tooltip 空壳等一切 topmost 弹层
+function raiseHover() {
+  if (!hoverWin || hoverWin.isDestroyed()) return;
+  try { hoverWin.setAlwaysOnTop(true, 'screen-saver'); hoverWin.moveTop(); } catch {}
+}
+
 function showHoverWindow() {
   if (!tray) return;
   if (statusWin && !statusWin.isDestroyed() && statusWin.isVisible()) return; // 大面板开着就不弹小窗
@@ -263,11 +325,14 @@ function showHoverWindow() {
   const tb = tray.getBounds();
   const wa = screen.getDisplayNearestPoint({ x: tb.x, y: tb.y }).workArea;
   const x = Math.round(Math.min(Math.max(tb.x + tb.width / 2 - W / 2, wa.x), wa.x + wa.width - W));
-  let y = Math.round(tb.y - H - 8);
+  // 下沿压进任务栏顶部条带：盖住系统托盘自带的空 tooltip 空壳（setToolTip('') 后 Win11 仍会弹空框）。
+  // 压入深度按图标高度取 60%（12-28px），只盖图标上方的 tooltip 区，图标本身保持可点击
+  const SINK = Math.max(12, Math.min(Math.round(tb.height * 0.6), 28));
+  let y = Math.round(tb.y - H + SINK);
   if (y < wa.y) y = wa.y;
   if (hoverWin && !hoverWin.isDestroyed()) {
     // 复用已创建的小窗：重新定位到当前托盘位置（托盘图标可能移动）后显示
-    try { hoverWin.setBounds({ x, y, width: W, height: H }); hoverWin.show(); traySchedulePush(); startHoverWatch(); } catch {}
+    try { hoverWin.setBounds({ x, y, width: W, height: H }); hoverWin.show(); raiseHover(); traySchedulePush(); startHoverWatch(); } catch {}
     return;
   }
   hoverWin = new BrowserWindow({
@@ -289,17 +354,13 @@ function showHoverWindow() {
     },
   });
   hoverWin.setMenuBarVisibility(false);
+  hardenWebContents(hoverWin.webContents);
   hoverWin.loadFile(path.join(__dirname, 'tray-status.html'), { search: 'mode=hover' });
   hoverWin.on('closed', () => { hoverWin = null; });
   hoverWin.once('ready-to-show', () => {
     // 显示前再确认鼠标仍在托盘上（防抖期间可能已移走）
-    try {
-      const p = screen.getCursorScreenPoint();
-      const b = tray.getBounds();
-      const inTray = p.x >= b.x - 6 && p.x <= b.x + b.width + 6 && p.y >= b.y - 6 && p.y <= b.y + b.height + 6;
-      if (!inTray) return;
-    } catch {}
-    try { hoverWin.show(); traySchedulePush(); startHoverWatch(); } catch {}
+    if (!cursorOnTray()) return;
+    try { hoverWin.show(); raiseHover(); traySchedulePush(); startHoverWatch(); } catch {}
   });
 }
 
@@ -369,7 +430,7 @@ async function makeStatusIcons() {
 function updateTrayIcon() {
   if (!tray) return;
   const img = lampIcons[trayLamp];
-  if (img) { try { tray.setImage(img); } catch {} }
+  if (img) { try { tray.setImage(traySized(img)); } catch {} } // 状态灯图同为大图，同样缩放
 }
 
 // 事件流 → 指示灯：开始即黄，正常结束绿，出错红；无任何事件保持白
@@ -421,6 +482,7 @@ function showStatusWindow(fromTray) {
     },
   });
   statusWin.setMenuBarVisibility(false);
+  hardenWebContents(statusWin.webContents);
   statusWin.loadFile(path.join(__dirname, 'tray-status.html'));
   statusWin.on('closed', () => { statusWin = null; });
   let statusFocused = false; // 面板是否真正获得过焦点（自动化/后台打开时拿不到焦点，不应触发失焦收起）
@@ -493,6 +555,36 @@ function monitorInfo(d) {
   };
 }
 
+// 最大化态自记：主窗是 frame:false + transparent:true（Windows 另开 thickFrame），
+// 这种组合下 win.isMaximized() 依赖的 WS_MAXIMIZE 样式不可靠，只信它会让第二次点击
+// 仍走 maximize 分支（表现为"最大化后点不动、回不到原尺寸"）。以 maximize/unmaximize
+// 事件为准记状态，winNormalBounds 存进入最大化前的普通态尺寸，供还原兜底。
+let winMaximized = false;
+let winNormalBounds = null;
+
+// 从最大化恢复。实测：win32 上 frame:false + transparent:true + thickFrame 这个组合，
+// win.unmaximize() 既不恢复尺寸、也不触发 'unmaximize' 事件（第二次点击没反应，
+// 显式 unmaximize 同样没反应）——所以只挂事件兜底是不够的，必须在这里显式回写尺寸。
+// 记普通态尺寸。透明窗的 content/outer 换算每轮约有 1px 误差（实测 1124→1125→1126），
+// 若每次最大化前都用"当前值"覆盖，恢复目标就会逐轮变大。与上一轮记录只差几像素时沿用旧值。
+function captureNormalBounds() {
+  const c = win.getContentBounds();
+  const prev = winNormalBounds;
+  if (prev && Math.abs(prev.width - c.width) <= 4 && Math.abs(prev.height - c.height) <= 4) return;
+  winNormalBounds = c;
+}
+
+function restoreWindow() {
+  const n = winNormalBounds;
+  winMaximized = false;
+  try { win.unmaximize(); } catch { /* 已处普通态时可能抛，忽略 */ }
+  if (!n || !win || win.isDestroyed()) return;
+  const c = win.getContentBounds();
+  // 用 content 尺寸比对/回写：getBounds 含透明窗的不可见阴影内缩，
+  // 拿它 setBounds 会每轮 +2px 累积（实测 1124→1126→1128）
+  if (Math.abs(c.width - n.width) > 2 || Math.abs(c.height - n.height) > 2) win.setContentBounds(n);
+}
+
 function handleWindowOp(op, args) {
   if (op === 'open-status') { showStatusWindow(); return null; } // 任务面板（托盘菜单同入口）
   if (!win) return null;
@@ -510,13 +602,26 @@ function handleWindowOp(op, args) {
     case 'destroy': return win.destroy();
     case 'minimize': win.minimize(); return null;
     case 'unminimize': win.restore(); return null;
-    case 'maximize': win.maximize(); return null;
-    case 'unmaximize': win.unmaximize(); return null;
-    case 'toggle_maximize':
-      if (win.isMaximized()) win.unmaximize();
-      else win.maximize();
+    case 'maximize':
+      if (!winMaximized) {
+        captureNormalBounds();
+        win.maximize();
+      }
       return null;
-    case 'is_maximized': return win.isMaximized();
+    case 'unmaximize':
+      restoreWindow();
+      return null;
+    case 'toggle_maximize':
+      if (winMaximized) {
+        restoreWindow();
+      } else {
+        // 只在非最大化态记尺寸：否则一旦状态位与实际不同步，就会把最大化尺寸当成"普通态"存下来，
+        // 之后每次恢复都回到全屏，永远出不来
+        captureNormalBounds();
+        win.maximize();
+      }
+      return null;
+    case 'is_maximized': return winMaximized;
     case 'is_minimized': return win.isMinimized();
     case 'is_visible': return win.isVisible();
     case 'is_focused': return win.isFocused();
@@ -559,13 +664,126 @@ function handleWindowOp(op, args) {
       const { screen: sc } = require('electron');
       const p = sc.getCursorScreenPoint();
       const b = win.getBounds();
-      win.setPosition(b.x + (p.x - (args._cursor?.x ?? 0)), b.y + (p.y - (args._cursor?.y ?? 0)));
+      // 同上：显式带回宽高，防止 Windows 透明窗在程序化移动时尺寸漂移
+      win.setBounds({ x: b.x + (p.x - (args._cursor?.x ?? 0)), y: b.y + (p.y - (args._cursor?.y ?? 0)), width: b.width, height: b.height });
       return null;
     }
     default:
       console.warn(`[BIT] 未实现的窗口命令: ${op}`);
       return null;
   }
+}
+
+// 粘贴借走剪贴板后 800ms 还原。两次粘贴挨得近时（语音紧接着再来一次 / 语音后截图），
+// 上一轮的还原会把这一轮刚写进去的内容清掉，Ctrl+V 就粘到空内容；所以只保留一份
+// 「用户原剪贴板」，新一轮粘贴取消旧定时器并沿用最初的内容。
+let pendingPasteRestore = null;
+
+// ── 出网代理（企业内网）──
+// Rust 侧管的是 bit-core 的 reqwest 与 shell 子进程（curl/git/npm 认 HTTP_PROXY），
+// webview 走的是 Chromium 另一套代理栈：两边必须同一口径，否则内嵌浏览器直连、
+// AI 请求走代理，用户只会看到「一半通一半不通」。配置的唯一出处仍是设置页 → bit-core。
+let proxyCreds = null; // { user, pass }：Chromium 不吃 proxyRules 里的 userinfo，代理认证走 login 事件回填
+
+// 内嵌浏览器标签（WebPane）用独立分区，不吃 defaultSession 的规则，得逐个会话同步
+const WEBVIEW_PARTITION = 'persist:bit-browser';
+
+function proxySessions() {
+  const list = [{ name: 'default', ses: session.defaultSession }];
+  try {
+    list.push({ name: 'webview', ses: session.fromPartition(WEBVIEW_PARTITION) });
+  } catch (e) {
+    console.warn('[proxy] 取内嵌浏览器分区会话失败:', e.message || e);
+  }
+  return list;
+}
+
+/** 用户填的代理地址 → Chromium proxyRules（要求带协议；裸 host:port 按 http 处理） */
+function chromiumProxyRules(url) {
+  const s = String(url || '').trim();
+  if (!s) return '';
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return s;
+  return `http://${s}`;
+}
+
+// 「忽略证书校验」勾选后，内嵌浏览器也按同一口径放行（企业网关做 TLS 中间人时的排障开关）。
+// 默认 false：证书错误一律照 Chromium 的处置，BIT 不悄悄放宽安全边界
+let proxyInsecure = false;
+let certErrorHooked = false;
+function hookCertificateErrors() {
+  if (certErrorHooked) return;
+  certErrorHooked = true;
+  app.on('certificate-error', (event, _wc, url, error, _cert, callback) => {
+    if (proxyInsecure) {
+      console.warn(`[proxy] 已按设置忽略证书校验: ${error} ${String(url).slice(0, 120)}`);
+      event.preventDefault();
+      callback(true);
+      return;
+    }
+    callback(false);
+  });
+}
+hookCertificateErrors();
+
+/** 应用一份代理配置到默认会话；无参时从 core 读当前生效配置 */
+async function syncProxyFromCore() {
+  if (!bit) return null;
+  let s = null;
+  try {
+    s = await bit.invoke('get_proxy_config', {});
+  } catch (e) {
+    console.warn('[proxy] 读取代理配置失败:', e.message || e);
+    return null;
+  }
+  const bypass = ['127.0.0.1', 'localhost', '[::1]']
+    .concat((s?.bypass || []).filter((x) => typeof x === 'string' && x))
+    .join(',');
+  // 证书校验口径与 core 同步（webview 与 reqwest 要么都严、要么都松）
+  proxyInsecure = !!s?.insecure;
+  // 规则对象只算一次，两个会话用同一份
+  let config = null;
+  if (s?.mode === 'custom') {
+    const rules = chromiumProxyRules(s.url_input || s.url || '');
+    // 账号密码单独留给 login 事件，proxyRules 里只留 scheme://host:port
+    const at = rules.lastIndexOf('@');
+    const clean = at > rules.indexOf('://') ? rules.slice(0, rules.indexOf('://') + 3) + rules.slice(at + 1) : rules;
+    const userinfo = at > rules.indexOf('://') ? rules.slice(rules.indexOf('://') + 3, at) : '';
+    proxyCreds = s.user
+      ? { user: s.user, pass: s.pass || '' }
+      : userinfo.includes(':')
+        ? { user: userinfo.slice(0, userinfo.indexOf(':')), pass: userinfo.slice(userinfo.indexOf(':') + 1) }
+        : userinfo ? { user: userinfo, pass: '' } : null;
+    config = { mode: 'fixed_servers', proxyRules: clean, proxyBypassRules: bypass };
+  } else if (s?.mode === 'direct') {
+    proxyCreds = null;
+    config = { mode: 'direct' };
+  } else {
+    proxyCreds = null;
+    config = { mode: 'system' };
+  }
+  const sessions = proxySessions();
+  let webview = null;
+  try {
+    for (const { ses } of sessions) {
+      await ses.setProxy(config);
+      // 已建立的连接不会因换代理而重连，必须显式断开，否则改动看着「没生效」
+      await ses.closeAllConnections();
+    }
+    // resolveProxy 只查规则不查 DNS，用它把 Chromium 实际会走的那条规则回给界面，
+    // 「一半通一半不通」时至少能一眼看出 webview 侧到底落到哪
+    const probeSes = (sessions.find((x) => x.name === 'webview') || sessions[0]).ses;
+    const resolved = await probeSes
+      .resolveProxy('http://bit-proxy-probe.invalid/')
+      .catch(() => '');
+    const resolvedLocal = await probeSes.resolveProxy('http://127.0.0.1:11434/v1').catch(() => '');
+    webview = { resolved, resolved_local: resolvedLocal };
+    console.log(
+      `[proxy] webview 代理已应用: mode=${s?.mode} sessions=${sessions.length} resolved=${resolved} local=${resolvedLocal} insecure=${proxyInsecure}`
+    );
+  } catch (e) {
+    console.warn('[proxy] 应用 webview 代理失败:', e.message || e);
+  }
+  return webview ? { ...s, webview } : s;
 }
 
 // ── B 类宿主命令：JS 拦截（Tauri 里走 AppHandle/插件，Electron 原生能力等价实现）──
@@ -597,10 +815,168 @@ async function hostCommand(cmd, args) {
       app.setLoginItemSettings({ openAtLogin: enabled, args: ['--hidden'] });
       return { enabled };
     }
+    // 阻止系统休眠（用户显式开关）：prevent-app-suspension 只挡系统睡眠，
+    // 屏幕仍按系统设置关闭；偏好落 userData，启动时由 loadPreventSleep 恢复
+    case 'get_prevent_sleep':
+      return { enabled: preventSleepEnabled, active: sleepBlockerActive() };
+    case 'set_prevent_sleep': {
+      preventSleepEnabled = !!args.enabled;
+      savePreventSleep();
+      return { enabled: preventSleepEnabled, active: applyPreventSleep() };
+    }
+    // 托盘悬浮预览延迟（毫秒，0=关掉）：改完下一次鼠标移到图标上就按新值走，
+    // 关掉时顺手收掉已经弹出的小窗，不然它还得等轮询判离
+    case 'get_tray_hover':
+      return { delay: trayHoverDelay, supported: !!tray };
+    case 'set_tray_hover': {
+      trayHoverDelay = clampHoverDelay(Number(args.delay));
+      saveTrayHover();
+      if (trayHoverDelay <= 0) hideHoverWindow();
+      return { delay: trayHoverDelay, supported: !!tray };
+    }
+    // 出网代理：写库与进程生效在 Rust（覆盖 reqwest 与子进程环境变量），这里只补 webview 一侧。
+    // 校验失败时 bit.invoke 直接抛错，界面拿到错误码，webview 保持原口径不动
+    case 'set_proxy_config': {
+      const r = await bit.invoke('set_proxy_config', args);
+      try {
+        await syncProxyFromCore();
+      } catch (e) {
+        // core 已经存好并生效，webview 这一侧失败不该让界面报「保存失败」
+        console.warn('[proxy] 保存后同步 webview 代理失败:', e.message || e);
+      }
+      return r;
+    }
+    case 'get_proxy_config':
+      return await syncProxyFromCore();
     case 'set_hotkey': {
       // Tauri 版注册全局热键唤起主窗口；Electron 用 globalShortcut
       const hotkey = String(args.hotkey || '');
       return await ipcInvokeSetHotkey(hotkey);
+    }
+    case 'get_app_hotkeys': {
+      // 应用级扩展快捷键（截图提问 / 全局语音）：Electron userData JSON，空串=未启用
+      // caps 一并回传：非 macOS 的截图后端、粘贴通道、辅助功能权限各有缺口，UI 需要能力位
+      return { screenshot: appHotkeys.screenshot || '', voice: appHotkeys.voice || '', caps: hotkeyCaps() };
+    }
+    case 'set_app_hotkeys': {
+      const prev = { ...appHotkeys };
+      if (args.screenshot !== null && args.screenshot !== undefined) appHotkeys.screenshot = String(args.screenshot || '').trim();
+      if (args.voice !== null && args.voice !== undefined) appHotkeys.voice = String(args.voice || '').trim();
+      saveAppHotkeys();
+      // 注册失败的键退回旧值：返回体里的 screenshot/voice 就是「当前真正生效」的组合
+      const failed = registerAppShortcuts();
+      for (const k of failed) revertHotkey(k, prev[k]);
+      return { screenshot: appHotkeys.screenshot || '', voice: appHotkeys.voice || '', caps: hotkeyCaps(), failed: failed[0] || null };
+    }
+    case 'paste_text_to_foreground': {
+      // 全局语音转写结果落到原前台应用：写剪贴板 → 模拟粘贴 → 恢复剪贴板。
+      // macOS 额外用 bundleId 激活目标 app 并走辅助功能 keystroke；
+      // Windows 用 keybd_event（免装第三方），Linux 用 xdotool（X11）/ wtype（Wayland）。
+      const text = String(args.text ?? '');
+      if (!text) return { ok: false };
+      // 异步剪贴板：写入要等 resolve，否则模拟 Ctrl+V 可能抢在内容落地前
+      const oldText = await clipboard.readText().catch(() => '');
+      const oldPng = await clipboardPng();
+      const saved = pendingPasteRestore || { text: oldText, png: oldPng, timer: null };
+      pendingPasteRestore = saved;
+      await clipboard.writeText(text);
+      // 目标应用读到剪贴板后再还原，避免覆盖用户原有内容
+      const restore = () => {
+        if (saved.timer) clearTimeout(saved.timer);
+        saved.timer = setTimeout(async () => {
+          if (pendingPasteRestore === saved) pendingPasteRestore = null;
+          try {
+            await clipboard.writeText(saved.text);
+            if (saved.png) await clipboardWritePng(saved.png);
+          } catch { /* 恢复失败不影响主流程 */ }
+        }, 800);
+      };
+      // 本次粘贴失败：立刻还回用户原内容，别留下半截状态
+      const undoPaste = async () => {
+        if (saved.timer) clearTimeout(saved.timer);
+        if (pendingPasteRestore === saved) pendingPasteRestore = null;
+        try {
+          await clipboard.writeText(saved.text);
+          if (saved.png) await clipboardWritePng(saved.png);
+        } catch { /* 恢复失败不影响主流程 */ }
+      };
+      if (process.platform === 'darwin') {
+        const { execFile } = require('child_process');
+        const run = (cmd, a) => new Promise((resolve, reject) =>
+          execFile(cmd, a, { timeout: 5000 }, (err) => (err ? reject(err) : resolve())));
+        try {
+          if (args.bundleId) {
+            await run('osascript', ['-e', `tell application id "${String(args.bundleId)}" to activate`]);
+            await sleep(400);
+          }
+          await run('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down']);
+          restore();
+          return { ok: true };
+        } catch {
+          await undoPaste();
+          throw new Error('需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能');
+        }
+      }
+      if (process.platform === 'win32') {
+        // 先把录音开始时的前台窗口抢回来：转写这几秒里前台可能已被系统弹层抢走，
+        // keybd_event 只认当前前台，不抢回来就贴到别人身上了。抢不回也不拦，
+        // 仍按当前前台粘贴（用户可能自己切了窗口，那种情况本来就该贴到新窗口）。
+        // 这两步都走 Rust 进程内 Win32：借道 powershell.exe 会带出（隐藏的）控制台窗口，
+        // 那窗口自己就会把前台抢走——粘贴探针在 CI 上就是这么被它打偏的。
+        const hwnd = String(args.hwnd || '').trim();
+        if (/^\d+$/.test(hwnd)) {
+          const ok = await bit.invoke('win_activate_window', { hwnd }).catch(() => false);
+          if (!ok) console.warn(`[BIT][paste] 目标窗口 ${hwnd} 未能回到前台，按当前前台粘贴`);
+          else console.log(`[BIT][paste] 已把目标窗口 ${hwnd} 拉回前台`);
+        }
+        try {
+          await bit.invoke('win_send_ctrl_v', {});
+        } catch (e) {
+          await undoPaste();
+          throw new Error('模拟粘贴失败（keybd_event）：' + lastLine(e));
+        }
+        restore();
+        return { ok: true };
+      }
+      // Linux：X11 走 xdotool，Wayland 走 wtype（ydotool 需常驻守护进程，不自动尝试）
+      const tools = [];
+      if (hasCmd('xdotool')) tools.push(['xdotool', ['key', 'ctrl+v']]);
+      if (hasCmd('wtype')) tools.push(['wtype', ['-M', 'ctrl', 'v', '-m', 'ctrl']]);
+      if (!tools.length) {
+        await undoPaste();
+        throw new Error(
+          isWayland()
+            ? 'Wayland 模拟粘贴需要安装 wtype（或 xdotool 走 XWayland）；未装时转写结果留在对话草稿'
+            : '缺少 xdotool，无法模拟粘贴；请安装 xdotool，转写结果已留在对话草稿',
+        );
+      }
+      for (const [bin, a] of tools) {
+        const r = await execShot(bin, a);
+        if (!r.err) {
+          restore();
+          return { ok: true };
+        }
+      }
+      await undoPaste();
+      throw new Error('模拟粘贴失败：需 xdotool（X11）或 wtype（Wayland）');
+    }
+    case 'screenshot_region': {
+      // 聊天工具栏剪刀按钮：与全局截图提问同一管线（screencapture 框选 → 剪贴板 → 挂附件）
+      doScreenshotQuestion();
+      return { ok: true };
+    }
+    case 'web_capture': {
+      // 内嵌网页截图：只允许截主窗口里挂着的 webview（不信任渲染层传入的任何 id）
+      const wc = webContents.fromId(Number(args.webContentsId));
+      if (!wc || wc.getType() !== 'webview' || wc.hostWebContents !== win.webContents) {
+        throw new Error('网页不可用');
+      }
+      const img = await wc.capturePage();
+      if (img.isEmpty()) throw new Error('网页截图为空');
+      sendToMain('screenshot-capture', {
+        dataUrl: 'data:image/png;base64,' + img.toPNG().toString('base64'),
+      });
+      return { ok: true };
     }
     case 'set_elevation': {
       // 高权限模式：UAC 弹窗后以管理员身份重启（Windows）
@@ -628,38 +1004,395 @@ async function hostCommand(cmd, args) {
       app.exit(0);
       return null;
     }
+    case 'fs_write_text': {
+      // 右侧预览面板直接编辑保存：宿主侧落盘，纯文本回写不值得为它扩一条 Rust 命令
+      // （读走 bit-asset 已经通了，只有写缺能力）。
+      // 编码：保留原文件 BOM（UTF-16LE / UTF-8-BOM），无 BOM 一律按 UTF-8 写。
+      // GBK 等无 BOM 的非 UTF-8 文件在预览读取阶段就已经是乱码，这里不做二次猜测。
+      const p = String(args.path || '');
+      if (!path.isAbsolute(p)) throw new Error('需要绝对路径');
+      const text = String(args.content ?? '');
+      let buf = Buffer.from(text, 'utf8');
+      if (fs.existsSync(p)) {
+        const head = Buffer.alloc(3);
+        const fd = fs.openSync(p, 'r');
+        let n = 0;
+        try { n = fs.readSync(fd, head, 0, 3, 0); } finally { fs.closeSync(fd); }
+        if (n >= 2 && head[0] === 0xff && head[1] === 0xfe) {
+          buf = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+        } else if (n >= 3 && head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) {
+          buf = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), buf]);
+        }
+      }
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, buf);
+      return { ok: true, bytes: buf.length, path: p };
+    }
     default:
       return undefined; // 未拦截 → 透传 Rust
   }
 }
 
-// 热键注册（set_hotkey 的实现体）：core 配置 + globalShortcut 双写
-async function ipcInvokeSetHotkey(hotkey) {
-  if (globalShortcut) {
-    globalShortcut.unregisterAll();
-    if (hotkey && hotkey.trim()) {
-      // Tauri 格式（如 Ctrl+Shift+B）与 Electron 兼容，直接注册
+// ── 应用级全局快捷键（统一注册表）：main=唤出主窗口（core 配置持久化），
+// screenshot=截图提问、voice=全局语音听写（userData JSON 持久化）。
+// 不能 unregisterAll：三个快捷键互相独立保存，只按需重注册 ──
+let appHotkeys = { main: '', screenshot: '', voice: '' };
+const appHotkeysPath = () => path.join(app.getPath('userData'), 'app-hotkeys.json');
+function loadAppHotkeys() {
+  try { appHotkeys = { ...appHotkeys, ...JSON.parse(fs.readFileSync(appHotkeysPath(), 'utf8')) }; } catch { /* 首次无文件 */ }
+}
+function saveAppHotkeys() {
+  try { fs.writeFileSync(appHotkeysPath(), JSON.stringify(appHotkeys)); } catch { /* 落盘失败不影响运行 */ }
+}
+// ── 阻止系统休眠：用户显式开启后，BIT 运行期间用 powerSaveBlocker 保持系统唤醒。
+// prevent-app-suspension 只阻止系统睡眠，屏幕仍可按系统设置关闭（长任务不必点亮整夜）。
+// 偏好独立落 userData/prevent-sleep.json：开机自启进托盘时也能在窗口出现前恢复。
+let preventSleepEnabled = false;
+let sleepBlockerId = null;
+const preventSleepPath = () => path.join(app.getPath('userData'), 'prevent-sleep.json');
+function loadPreventSleep() {
+  try {
+    preventSleepEnabled = !!JSON.parse(fs.readFileSync(preventSleepPath(), 'utf8')).enabled;
+  } catch { /* 首次无文件 */ }
+}
+function savePreventSleep() {
+  try {
+    fs.writeFileSync(preventSleepPath(), JSON.stringify({ enabled: preventSleepEnabled }));
+  } catch { /* 落盘失败不影响运行 */ }
+}
+// ── 托盘悬浮预览延迟：偏好独立落 userData/tray-hover.json（0 = 关闭悬浮预览）。
+// 与阻止休眠同一口径：开机自启直接进托盘时，也要在窗口出现前把用户设的延迟恢复回来。
+const trayHoverPath = () => path.join(app.getPath('userData'), 'tray-hover.json');
+const clampHoverDelay = (v) => (Number.isFinite(v) && v >= 0 ? Math.min(Math.round(v), 30000) : 5000);
+function loadTrayHover() {
+  try {
+    trayHoverDelay = clampHoverDelay(Number(JSON.parse(fs.readFileSync(trayHoverPath(), 'utf8')).delay));
+  } catch { /* 首次无文件，用默认 5 秒 */ }
+}
+function saveTrayHover() {
+  try {
+    fs.writeFileSync(trayHoverPath(), JSON.stringify({ delay: trayHoverDelay }));
+  } catch { /* 落盘失败不影响运行 */ }
+}
+function sleepBlockerActive() {
+  try {
+    return sleepBlockerId !== null && powerSaveBlocker.isStarted(sleepBlockerId);
+  } catch {
+    return false;
+  }
+}
+function applyPreventSleep() {
+  if (preventSleepEnabled) {
+    if (!sleepBlockerActive()) {
       try {
-        globalShortcut.register(hotkey, () => {
-          // Tauri 版语义：唤出/隐藏切换——已可见且聚焦时隐藏，否则唤出
-          if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) {
-            win.hide();
-          } else {
-            showWindow();
-          }
-        });
-      } catch (e) {
-        console.warn('[BIT] 热键注册失败:', e.message);
+        sleepBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+      } catch {
+        sleepBlockerId = null; // 极简环境没有电源管理接口：如实回 active=false
       }
     }
+  } else if (sleepBlockerId !== null) {
+    try { powerSaveBlocker.stop(sleepBlockerId); } catch { /* 已停止 */ }
+    sleepBlockerId = null;
+  }
+  return sleepBlockerActive();
+}
+function sendToMain(event, payload) {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send('bit:core-event', { event, payload });
+}
+// ── 截图提问（跨平台）────────────────────────────────────────────
+// 统一管线：交互框选 → PNG 字节 → dataURL → screenshot-capture 事件挂到对话页附件；
+// 没有产出图片一律视为用户取消（Esc / 关掉选区），不报错。
+//   macOS   ：screencapture -i（需"屏幕录制"权限，未决定时主动申请）
+//   Linux   ：slurp+grim（Wayland）/ gnome-screenshot -a / spectacle -r / flameshot / scrot -s / import
+//   Windows ：ms-screenclip:（Win10 1809+ 系统截图工具）→ 轮询 Electron 剪贴板拿到新图
+//             它只写剪贴板不落文件，故先记旧图、再等剪贴板变化
+const cp = require('child_process');
+const shotTmpPath = () => path.join(app.getPath('temp'), `bit-shot-${Date.now()}.png`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const lastLine = (e) => String((e && e.message) || e || '').trim().split('\n').filter(Boolean).slice(-1)[0] || '未知错误';
+// 探测逻辑本体在 desktop-capabilities.cjs（纯函数 + 可注入 which），
+// 这里只绑定真实环境；选择矩阵由 e2e/capabilities-test.cjs 单测覆盖。
+const caps = require('./desktop-capabilities.cjs');
+const hasCmd = caps.realHasCmd;
+const isWayland = () => caps.isWayland(process.platform, process.env);
+const screenshotBackend = caps.screenshotBackend;
+const shotMissingHint = () => caps.shotMissingHint({ platform: process.platform, env: process.env });
+// 子进程跑外部截图工具（300 秒上限：交互框选要留给用户）
+// windowsHide：GUI 进程拉控制台程序会新开一个控制台窗口，那窗口会抢前台焦点，
+// 紧接着的 keybd_event Ctrl+V 就粘到黑框里去了。
+function execShot(bin, args, opts = {}) {
+  return new Promise((resolve) => {
+    cp.execFile(
+      bin,
+      args,
+      { timeout: 300000, encoding: opts.binary ? 'buffer' : 'utf8', windowsHide: true },
+      (err, stdout, stderr) => resolve({ err, stdout: stdout || (opts.binary ? Buffer.alloc(0) : ''), stderr: String(stderr || '') }),
+    );
+  });
+}
+// 全局能力位：快捷键面板据此标注「本机能不能用 / 缺什么」，避免用户设完快捷键才发现是死键
+function hotkeyCaps() {
+  const backend = screenshotBackend();
+  // false 参数：只查询 macOS 辅助功能信任状态，不弹授权框
+  let trusted = false;
+  if (process.platform === 'darwin') {
+    try {
+      trusted = systemPreferences.isTrustedAccessibilityClient(false);
+    } catch {
+      trusted = false;
+    }
+  }
+  const pasteTool = caps.pickPasteTool({
+    platform: process.platform,
+    env: process.env,
+    hasCmd,
+    trustedAccessibility: trusted,
+  });
+  return {
+    os: process.platform,
+    screenshot_backend: backend,
+    screenshot_supported: !!backend,
+    screenshot_hint: backend ? '' : shotMissingHint(),
+    paste_tool: pasteTool,
+    paste_supported: !!pasteTool,
+    paste_hint: pasteTool
+      ? ''
+      : process.platform === 'darwin'
+        ? '需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能'
+        : '缺少粘贴工具：X11 装 xdotool，Wayland 装 wtype',
+  };
+}
+// 剪贴板图片取/还。Electron 44 起主进程 clipboard 只剩 W3C 异步 API
+// （read/write/readText/writeText），旧的 readImage/writeImage 已移除，
+// 截图回读与语音粘贴的「用完还原」都靠这两个等价物。
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const blobBuf = async (blob) =>
+  blob && typeof blob.arrayBuffer === 'function' ? Buffer.from(await blob.arrayBuffer()) : Buffer.alloc(0);
+async function clipboardPng() {
+  try {
+    for (const item of await clipboard.read()) {
+      const types = item.types || [];
+      // ① 标准 image/*：Windows/Linux 的截图落在这条
+      const std = types.find((t) => /^image\//.test(t));
+      if (std) {
+        const buf = await blobBuf(await item.getType(std));
+        if (buf.length && buf.subarray(0, 8).equals(PNG_SIG)) return buf;
+      }
+      // ② macOS 的 image/png 是空 Blob（Electron 44），原始 pasteboard 类型才有字节
+      for (const t of types.filter((x) => /osclipboard;format="/i.test(x) && /png/i.test(x))) {
+        const buf = await blobBuf(await item.getType(t));
+        if (buf.length && buf.subarray(0, 8).equals(PNG_SIG)) return buf;
+      }
+    }
+  } catch { /* 空剪贴板 / 无图片类型 */ }
+  return null;
+}
+async function clipboardWritePng(buf) {
+  try {
+    // macOS 只认原生 pasteboard 类型名；image/png 写进去等于没写（Electron 44）
+    const mime = process.platform === 'darwin' ? 'public.png' : 'image/png';
+    await clipboard.write([new ClipboardItem({ [mime]: new Blob([buf], { type: mime }) })]);
+  } catch { /* 还原失败不影响主流程 */ }
+}
+// 剪贴板图片 → base64 PNG（Windows 截图回读通道；空剪贴板/非图片返回空串）
+async function clipboardPngBase64() {
+  const buf = await clipboardPng();
+  return buf ? buf.toString('base64') : '';
+}
+// macOS：权限预检 + screencapture -i 落临时文件
+async function captureDarwin() {
+  const perm = systemPreferences.getMediaAccessStatus('screen');
+  const granted = await new Promise((resolve) => {
+    if (perm === 'not-determined') {
+      systemPreferences.askForMediaAccess('screen').then(resolve).catch(() => resolve(false));
+    } else {
+      resolve(perm === 'granted' || perm === 'unknown');
+    }
+  });
+  if (!granted) {
+    console.warn('[BIT][shot] 权限不足（' + perm + '）');
+    return { message: '需要屏幕录制权限：系统设置 → 隐私与安全性 → 屏幕录制 → 勾选 Electron（BIT）后重启应用' };
+  }
+  const file = shotTmpPath();
+  const r = await execShot('screencapture', ['-i', file]);
+  if (r.err) {
+    const hint = /could not create image from rect/i.test(r.err.message || '')
+      ? '（多为屏幕录制权限未授予：系统设置 → 隐私与安全性 → 屏幕录制）'
+      : '';
+    return { message: '截图失败：' + lastLine(r.err) + hint };
+  }
+  try {
+    if (!fs.existsSync(file)) return {}; // Esc 取消
+    const buf = fs.readFileSync(file);
+    fs.unlinkSync(file);
+    return { png: buf.length ? buf.toString('base64') : '' };
+  } catch (e) {
+    return { message: '截图读取失败：' + e.message };
+  }
+}
+// Linux：按桌面套件挑一个能框选的工具
+async function captureLinux() {
+  const backend = screenshotBackend();
+  const file = shotTmpPath();
+  let r;
+  if (backend === 'grim+slurp') {
+    // 两步走（不经 shell 拼串）：slurp 出选区几何 → grim 按选区抓；空输出即取消
+    const sel = await execShot('slurp', []);
+    const geom = String(sel.stdout || '').trim();
+    if (sel.err) return { message: '选区失败：' + lastLine(sel.err) };
+    if (!geom) return {};
+    r = await execShot('grim', ['-g', geom, file]);
+  } else if (backend === 'gnome-screenshot') {
+    r = await execShot('gnome-screenshot', ['-a', '-f', file]);
+  } else if (backend === 'spectacle') {
+    r = await execShot('spectacle', ['-r', '-n', '-o', file]);
+  } else if (backend === 'flameshot') {
+    const raw = await execShot('flameshot', ['gui', '-r'], { binary: true });
+    if (raw.err) return { message: '截图失败：' + lastLine(raw.err) };
+    return { png: raw.stdout && raw.stdout.length ? raw.stdout.toString('base64') : '' };
+  } else if (backend === 'scrot') {
+    r = await execShot('scrot', ['-s', file]);
+  } else if (backend === 'imagemagick') {
+    r = await execShot('import', [file]);
+  } else {
+    return { message: shotMissingHint() };
+  }
+  if (r.err) return { message: '截图失败：' + lastLine(r.err) };
+  try {
+    if (!fs.existsSync(file)) return {};
+    const buf = fs.readFileSync(file);
+    fs.unlinkSync(file);
+    return { png: buf.length ? buf.toString('base64') : '' };
+  } catch (e) {
+    return { message: '截图读取失败：' + e.message };
+  }
+}
+// Windows：唤起系统截图工具，等剪贴板出现"新"图片（用户不截就超时，按取消处理）
+async function captureWindows() {
+  const before = await clipboardPngBase64();
+  try {
+    await shell.openExternal('ms-screenclip:');
+  } catch (e) {
+    return { message: '打不开系统截图工具（Win10 1809+ 的"截图"）：' + e.message };
+  }
+  for (let waited = 0; waited < 120000; waited += 600) {
+    await sleep(600);
+    const png = await clipboardPngBase64();
+    if (png && png !== before) return { png };
+  }
+  return {};
+}
+// 截图提问总入口：快捷键与对话页剪刀按钮共用
+async function doScreenshotQuestion() {
+  const backend = screenshotBackend();
+  if (!backend) {
+    sendToMain('screenshot-capture-error', { message: shotMissingHint() });
+    return;
+  }
+  console.log(`[BIT][shot] 后端=${backend} platform=${process.platform}`);
+  const r =
+    process.platform === 'darwin'
+      ? await captureDarwin()
+      : process.platform === 'win32'
+        ? await captureWindows()
+        : await captureLinux();
+  if (r.message) {
+    console.warn('[BIT][shot] 失败:', r.message);
+    sendToMain('screenshot-capture-error', { message: r.message });
+    return;
+  }
+  if (!r.png) {
+    console.log('[BIT][shot] 未产出图片（视为取消）');
+    return;
+  }
+  console.log(`[BIT][shot] 已捕获 ${r.png.length} 字节 base64 → 推送 screenshot-capture`);
+  showWindow();
+  sendToMain('screenshot-capture', { dataUrl: 'data:image/png;base64,' + r.png });
+}
+// 按下快捷键那一刻的前台窗口（Windows HWND，十进制字符串）。录音+转写有数秒窗口期，
+// 期间任何弹层（系统提示、子进程控制台）都可能把前台抢走；只认粘贴瞬间的前台，
+// 结果就会贴到别人身上。所以要把目标记下来，粘贴前再抢回来。（Rust 进程内 Win32）
+function captureForegroundHwnd() {
+  return bit.invoke('win_foreground_hwnd', {}).then((v) => String(v || '').trim()).catch(() => '');
+}
+// 全局语音：记住当前前台应用（转写完粘贴回去）→ 弹窗 → 通知对话页开录
+// macOS 用 osascript 拿 bundleId 并在粘贴前激活；Windows 记 HWND 再在粘贴前激活；
+// Linux 拿不到"上一个前台应用"且不该抢焦点（抢了就粘到自己身上），故不夺焦点地显示。
+function doGlobalVoice() {
+  if (process.platform === 'win32') {
+    captureForegroundHwnd().then((hwnd) => {
+      if (win && !win.isDestroyed() && !win.isFocused()) win.showInactive();
+      else if (!win || win.isDestroyed()) createWindow();
+      sendToMain('global-voice', { bundleId: '', hwnd });
+    });
+    return;
+  }
+  if (process.platform !== 'darwin') {
+    if (win && !win.isDestroyed() && !win.isFocused()) win.showInactive();
+    else if (!win || win.isDestroyed()) createWindow();
+    sendToMain('global-voice', { bundleId: '' });
+    return;
+  }
+  const { execFile } = require('child_process');
+  execFile('osascript', ['-e', 'tell application "System Events" to get bundle identifier of first process whose frontmost is true'],
+    (err, stdout) => {
+      const bundleId = err ? '' : String(stdout || '').trim();
+      showWindow();
+      sendToMain('global-voice', { bundleId });
+    });
+}
+// 注册三个应用级热键，回传注册失败的键名（'main' | 'screenshot' | 'voice'）。
+// globalShortcut.register 被别的应用抢占时返回 false 而不抛错——不接住这个返回值，
+// UI 就会显示一个「存上了但按了没反应」的快捷键。
+function registerAppShortcuts() {
+  const failed = [];
+  if (!globalShortcut) return failed;
+  const reg = (name, accelerator, fn) => {
+    if (!accelerator || !accelerator.trim()) return;
+    try { globalShortcut.unregister(accelerator); } catch { /* 未注册过 */ }
+    let ok = false;
+    try { ok = globalShortcut.register(accelerator, fn) !== false; }
+    catch (e) { console.warn('[BIT] 快捷键注册失败:', accelerator, e.message); }
+    if (!ok) failed.push(name);
+  };
+  reg('main', appHotkeys.main, () => {
+    // Tauri 版语义：唤出/隐藏切换——已可见且聚焦时隐藏，否则唤出
+    if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) {
+      win.hide();
+    } else {
+      showWindow();
+    }
+  });
+  reg('screenshot', appHotkeys.screenshot, doScreenshotQuestion);
+  reg('voice', appHotkeys.voice, doGlobalVoice);
+  return failed;
+}
+
+// 注册失败时把该键退回旧值并重新注册（其余两键不受影响）
+function revertHotkey(name, prev) {
+  appHotkeys[name] = prev || '';
+  saveAppHotkeys();
+  registerAppShortcuts();
+}
+
+// 热键注册（set_hotkey 的实现体）：core 配置 + globalShortcut 双写
+// 注册不成功就不落盘：配置里的值必须是「真的按得动」的那一个
+async function ipcInvokeSetHotkey(hotkey) {
+  const prev = appHotkeys.main;
+  appHotkeys.main = hotkey || '';
+  if (registerAppShortcuts().includes('main')) {
+    revertHotkey('main', prev);
+    return { ok: false, failed: 'main', hotkey: prev };
   }
   // 配置落盘走 core（get_hotkey 是 A 类命令，读的就是这份配置）
-  return await bit.invoke('set_hotkey', { hotkey });
+  const res = await bit.invoke('set_hotkey', { hotkey });
+  return { ...(res && typeof res === 'object' ? res : { ok: true }), failed: null };
 }
 
 // ── bit-asset 协议：bit-asset://localhost/<encodeURIComponent(绝对路径)> ──
 function handleAssetProtocol() {
-  protocol.handle('bit-asset', (request) => {
+  protocol.handle('bit-asset', async (request) => {
     const u = new URL(request.url);
     // pathname 带前导 '/'，解码后即绝对路径（Windows 盘符 C%3A%5C → C:\）
     let p = decodeURIComponent(u.pathname.replace(/^\/+/, ''));
@@ -667,18 +1400,44 @@ function handleAssetProtocol() {
       // 非绝对路径（理论不发生）：拒绝
       return new Response('bad path', { status: 400 });
     }
-    return net.fetch('file:///' + p.replace(/\\/g, '/'));
+    let res;
+    try {
+      res = await net.fetch('file:///' + p.replace(/\\/g, '/'));
+    } catch (e) {
+      return new Response('not found: ' + (e.message || e), { status: 404 });
+    }
+    // 必须补 ACAO：net.fetch(file://) 的响应没有 CORS 头，而页面源是 file:// 或
+    // http://localhost:5173，对 bit-asset:// 都是跨源。缺这个头时 <img>/<iframe> 照常显示
+    // （不需要 CORS），但 fetch() 一律 "Failed to fetch" —— md 预览与右侧面板取文本就是走 fetch。
+    const headers = new Headers();
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('Content-Type', res.headers.get('Content-Type') || 'application/octet-stream');
+    return new Response(res.body, { status: res.status, headers });
   });
 }
 
 // ── core 事件钩子：notify-done → 系统通知（对应 Tauri notify_done）；其余 M3 接托盘 ──
+// 提示档由用户在「设置 → 语音与提示音」里定：default/custom 每轮都提示，
+// error-only 只在回合失败时出声弹气泡（长任务跑一半挂了才吭声，正常收工保持安静）。
+// 声音本身在渲染层播（WebAudio/Audio），这里只管气泡——一个终态只弹一处，不重复。
+let notifyMode = 'default';
+async function refreshNotifySetting() {
+  try {
+    const r = await bit.invoke('get_notify_sound', {});
+    if (r?.mode) notifyMode = String(r.mode);
+  } catch { /* 读不到就保持上一次口径 */ }
+}
 function handleCoreEventHooks(e) {
+  if (e?.event === 'notify-settings') { refreshNotifySetting(); return; }
   if (e?.event === 'notify-done') {
     const p = e.payload || {};
+    const ok = p.ok !== false;
+    if (notifyMode === 'error-only' && ok) return;
     try {
       const n = new Notification({
         title: p.title ? `触手怪 · ${p.title}` : '触手怪',
-        body: p.reply || '任务执行完成',
+        // 正文在 core 侧已经去过 markdown：吐司不渲染标记，留着 ** # | 只会糊成一片
+        body: p.reply || (ok ? '任务执行完成' : '任务执行失败'),
         icon: ICON,
       });
       n.on('click', () => {
@@ -694,15 +1453,91 @@ function handleCoreEventHooks(e) {
   }
 }
 
+// ── 原生提示框防呆（Deep Customization）：UI 一律自绘，堵死所有会冒出原生样式的口子 ──
+// 1) 主进程 dialog：showMessageBox* 直接拒绝（本仓库 UI 从不使用；showErrorBox 保留给
+//    bit.node 加载失败的致命场景——那时渲染层不存在，原生弹窗是唯一出口；文件选择
+//    showSaveDialog/showOpenDialog 是系统级对话框，所有桌面应用一致，保留）
+for (const fn of ['showMessageBox', 'showMessageBoxSync']) {
+  dialog[fn] = (...args) => {
+    console.warn(`[BIT] dialog.${fn} 已被禁用（防原生弹窗外泄），调用点：`, new Error().stack?.split('\n')[2]?.trim());
+    return fn.endsWith('Sync') ? { response: 0 } : Promise.resolve({ response: 0 });
+  };
+}
+// 2) webContents 加固：window.open 一律拦截（http/https 转交系统浏览器，其余直接拒绝，
+//    避免弹出带 Chrome 原生边框的新窗口）；beforeunload 拦截弹窗自动放行
+function hardenWebContents(wc) {  wc.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
+  wc.on('will-prevent-unload', (e) => e.preventDefault());
+  // 页面级跳转防护：主窗口是 SPA，永远不允许整窗导航（否则 Chromium 原生界面露馅）。
+  // http(s) 点击 → 转交系统浏览器；其余（file:// 等）一律拒绝；仅 dev server 放行。
+  wc.on('will-navigate', (e, url) => {
+    if (process.env.BIT_ELECTRON_DIST !== '1' && url.startsWith('http://localhost:5173')) return;
+    // 同页 reload 放行：location.reload() 也走 will-navigate，
+    // 否则前端「字体缩放生效重启」被这条防护拦死（遮罩+重启机制失效）
+    if (url === wc.getURL()) return;
+    e.preventDefault();
+    if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+  });
+  // 生产环境锁死 DevTools：终端用户用不到，减小暴露面；开发模式不受影响
+  if (app.isPackaged) {
+    wc.on('devtools-opened', () => { try { wc.closeDevTools(); } catch {} });
+  }
+}
+
+// 内嵌网页（右侧文件面板的网页标签）安全边界：
+//   - 只允许 http(s) 导航，file:// 等本地协议一律拒绝（网页是外部内容，不能读本机）
+//   - window.open 不弹原生窗口：转给渲染层开新标签（就是"子页面"）
+//   - 摄像头/麦克风/通知等权限默认拒绝，避免网页借壳拿系统能力
+let webviewPermsLocked = false;
+app.on('web-contents-created', (_e, wc) => {
+  if (wc.getType() !== 'webview') return;
+  wc.on('will-navigate', (e, url) => {
+    if (!/^https?:\/\//i.test(url)) e.preventDefault();
+  });
+  wc.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) sendToMain('web-open-tab', { url });
+    return { action: 'deny' };
+  });
+  if (!webviewPermsLocked) {
+    webviewPermsLocked = true;
+    try {
+      wc.session.setPermissionRequestHandler((_wc, _permission, cb) => cb(false));
+    } catch { /* 权限表设置失败不影响浏览 */ }
+  }
+});
+// 5) Chromium 子系统裁剪：官方预编译二进制无法真正剔除内核组件（媒体栈因聊天视频
+//    播放必须保留），运行时关掉确定用不到的——翻译条/自动填充/投屏路由/优化提示。
+//    附带收益：这些是 Chromium 内置 UI 的潜在露馅面（如翻译弹条），一并消灭。
+app.commandLine.appendSwitch(
+  'disable-features',
+  ['Translate', 'TranslateUI', 'Autofill', 'AutofillServerCommunication', 'MediaRouter', 'OptimizationHints', 'SegmentPlatform'].join(',')
+);
+// 3) 渲染层 JS 弹窗（alert/confirm/prompt 在 Electron 下是 Chrome 样式弹层）：见 preload.cjs
+// 4) 默认应用菜单：生产环境摘除（无边框下不可见但仍占快捷键）
+function setAppMenu() {
+  if (app.isPackaged) Menu.setApplicationMenu(null);
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1120,
     height: 740,
-    minWidth: 920,
+    // 最小宽度按"窄窗模式"定：900 以下会话侧栏自动收起、1024 以下预览面板自动关闭，
+    // 640 时正文仍保得住（左图标栏 + 内容），再小布局就只剩图标栏了
+    minWidth: 640,
     minHeight: 620,
     center: true,
     title: '触手怪',
+    // 全平台自绘标题栏：macOS 用 titleBarStyle:'hidden' 保留原生红绿灯；Windows/Linux 无边框（TitleBar.jsx）。
+    // 0.6.50 曾把 frame 误改为 process.platform !== 'darwin'（Windows 变成带原生边框），
+    // 落在 Electron #51218「透明窗口 win32 用户调整大小修复」覆盖的组合之外 → Windows 端
+    // 边缘拖不动、拖拽时窗口跳变。改回 frame:false，Windows 显式启用 thickFrame（WS_THICKFRAME：
+    // 边缘拖拽调整大小 / resize 光标 / 贴边分屏）。
     frame: false,
+    thickFrame: process.platform === 'win32',
+    titleBarStyle: process.platform === 'darwin' ? 'hidden' : undefined,
     transparent: true,
     hasShadow: true,
     show: false,
@@ -713,9 +1548,41 @@ function createWindow() {
       contextIsolation: false,
       nodeIntegration: false,
       spellcheck: false,
+      // 右侧文件面板的网页标签（Chromium 内核复用）；安全约束见 will-attach-webview
+      webviewTag: true,
     },
   });
   win.setMenuBarVisibility(false);
+  // macOS 原生红点：关闭 = 隐藏到托盘（与自绘关闭一致；真正退出由 before-quit 置位 quitting 放行）
+  win.on('close', (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    win.hide();
+  });
+  hardenWebContents(win.webContents);
+  // 网页标签挂载前收敛能力：不留 preload（不暴露 shim）、禁用 Node、独立沙箱，
+  // 且首屏只接受 http(s)；网页本身运行在 webview 自己的 webContents 里
+  win.webContents.on('will-attach-webview', (e, prefs, params) => {
+    delete prefs.preload;
+    prefs.nodeIntegration = false;
+    prefs.contextIsolation = true;
+    prefs.sandbox = true;
+    if (!/^https?:\/\//i.test(String(params.src || ''))) e.preventDefault();
+  });
+  win.on('maximize', () => { winMaximized = true; });
+  win.on('unmaximize', () => {
+    winMaximized = false;
+    // 兜底：透明无边框窗 unmaximize 后可能仍停在最大化尺寸，显式回进入最大化前那一份
+    if (winNormalBounds) {
+      const c = win.getContentBounds();
+      const restored = Math.abs(c.width - winNormalBounds.width) <= 2
+        && Math.abs(c.height - winNormalBounds.height) <= 2;
+      if (!restored) win.setContentBounds(winNormalBounds);
+    }
+  });
+  // 前台焦点是「全局语音粘回原应用」的隐含前提，出问题时这两行是判断粘贴贴错的依据
+  win.on('focus', () => console.log('[BIT][focus] 主窗口获得前台'));
+  win.on('blur', () => console.log('[BIT][focus] 主窗口失去前台'));
 
   // 冒烟模式（BIT_SMOKE=1）：渲染管线 console 转发 stdout，便于无窗诊断
   if (process.env.BIT_SMOKE === '1') {
@@ -775,14 +1642,25 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(async () => {
+  console.log('[boot-dbg] whenReady');
+  setAppMenu();
   handleAssetProtocol();
+  // 语音输入：渲染进程 getUserMedia 必须放行 media（麦克风）权限，否则录音直接被拒；
+  // 复制按钮依赖剪贴板写入。其余权限一律拒绝（最小权限；window.open 外链走
+  // setWindowOpenHandler，不受此 handler 影响）
+  // session 实例必须在 app ready 后经 session.defaultSession 取（Electron 44：命名空间模块上无实例方法）
+  require('electron').session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'media' || permission === 'clipboard-sanitized-write' || permission === 'clipboard-read');
+  });
   try {
     bit = require(NODE_PATH);
   } catch (e) {
+    console.error('[boot-dbg] bit-napi require 失败:', e && e.stack || e);
     dialog.showErrorBox('触手怪', `原生模块加载失败：\n${e.message}\n\n请重新构建 bit-napi。`);
     app.exit(1);
     return;
   }
+  console.log('[boot-dbg] bit-napi 已加载, exports:', Object.keys(bit).join(','));
 
   // UI 事件回流：TSFN → 渲染层广播 + 托盘/通知钩子
   // ⚠ 必须在 hostStart 之前注册——hostStart 内部从 EMITTER OnceLock 取回调注入 Ctx，
@@ -793,6 +1671,7 @@ app.whenReady().then(async () => {
   // BIT_DATA_DIR 可隔离（E2E/冒烟不污染真实数据）。
   // app_args：guardian 复活时透传给 electron.exe（裸拉只会打开默认欢迎页）
   const workerExe = fs.existsSync(WORKER_EXE) ? WORKER_EXE : null;
+  console.log('[boot-dbg] hostStart 前');
   await bit.hostStart(
     process.env.BIT_DATA_DIR || null,
     VERSION,
@@ -800,6 +1679,23 @@ app.whenReady().then(async () => {
     process.execPath,
     JSON.stringify([__filename]),
   );
+  console.log('[boot-dbg] hostStart 完成');
+
+  // 出网代理：core 已按配置设好本进程环境与决策，webview 这一侧同步同一口径
+  // 这里失败只影响内嵌浏览器走不走代理，绝不能把整个应用拖崩
+  try {
+    await syncProxyFromCore();
+  } catch (e) {
+    console.warn('[proxy] 启动时同步 webview 代理失败:', e.message || e);
+  }
+  // 代理 407：Chromium 不从 proxyRules 里取 userinfo，只能在这个事件里回填账号密码。
+  // 只管代理认证，网站自身的 Basic 认证保持未处理（与不注册监听时的行为一致）
+  app.on('login', (event, _wc, _request, authInfo, callback) => {
+    if (authInfo?.isProxy && proxyCreds) {
+      event.preventDefault();
+      callback(proxyCreds.user, proxyCreds.pass);
+    }
+  });
 
   // 优雅退出：core quit_app → ElectronHostHooks::exit_app → 这里 app.quit()
   // （before-quit 里做 globalShortcut 清理；core 侧的硬退 exit(0) 仅兜底）
@@ -814,7 +1710,11 @@ app.whenReady().then(async () => {
       if (intercepted !== undefined) return intercepted;
       return await bit.invoke(cmd, args || {});
     } catch (err) {
-      throw new Error(typeof err === 'string' ? err : err.message || String(err));
+      // 只把命令名写进宿主日志：抛回渲染层的字符串保持原样，界面按开头的 `[标记]` 查词条换文案，
+      // 在前面拼上 cmd 会让本地化查不到、退回核心原文
+      const msg = typeof err === 'string' ? err : err.message || String(err);
+      console.warn(`[BIT] invoke ${cmd} 失败: ${msg}`);
+      throw new Error(msg);
     }
   });
 
@@ -841,7 +1741,9 @@ app.whenReady().then(async () => {
   });
   ipcMain.on('bit:drag-move', (_e, { dx = 0, dy = 0 } = {}) => {
     if (!win || win.isDestroyed() || !dragOrigin) return;
-    win.setPosition(dragOrigin.x + dx, dragOrigin.y + dy);
+    // Windows 透明窗 + thickFrame 下，拖拽过程中窗口尺寸会缓慢漂移（表现为窗口缓缓放大）。
+    // 拖拽期间显式钉死为起始宽高，每步只允许移动位置；拖拽结束后边缘调整大小不受影响。
+    win.setBounds({ x: dragOrigin.x + dx, y: dragOrigin.y + dy, width: dragOrigin.width, height: dragOrigin.height });
   });
   ipcMain.on('bit:drag-end', () => {
     dragOrigin = null;
@@ -853,25 +1755,46 @@ app.whenReady().then(async () => {
   startGoalsPolling(); // 活跃计划状态（托盘任务面板用）
   loadLang(true); // 界面语言（bit.db 统一标记；前端切换另有实时推送，此处兜底）
   loadTheme(true); // 界面主题（bit.db 统一标记；前端切换另有实时推送，此处首帧兜底）
+  // 阻止休眠偏好先于窗口恢复：托盘常驻时窗口可能一直不打开，但长任务照样要挡住睡眠
+  loadPreventSleep();
+  loadTrayHover();
+  refreshNotifySetting();
+  applyPreventSleep();
   try {
+    loadAppHotkeys();
     const hk = await bit.invoke('get_hotkey', {});
-    await ipcInvokeSetHotkey(String(hk?.hotkey || ''));
+    appHotkeys.main = String(hk?.hotkey || '');
+    registerAppShortcuts();
   } catch (e) {
     console.warn('[BIT] 启动热键注册失败:', e.message);
   }
 
   // core 服务 bootstrap（守护进程/HTTP 服务/插件/autopilot/自动更新）
+  console.log('[boot-dbg] bootstrap_services 前');
   try {
     await bit.invoke('bootstrap_services', {});
   } catch (e) {
     console.error('[BIT] bootstrap_services 失败:', e.message || e);
   }
 
+  console.log('[boot-dbg] createWindow');
   createWindow();
+  console.log('[boot-dbg] createWindow 已调用');
 
   app.on('activate', () => {
-    if (!win) createWindow();
+    // 与仓库修复一致：隐藏的窗口也要重新显示（此前 !win 才重建，唤不回来）
+    showWindow();
   });
+}).catch((e) => {
+  // 启动链路上任何一步抛错（bit.node 加载失败、hostStart 抛异常、napi 版本不匹配…）
+  // 都汇到这里。原来没有 .catch：await bit.hostStart 在唯一的 try 之外，抛错即
+  // unhandled rejection —— 窗口不出现、托盘也没有，用户只看到"双击图标没反应"。
+  console.error('[BIT] 启动失败:', e);
+  try {
+    dialog.showErrorBox('触手怪启动失败', String((e && (e.stack || e.message)) || e));
+  } catch {
+    /* 无显示环境（CI / 冒烟模式）忽略 */
+  }
 });
 
 // 窗口全部关闭 ≠ 退出：托盘常驻（M3 实现托盘后语义不变）
@@ -883,14 +1806,28 @@ app.on('window-all-closed', () => {
 // before-quit 里补 Electron 层清理 + 置位 quitting（窗口关闭不再隐藏到托盘）
 app.on('before-quit', () => {
   quitting = true;
+  // 图标布局、主题这些偏好都落在 localStorage（DOMStorage）里，Chromium 是批量落盘的；
+  // 退出路径走得快时最后几次写入可能还在内存里，这里主动刷一次。
+  try {
+    session.defaultSession.flushStorageData();
+  } catch {}
   try {
     globalShortcut?.unregisterAll();
   } catch {}
   try {
+    if (sleepBlockerId !== null) powerSaveBlocker.stop(sleepBlockerId);
+    sleepBlockerId = null;
+  } catch {}
+  try {
     if (goalsTimer) clearInterval(goalsTimer);
     if (trayPushTimer) clearTimeout(trayPushTimer);
+    // hover 小窗的两个定时器原来没清：光标轮询在退出流程里仍在跑
+    if (hoverPollTimer) { clearInterval(hoverPollTimer); hoverPollTimer = null; }
+    if (hoverShowTimer) { clearTimeout(hoverShowTimer); hoverShowTimer = null; }
     if (statusWin && !statusWin.isDestroyed()) statusWin.destroy();
     statusWin = null;
+    if (hoverWin && !hoverWin.isDestroyed()) hoverWin.destroy();
+    hoverWin = null;
     tray?.destroy();
     tray = null;
   } catch {}

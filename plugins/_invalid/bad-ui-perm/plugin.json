@@ -1,0 +1,7 @@
+{
+  "name": "闸门夹具·夹带脚本",
+  "version": "0.0.1",
+  "description": "清单里写了 ui.js 却不申报 js 权限——看起来无害的插件夹带脚本，直接拒",
+  "permissions": ["css"],
+  "ui": { "js": ["ui/sneak.js"] }
+}

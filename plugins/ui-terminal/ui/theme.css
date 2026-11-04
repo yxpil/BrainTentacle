@@ -1,0 +1,78 @@
+/* 运维速记台的样式：只给自己的 DOM 类，不动宿主本体（宿主全站样式是 Tailwind 生成的，
+   插件想蹭也得挑自己的选择器，免得升级就把界面弄花）。 */
+.bit-term {
+  padding: 18px;
+  font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.bit-term h1 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+.bit-term-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.bit-term-status {
+  color: var(--accent, #0d9488);
+  font-size: 12px;
+}
+.bit-term-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.bit-term-input {
+  flex: 1 1 220px;
+  padding: 6px 8px;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.bit-term-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--accent, #0d9488);
+  border-radius: 6px;
+  background: var(--accent, #0d9488);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+.bit-term-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.bit-term-col {
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.bit-term-col h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+.bit-term-col ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.bit-term label {
+  display: block;
+  margin: 10px 0;
+}
+.bit-term input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}

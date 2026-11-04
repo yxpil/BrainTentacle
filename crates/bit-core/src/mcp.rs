@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 /// MCP（Model Context Protocol）接入：支持 Streamable HTTP 和 stdio 两种传输。
 /// 遵循 MCP 规范：initialize 握手 → notifications/initialized → tools/list / tools/call。
+/// http 传输每条请求都带上该服务器的自定义头（外部服务常用的 Authorization 认凭据），
+/// 出站客户端与 AI 请求走同一套网络代理决策（见 netproxy::apply_to_builder）。
 
 /// 传输方式
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -40,6 +42,15 @@ pub struct McpServer {
     /// stdio 传输：额外环境变量
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
+    /// http 传输：随每次请求一起发出的自定义请求头（外部 MCP 常用 Authorization 认凭据）。
+    /// 存 mcp_servers 这条密文文档里，与 stdio 的 env 同一套保密口径；
+    /// 列表接口对外只回头名，值不回显（见 commands_api::mcp_list）。
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
+    /// 来源插件 id：由插件清单 connections[] 声明联动出来的服务器才有值，
+    /// 用户手动接入的恒为空。生命周期归插件管——工具页不能手动暂停/移除这类条目。
+    #[serde(default)]
+    pub plugin_id: String,
     /// 服务器版本（serverInfo.version）
     #[serde(default)]
     pub version: String,
@@ -80,11 +91,44 @@ struct RpcErr {
     message: Option<String>,
 }
 
-fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())
+/// 出站客户端：与 AI 请求同一套代理口径（回环恒直连，其余按生效决策挂代理/企业 CA）。
+/// 对外可见：手动接入与 WorkWith 联动都经它拿客户端，别各自再 builder 一份漏掉代理
+pub fn http_client(url: &str) -> Result<reqwest::Client, String> {
+    let b = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10));
+    crate::netproxy::apply_to_builder(url, b).build().map_err(|e| e.to_string())
+}
+
+/// 校验并套用自定义头：头名必须是合法 token（拦掉换行注入），头值去掉首尾空白。
+/// 清单里的头名/头值已在 plugins::validate 过一道，这里是运行时兜底
+/// （用户手动接入的条目、以及持久化数据被外部改过的情况）。
+fn apply_headers(
+    req: reqwest::RequestBuilder,
+    headers: &std::collections::HashMap<String, String>,
+) -> reqwest::RequestBuilder {
+    let mut req = req;
+    for (k, v) in headers {
+        let k = k.trim();
+        let v = v.trim();
+        if k.is_empty() || v.is_empty() || !header_name_ok(k) || !header_value_ok(v) {
+            continue;
+        }
+        req = req.header(k, v);
+    }
+    req
+}
+
+/// HTTP 头名允许的字符（RFC 7230 token）：其余一律不收，杜绝 CRLF/空格注入
+pub(crate) fn header_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~'))
+}
+
+/// 头值不收控制字符（含 CR/LF）：一个换行就能把一条头变成两条请求
+pub(crate) fn header_value_ok(value: &str) -> bool {
+    value.chars().all(|c| !c.is_ascii_control())
 }
 
 /// 解析响应体：application/json 直接解析；text/event-stream 提取 data: 行后解析
@@ -112,10 +156,11 @@ async fn rpc(
     http: &reqwest::Client,
     url: &str,
     session: Option<&str>,
+    headers: &std::collections::HashMap<String, String>,
     method: &str,
     params: serde_json::Value,
 ) -> Result<(serde_json::Value, Option<String>), String> {
-    let mut req = http
+    let req = http
         .post(url)
         .header("Accept", "application/json, text/event-stream")
         .json(&serde_json::json!({
@@ -124,9 +169,11 @@ async fn rpc(
             "method": method,
             "params": params,
         }));
-    if let Some(sid) = session {
-        req = req.header("Mcp-Session-Id", sid);
-    }
+    let req = apply_headers(req, headers);
+    let req = match session {
+        Some(sid) => req.header("Mcp-Session-Id", sid),
+        None => req,
+    };
     let resp = req.send().await.map_err(|e| format!("请求 {url} 失败: {e}"))?;
     let sid = resp
         .headers()
@@ -175,11 +222,13 @@ fn truncate(s: &str, n: usize) -> String {
 pub async fn initialize(
     http: &reqwest::Client,
     url: &str,
+    headers: &std::collections::HashMap<String, String>,
 ) -> Result<(String, String, String, String), String> {
     let (result, sid) = rpc(
         http,
         url,
         None,
+        headers,
         "initialize",
         serde_json::json!({
             "protocolVersion": "2025-03-26",
@@ -209,6 +258,7 @@ pub async fn initialize(
         http,
         url,
         sid.as_deref(),
+        headers,
         "notifications/initialized",
         serde_json::json!({}),
     )
@@ -232,8 +282,8 @@ pub async fn probe_port(host: &str, port: u16) -> Option<Discovered> {
         return None;
     }
     let url = format!("http://{addr}");
-    let http = client().ok()?;
-    let (name, version, protocol, session) = initialize(&http, &url).await.ok()?;
+    let http = http_client(&url).ok()?;
+    let (name, version, protocol, session) = initialize(&http, &url, &Default::default()).await.ok()?;
     Some(Discovered { url, name, version, protocol, session })
 }
 
@@ -275,7 +325,7 @@ pub struct McpTool {
 
 /// 拉取服务器的工具清单（自动跟随 nextCursor 分页，避免工具多时只拿到第一页）
 pub async fn list_tools(server: &McpServer) -> Result<Vec<McpTool>, String> {
-    let http = client()?;
+    let http = http_client(&server.url)?;
     let mut tools: Vec<McpTool> = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..100 {
@@ -284,8 +334,15 @@ pub async fn list_tools(server: &McpServer) -> Result<Vec<McpTool>, String> {
         if let Some(c) = &cursor {
             params["cursor"] = serde_json::json!(c);
         }
-        let (result, _) =
-            rpc(&http, &server.url, Some(&server.session), "tools/list", params).await?;
+        let (result, _) = rpc(
+            &http,
+            &server.url,
+            Some(&server.session),
+            &server.headers,
+            "tools/list",
+            params,
+        )
+        .await?;
         let arr = result
             .get("tools")
             .and_then(|v| v.as_array())
@@ -319,22 +376,9 @@ pub async fn list_tools(server: &McpServer) -> Result<Vec<McpTool>, String> {
     Ok(tools)
 }
 
-/// 调用服务器上的工具，返回拼接后的文本结果
-pub async fn call_tool(
-    server: &McpServer,
-    tool: &str,
-    args: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let http = client()?;
-    let (result, _) = rpc(
-        &http,
-        &server.url,
-        Some(&server.session),
-        "tools/call",
-        serde_json::json!({ "name": tool, "arguments": args }),
-    )
-    .await?;
-    // result.content: [{type:"text", text:"..."}]，拼接全部文本
+/// tools/call 原始 result → 统一输出：拼接全部 text 内容为 {text, raw}；
+/// isError 时报错；无文本时原样返回（http / stdio 共用）
+fn join_text_result(result: &serde_json::Value) -> Result<serde_json::Value, String> {
     let mut text = String::new();
     if let Some(items) = result.get("content").and_then(|v| v.as_array()) {
         for item in items {
@@ -356,14 +400,62 @@ pub async fn call_tool(
         return Err(if text.is_empty() { "MCP tool returned an error".to_string() } else { text });
     }
     if text.is_empty() {
-        return Ok(result);
+        return Ok(result.clone());
     }
     Ok(serde_json::json!({ "text": text, "raw": result }))
+}
+
+/// 调用服务器上的工具，返回拼接后的文本结果（http 传输）
+pub async fn call_tool(
+    server: &McpServer,
+    tool: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let http = http_client(&server.url)?;
+    let (result, _) = rpc(
+        &http,
+        &server.url,
+        Some(&server.session),
+        &server.headers,
+        "tools/call",
+        serde_json::json!({ "name": tool, "arguments": args }),
+    )
+    .await?;
+    join_text_result(&result)
 }
 
 /// 全局：查找已接入服务器
 pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
     ctx.mcp.lock().unwrap().iter().find(|s| s.id == id).cloned()
+}
+
+/// 拉取某条已登记服务器的工具清单并进注册中心（同名跳过），返回导入条数。
+/// http / stdio 统一走 dispatch：stdio 用进程注册表里那份已由托管方拉起的会话。
+/// save_tools 内部广播 tools-updated，前端工具列表即时刷新。
+/// 报错原样交回：调用方要是不在乎清单拉不到（WorkWith 联动进程可能还在启动），
+/// 自己 unwrap_or(0)；在乎的（插件外部连接）就该把失败如实报给用户。
+pub async fn import_server_tools(ctx: &Arc<crate::state::Ctx>, server_id: &str) -> Result<usize, String> {
+    let server = find(ctx, server_id).ok_or_else(|| format!("MCP 服务器 {server_id} 不存在"))?;
+    let tools = list_tools_dispatch(&server, Some(&ctx.mcp_stdio)).await?;
+    let mut n = 0usize;
+    for t in &tools {
+        let ok = crate::registry::register(
+            ctx,
+            &t.name,
+            &format!("{}（MCP · {}）", t.description, server.name),
+            if t.input_schema.is_null() || !t.input_schema.is_object() {
+                serde_json::json!({"type": "object", "properties": {}, "additionalProperties": true})
+            } else {
+                t.input_schema.clone()
+            },
+            crate::registry::ToolKind::Mcp { server_id: server_id.to_string(), tool: t.name.clone() },
+            "mcp",
+        );
+        if ok.is_ok() {
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -409,13 +501,12 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
             self.pending.lock().unwrap().insert(id, tx);
             let line = serde_json::to_vec(&req)
                 .map_err(|e| format!("序列化请求失败: {e}"))?;
-            {
-                let mut tx_guard = self.tx.lock().unwrap();
-                tx_guard
-                    .send(line)
-                    .await
-                    .map_err(|e| format!("写入子进程 stdin 失败: {e}"))?;
-            }
+            // Sender 是 Arc 句柄，克隆廉价；锁只保护克隆动作，不跨 await 持有
+            // （std MutexGuard 跨 await 会让整个 future 变成 !Send，污染所有调用方）
+            let tx = self.tx.lock().unwrap().clone();
+            tx.send(line)
+                .await
+                .map_err(|e| format!("写入子进程 stdin 失败: {e}"))?;
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 rx,
@@ -434,7 +525,9 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
                 "params": params,
             });
             if let Ok(line) = serde_json::to_vec(&req) {
-                if let Ok(mut tx) = self.tx.lock() {
+                // 同 call：克隆发送端后立即放锁，await 时不持有 std MutexGuard
+                let tx = self.tx.lock().ok().map(|g| g.clone());
+                if let Some(tx) = tx {
                     let _ = tx.send(line).await;
                 }
             }
@@ -478,24 +571,15 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
         c
     }
 
-    /// spawn 一个 stdio MCP server，做 initialize 握手，返回 StdioSession + 服务器信息
-    pub async fn spawn_and_initialize(
+    /// 把已握有管道的子进程接成 JSON-RPC 会话：起读写任务，不做握手。
+    /// child=None 表示进程句柄归外部保管（WorkWith 托管场景）——会话只负责通信，
+    /// kill / 退出监控由托管方做，避免两处各持一份 Child 抢着终止同一个进程。
+    pub fn attach(
         id: String,
-        command: String,
-        args: Vec<String>,
-        env: HashMap<String, String>,
-    ) -> Result<(Arc<StdioSession>, String, String, String), String> {
-        let mut cmd = build_command(&command, &args, &env);
-        let mut child = cmd.spawn().map_err(|e| format!("启动 {command} 失败: {e}"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "无法获取子进程 stdin".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "无法获取子进程 stdout".to_string())?;
-
+        child: Option<tokio::process::Child>,
+        stdin: tokio::process::ChildStdin,
+        stdout: tokio::process::ChildStdout,
+    ) -> Arc<StdioSession> {
         // 写任务（stdin）：从 mpsc 通道收 Vec<u8>，写 JSON-RPC 行
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
         crate::task::spawn(async move {
@@ -544,15 +628,20 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
             }
         });
 
-        let session = Arc::new(StdioSession {
+        Arc::new(StdioSession {
             server_id: id.clone(),
-            child_tokio: StdMutex::new(Some(child)),
+            child_tokio: StdMutex::new(child),
             next_id: StdMutex::new(0),
             pending: pending.clone(),
             tx: StdMutex::new(writer_tx),
-        });
+        })
+    }
 
-        // initialize 握手
+    /// initialize 握手 + notifications/initialized，返回 (serverInfo.name, version, protocolVersion)。
+    /// 15s 上限：进程正常但脚本卡住（如缺依赖时等待输入）也要有个明确的失败口径。
+    pub async fn initialize(
+        session: &Arc<StdioSession>,
+    ) -> Result<(String, String, String), String> {
         let init_result = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             session.call(
@@ -588,6 +677,29 @@ pub fn find<'a>(ctx: &Arc<crate::state::Ctx>, id: &str) -> Option<McpServer> {
             .notify("notifications/initialized", serde_json::json!({}))
             .await;
 
+        Ok((name, version, protocol))
+    }
+
+    /// spawn 一个 stdio MCP server，做 initialize 握手，返回 StdioSession + 服务器信息
+    pub async fn spawn_and_initialize(
+        id: String,
+        command: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> Result<(Arc<StdioSession>, String, String, String), String> {
+        let mut cmd = build_command(&command, &args, &env);
+        let mut child = cmd.spawn().map_err(|e| format!("启动 {command} 失败: {e}"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "无法获取子进程 stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "无法获取子进程 stdout".to_string())?;
+
+        let session = attach(id.clone(), Some(child), stdin, stdout);
+        let (name, version, protocol) = initialize(&session).await?;
         Ok((session, name, version, protocol))
     }
 }
@@ -624,6 +736,55 @@ pub async fn register_stdio(
 pub fn unregister_stdio(registry: &McpProcessRegistry, id: &str) {
     if let Some(sess) = registry.lock().unwrap().remove(id) {
         sess.kill();
+    }
+}
+
+/// 确保某 stdio server 的子进程已拉起：注册表里有直接复用；没有则 spawn + initialize。
+/// 懒恢复：应用重启后首次调用 / 导入时自动重连，壳层无需改启动流程
+pub async fn ensure_stdio(
+    ctx: &Arc<crate::state::Ctx>,
+    server: &McpServer,
+) -> Result<ArcStdioSession, String> {
+    if let Some(sess) = ctx.mcp_stdio.lock().unwrap().get(&server.id).cloned() {
+        return Ok(sess);
+    }
+    // ww- 前缀的会话进程归 WorkWith 所有（注册表里没有 = 那条 WorkWith 条目没在跑）。
+    // 这里绝不能自己重拉：那样会出现两个同名桥进程，工具重复导入、启停状态互相打架。
+    if let Some(eid) = crate::workwith::entry_id_of_mcp(&server.id) {
+        return Err(format!(
+            "该 MCP 服务器由 WorkWith 托管（条目 {eid}），请在 WorkWith 页启动它"
+        ));
+    }
+    let (session, _, _, _) = register_stdio(
+        &ctx.mcp_stdio,
+        server.id.clone(),
+        server.command.clone(),
+        server.args.clone(),
+        server.env.clone(),
+    )
+    .await?;
+    Ok(session)
+}
+
+/// 统一工具调用入口：stdio 先 ensure 拉起进程再调用；http 走现有 call_tool
+pub async fn exec_tool(
+    ctx: &Arc<crate::state::Ctx>,
+    server: &McpServer,
+    tool: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    match server.transport {
+        McpTransport::Http => call_tool(server, tool, args).await,
+        McpTransport::Stdio => {
+            let sess = ensure_stdio(ctx, server).await?;
+            let raw = sess
+                .call(
+                    "tools/call",
+                    serde_json::json!({ "name": tool, "arguments": args }),
+                )
+                .await?;
+            join_text_result(&raw)
+        }
     }
 }
 
@@ -709,30 +870,10 @@ pub async fn call_tool_dispatch(
         }
     };
 
-    // http 路径已经在 call_tool 里做了 text 拼接；stdio 走的是原始 result，这里统一处理
+    // http 路径已经在 call_tool 里做了 text 拼接；stdio 走的是原始 result，这里统一拼接
     match server.transport {
         McpTransport::Http => Ok(result),
-        McpTransport::Stdio => {
-            let mut text = String::new();
-            if let Some(items) = result.get("content").and_then(|v| v.as_array()) {
-                for item in items {
-                    if item.get("type").and_then(|v| v.as_str()) == Some("text") {
-                        if let Some(t) = item.get("text").and_then(|v| v.as_str()) {
-                            if !text.is_empty() { text.push('\n'); }
-                            text.push_str(t);
-                        }
-                    }
-                }
-            }
-            let is_error = result
-                .get("isError")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if is_error {
-                return Err(if text.is_empty() { "MCP tool returned an error".to_string() } else { text });
-            }
-            if text.is_empty() { Ok(result) } else { Ok(serde_json::json!({ "text": text, "raw": result })) }
-        }
+        McpTransport::Stdio => join_text_result(&result),
     }
 }
 
@@ -785,8 +926,9 @@ mod tests {
 
     // ── 集成：本地 mock MCP 服务器（Streamable HTTP，JSON 与 SSE 混合响应） ──
 
-    /// 极简异步 HTTP 服务器：按 JSON-RPC method 路由，逐请求读取、写完即关
-    async fn spawn_mock_mcp() -> (String, Arc<StdMutex<HashMap<String, usize>>>) {
+    /// 极简异步 HTTP 服务器：按 JSON-RPC method 路由，逐请求读取、写完即关。
+    /// `want_auth` 为 Some 时校验 Authorization 头（验证自定义头真的随请求发出去了）
+    async fn spawn_mock_mcp(want_auth: Option<&'static str>) -> (String, Arc<StdMutex<HashMap<String, usize>>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let hits: Arc<StdMutex<HashMap<String, usize>>> = Arc::new(StdMutex::new(HashMap::new()));
@@ -810,6 +952,26 @@ mod tests {
                     };
                     // 解析 Content-Length 并读 body
                     let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                    // 认凭据：Authorization 不对就当场拒掉，让测试能证明自定义头真的到了服务端
+                    if let Some(want) = want_auth {
+                        let got = head
+                            .lines()
+                            .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+                            .and_then(|l| l.split_once(':'))
+                            .map(|(_, v)| v.trim().to_string())
+                            .unwrap_or_default();
+                        if got != want {
+                            *hits.lock().unwrap().entry("unauthorized".into()).or_insert(0) += 1;
+                            let err = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"unauthorized"}}"#;
+                            let resp = format!(
+                                "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                err.len(),
+                                err
+                            );
+                            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, resp.as_bytes()).await;
+                            return;
+                        }
+                    }
                     let clen: usize = head
                         .lines()
                         .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
@@ -900,11 +1062,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_initialize_and_full_flow() {
-        let (url, hits) = spawn_mock_mcp().await;
-        let http = client().unwrap();
+        let (url, hits) = spawn_mock_mcp(None).await;
+        let http = http_client(&url).unwrap();
 
         // 1. 握手：解析 serverInfo + 会话 id
-        let (name, version, protocol, session) = initialize(&http, &url).await.unwrap();
+        let (name, version, protocol, session) = initialize(&http, &url, &Default::default()).await.unwrap();
         assert_eq!(name, "Mock MCP");
         assert_eq!(version, "1.2.3");
         assert_eq!(protocol, "2025-03-26");
@@ -924,6 +1086,8 @@ mod tests {
             command: Default::default(),
             args: Default::default(),
             env: Default::default(),
+            headers: Default::default(),
+            plugin_id: String::new(),
         };
         let tools = list_tools(&server).await.unwrap();
         assert_eq!(tools.len(), 2, "分页工具应全部拉取: {tools:?}");
@@ -942,6 +1106,55 @@ mod tests {
         assert!(h.get("notifications/initialized").copied().unwrap_or(0) >= 1);
         assert!(h.get("tools/list").copied().unwrap_or(0) >= 2, "分页应请求两次");
         assert!(h.get("tools/call").copied().unwrap_or(0) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_custom_headers_reach_server() {
+        // 认凭据的假服务器：不带 Authorization 握手必失败，带上才能一路走通
+        let (url, hits) = spawn_mock_mcp(Some("Bearer s3cret")).await;
+        let http = http_client(&url).unwrap();
+        let no_auth = initialize(&http, &url, &Default::default()).await;
+        assert!(no_auth.is_err(), "缺认证头不应握手成功");
+
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer s3cret".to_string());
+        let (name, _, _, session) = initialize(&http, &url, &headers).await.unwrap();
+        assert_eq!(name, "Mock MCP");
+        let server = McpServer {
+            id: "auth".into(),
+            name,
+            url: url.clone(),
+            transport: McpTransport::Http,
+            version: "1.2.3".into(),
+            protocol: "2025-03-26".into(),
+            session,
+            enabled: true,
+            connected_at: "now".into(),
+            command: Default::default(),
+            args: Default::default(),
+            env: Default::default(),
+            headers: headers.clone(),
+            plugin_id: "biz-net".into(),
+        };
+        // 后续 tools/list / tools/call 同样带着头（认证失败的服务器只能握手一次就没用）
+        assert_eq!(list_tools(&server).await.unwrap().len(), 2);
+        assert!(call_tool(&server, "tool_a", json!({})).await.is_ok());
+        let h = hits.lock().unwrap();
+        assert!(h.get("unauthorized").copied().unwrap_or(0) >= 1, "无头请求应被拒: {h:?}");
+        assert!(h.get("tools/call").copied().unwrap_or(0) >= 1);
+    }
+
+    #[test]
+    fn test_header_name_and_value_gates() {
+        assert!(header_name_ok("Authorization"));
+        assert!(header_name_ok("X-Bit_Token.1"));
+        // 空格、冒号、换行都可能把一条头变成新的请求行
+        assert!(!header_name_ok("Bad Name"));
+        assert!(!header_name_ok("Bad\r\nName"));
+        assert!(!header_name_ok(""));
+        assert!(!header_name_ok(&"a".repeat(65)));
+        assert!(header_value_ok("Bearer s3cret"));
+        assert!(!header_value_ok("line1\r\nline2"));
     }
 
     #[tokio::test]
@@ -965,8 +1178,8 @@ mod tests {
             }
         });
         let url = format!("http://{addr}");
-        let http = client().unwrap();
-        assert!(initialize(&http, &url).await.is_err(), "HTML 服务不应通过 MCP 握手");
+        let http = http_client(&url).unwrap();
+        assert!(initialize(&http, &url, &Default::default()).await.is_err(), "HTML 服务不应通过 MCP 握手");
     }
 
     /// 外部集成测试：连接独立运行的假 MCP 服务器（fake_mcp_server.py），
@@ -979,10 +1192,10 @@ mod tests {
             eprintln!("跳过：未设置 BIT_FAKE_MCP_URL");
             return;
         };
-        let http = client().unwrap();
+        let http = http_client(&url).unwrap();
 
         // 1. 握手
-        let (name, version, protocol, session) = initialize(&http, &url).await.unwrap();
+        let (name, version, protocol, session) = initialize(&http, &url, &Default::default()).await.unwrap();
         assert_eq!(name, "Fake MCP Toolkit", "serverInfo.name 应来自假服务器");
         assert_eq!(version, "0.1.0");
         assert_eq!(protocol, "2025-03-26");
@@ -1001,6 +1214,8 @@ mod tests {
             command: Default::default(),
             args: Default::default(),
             env: Default::default(),
+            headers: Default::default(),
+            plugin_id: String::new(),
         };
 
         // 2. 工具清单（SSE 响应路径），3 个工具

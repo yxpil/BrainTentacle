@@ -1,0 +1,7 @@
+{
+  "name": "闸门夹具·想接管设置",
+  "version": "0.0.1",
+  "description": "设置入口是撤销接管的退路，永远不在可接管目录里，这条要给出人话拒绝",
+  "permissions": ["takeover"],
+  "takeover": ["settings"]
+}

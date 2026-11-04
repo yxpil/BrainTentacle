@@ -1,0 +1,40 @@
+{
+  "name": "附件坞",
+  "version": "0.5.0",
+  "description": "一次申请接管三个入口（语音/预览/附件）：语音槽位与 biz-takeover-voice 冲突，id 字典序靠后，应当只拿到预览与附件",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "chaticon", "takeover", "data", "pagectl", "session"],
+  "takeover": ["chat.voice", "chat.preview", "chat.attach"],
+  "pages": [
+    {
+      "id": "dock",
+      "label": "附件坞",
+      "src": "web/dock.html",
+      "paths": ["M12 4 V16", "M8 12 L12 16 L16 12", "M4 20 H20"]
+    },
+    {
+      "id": "preview",
+      "label": "预览坞",
+      "src": "web/preview.html",
+      "paths": ["M3 5 H21 V19 H3 Z", "M8 5 V19"]
+    }
+  ],
+  "chat_icons": [
+    {
+      "id": "dock",
+      "label": "附件坞",
+      "label_en": "Dock",
+      "paths": ["M12 4 V16", "M8 12 L12 16 L16 12", "M4 20 H20"],
+      "action": "page",
+      "page_key": "dock"
+    },
+    {
+      "id": "preview",
+      "label": "预览坞",
+      "label_en": "Preview dock",
+      "paths": ["M3 5 H21 V19 H3 Z", "M8 5 V19"],
+      "action": "page",
+      "page_key": "preview"
+    }
+  ]
+}

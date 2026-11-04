@@ -1,0 +1,9 @@
+{
+  "name": "没申报权限的外部连接",
+  "version": "1.0.0",
+  "description": "负面夹具：声明 connections[] 却没申请 net 权限位，必须整体拒收",
+  "permissions": ["data"],
+  "connections": [
+    { "name": "gateway", "label": "网关", "url": "https://example.com/mcp" }
+  ]
+}

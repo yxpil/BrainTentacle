@@ -51,7 +51,6 @@ pub fn save_file_as(path: String, suggested_name: Option<String>) -> Result<Opti
 }
 
 pub fn estimate_context_tokens(ctx: &Arc<Ctx>, session_id: &str, convo: &[crate::ai::ChatMessage]) -> usize {
-    let _ = session_id;
     // 兼容模式（文本约定）下工具清单以压缩形式内联在系统提示词里，已计入 convo_chars；
     // 标准原生模式才需要额外估算 tools 参数的 token 占用
     let compat = ctx.config.lock().unwrap().compat_mode;
@@ -62,7 +61,7 @@ pub fn estimate_context_tokens(ctx: &Arc<Ctx>, session_id: &str, convo: &[crate:
     let tool_chars = if compat {
         0
     } else {
-        serde_json::to_string(&crate::ai::native_tool_defs(ctx))
+        serde_json::to_string(&crate::ai::native_tool_defs(ctx, Some(session_id)))
             .unwrap_or_default()
             .chars()
             .count()
@@ -94,29 +93,14 @@ pub fn ui_mounted(state: State<'_, Arc<Ctx>>) {
     );
 }
 
-/// BIT 全系进程内存占用（字节）：页眉仪表盘展示，前端每 3 秒轮询
-/// Electron 多进程（主+GPU+渲染+zygote），只统计主进程会比系统监视器小一截
+/// 本进程内存占用（字节）：页眉仪表盘展示，前端每 3 秒轮询
 #[tauri::command]
 pub fn mem_usage() -> u64 {
     use sysinfo::{ProcessesToUpdate, System};
     let mut sys = System::new();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    let self_pid = sysinfo::Pid::from_u32(std::process::id());
-    let mut total: u64 = 0;
-    for (pid, p) in sys.processes() {
-        // Linux 下 command() 形如 /opt/BIT/bit-frontend-real /opt/BIT/bit-frontend-real --type=gpu-process …
-        // macOS/Windows 的 comm 也都会带 "bit-frontend"
-        let cmd = p.command().join(" ");
-        let comm = p.name().to_lowercase();
-        if pid == &self_pid
-            || comm.contains("bit-frontend")
-            || cmd.contains("bit-frontend-real")
-            || cmd.contains("bit-frontend")
-        {
-            total = total.saturating_add(p.memory());
-        }
-    }
-    total
+    let pid = sysinfo::Pid::from_u32(std::process::id());
+    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    sys.process(pid).map(|p| p.memory()).unwrap_or(0)
 }
 
 #[tauri::command]
@@ -645,6 +629,89 @@ pub fn set_tool_env_settings(
     Ok(json!({ "ok": true }))
 }
 
+/// 托管服务生命周期调参：命令体在 bit-core::commands_api，这里只做 Tauri 壳接线
+#[tauri::command]
+pub fn get_service_tuning(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::get_service_tuning(&ctx(state))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn set_service_tuning(
+    state: State<'_, Arc<Ctx>>,
+    start_delay_ms: Option<u32>,
+    ready_secs: Option<u32>,
+    retries: Option<u32>,
+    stop_grace_secs: Option<u32>,
+    log_lines: Option<u32>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_service_tuning(
+        &ctx(state),
+        start_delay_ms,
+        ready_secs,
+        retries,
+        stop_grace_secs,
+        log_lines,
+    )
+}
+
+/// 任务完成提示音：命令体在 bit-core::commands_api，这里只做 Tauri 壳接线
+#[tauri::command]
+pub fn get_notify_sound(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::get_notify_sound(&ctx(state))
+}
+
+#[tauri::command]
+pub fn set_notify_sound(state: State<'_, Arc<Ctx>>, mode: String, volume: Option<u32>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_notify_sound(&ctx(state), mode, volume)
+}
+
+#[tauri::command]
+pub fn set_custom_sound(state: State<'_, Arc<Ctx>>, name: String, data: String) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_custom_sound(&ctx(state), name, data)
+}
+
+/// 出网代理（企业内网）：命令体在 bit-core::netproxy / commands_api，这里只做 Tauri 壳接线
+#[tauri::command]
+pub fn get_proxy_config(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::get_proxy_config(&ctx(state))
+}
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn set_proxy_config(
+    state: State<'_, Arc<Ctx>>,
+    mode: String,
+    url: String,
+    user: String,
+    pass: String,
+    bypass: String,
+    export_env: Option<bool>,
+    fail_open: Option<bool>,
+    ca_file: Option<String>,
+    insecure: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_proxy_config(
+        &ctx(state),
+        mode,
+        url,
+        user,
+        pass,
+        bypass,
+        export_env,
+        fail_open,
+        ca_file.unwrap_or_default(),
+        insecure,
+    )
+}
+
+#[tauri::command]
+pub async fn test_proxy(
+    state: State<'_, Arc<Ctx>>,
+    target: String,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::test_proxy(&ctx(state), target).await
+}
+
 /// 本机操控开关（screen / mouse / keyboard / draw_diagram / view_image）：设置页卡片。
 /// 开启后模型可见并可调用（experimental；macOS 需 TCC 授权）
 #[tauri::command]
@@ -691,12 +758,14 @@ pub fn get_desktop_tools(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
     })
 }
 
-/// 本地插件：列表（含启用状态与内容摘要）
+/// 本地插件：列表（含启用状态、内容摘要与安全校验状态）
 #[tauri::command]
 pub fn list_plugins(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
     let ctx = ctx(state);
-    let plugins = ctx.plugins.lock().unwrap().clone();
+    let (plugins, errs) = crate::plugins::scan(&ctx);
     let disabled: Vec<String> = { ctx.config.lock().unwrap().disabled_plugins.clone() };
+    let enabled: Vec<&crate::plugins::Plugin> = plugins.iter().filter(|p| !disabled.contains(&p.id)).collect();
+    let tampered = crate::plugins::tampered_ids(&ctx, &enabled);
     let list: Vec<serde_json::Value> = plugins
         .iter()
         .map(|p| {
@@ -711,10 +780,14 @@ pub fn list_plugins(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
                 "skills": p.skills.len(),
                 "memories": p.memories.len(),
                 "jobs": p.jobs.iter().map(|j| json!({ "name": j.name, "schedule": j.schedule })).collect::<Vec<_>>(),
+                "permissions": p.permissions,
+                "has_ui": p.ui.as_ref().map(|u| !u.css.is_empty() || !u.js.is_empty()).unwrap_or(false),
+                // 安全状态：verified=通过 / tampered=校验失败（篡改，未注入）/ disabled=用户停用
+                "verify": if disabled.contains(&p.id) { "disabled" } else if tampered.contains(&p.id) { "tampered" } else { "verified" },
             })
         })
         .collect();
-    json!({ "plugins": list, "dir": crate::plugins::dir(&ctx).to_string_lossy() })
+    json!({ "plugins": list, "dir": crate::plugins::dir(&ctx).to_string_lossy(), "errors": errs })
 }
 
 /// 本地插件：启用/停用（停用后工具/技能/记忆/提示词/定时任务全部摘除）
@@ -730,6 +803,13 @@ pub fn toggle_plugin(state: State<'_, Arc<Ctx>>, id: String, enabled: bool) -> R
         }
     }
     ctx.save_config();
+    // 启用 = 用户明示信任：以当前内容重录哈希基线（覆盖旧基线，篡改状态由此解除）
+    if enabled {
+        if let Err(e) = crate::plugins::record_baseline(&ctx, &id) {
+            crate::audit::record(&ctx, "local-user", "plugin.verify", &id, json!({ "ok": false, "error": e.clone() }), false);
+            return Err(format!("安全校验基线记录失败: {e}"));
+        }
+    }
     crate::plugins::sync(&ctx);
     crate::audit::record(&ctx, "local-user", "plugin.toggle", &id, json!({ "enabled": enabled }), true);
     Ok(json!({ "ok": true }))
@@ -743,6 +823,13 @@ pub fn refresh_plugins(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, 
     let plugins = ctx.plugins.lock().unwrap().len();
     crate::audit::record(&ctx, "local-user", "plugin.refresh", "plugins", json!({ "count": plugins }), true);
     Ok(json!({ "ok": true, "count": plugins }))
+}
+
+/// 本地插件：读取 UI 资源包（渲染进程插件加载器调用：注入 css / 执行 js）
+#[tauri::command]
+pub fn get_plugin_ui(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
+    let ctx = ctx(state);
+    json!({ "plugins": crate::plugins::ui_bundle(&ctx) })
 }
 
 /// 用户自定义提示词/人设：读取
@@ -1385,6 +1472,13 @@ pub async fn chat_interrupt(state: State<'_, Arc<Ctx>>, session_id: String) -> R
     crate::engine::interrupt(&ctx, &session_id).await
 }
 
+/// 此刻真有回合在跑的会话 id 列表（渲染层用它纠偏自己记的"会话忙否"）
+#[tauri::command]
+pub fn running_turns(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    bit_core::commands_api::running_turns(&ctx)
+}
+
 /// 工具审批应答（允许 / 拒绝）
 #[tauri::command]
 pub async fn tool_approve(state: State<'_, Arc<Ctx>>, id: String, allow: bool) -> Result<serde_json::Value, String> {
@@ -1860,43 +1954,11 @@ pub async fn mcp_discover(host: String, start: u16, end: u16) -> Result<serde_js
     Ok(json!({ "servers": found, "scanned": (end as u32 - start as u32 + 1) }))
 }
 
-/// 手动接入：对任意 URL 做 MCP 握手，成功则保存并返回服务器信息
+/// 手动接入：命令体在 bit-core::commands_api，这里只做 Tauri 壳接线。
+/// （这里曾抄过一份实现：核心给 MCP 加请求头与代理口径后，抄的那份就对不上签名了）
 #[tauri::command]
 pub async fn mcp_connect(state: State<'_, Arc<Ctx>>, url: String) -> Result<serde_json::Value, String> {
-    let ctx = ctx(state);
-    let url = url.trim().trim_end_matches('/').to_string();
-    if url.is_empty() {
-        return Err("请填写 MCP 服务器 URL".into());
-    }
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let (name, version, protocol, session) = crate::mcp::initialize(&http, &url).await?;
-    let server = crate::mcp::McpServer {
-        id: format!("mcp-{}", uuid::Uuid::new_v4().simple()),
-        name: name.clone(),
-        url: url.clone(),
-        transport: crate::mcp::McpTransport::Http,
-        version,
-        protocol,
-        session,
-        enabled: true,
-        connected_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        command: Default::default(),
-        args: Default::default(),
-        env: Default::default(),
-    };
-    // 同一 URL 只保留一条
-    let id = server.id.clone();
-    {
-        let mut list = ctx.mcp.lock().unwrap();
-        list.retain(|s| s.url != url);
-        list.push(server.clone());
-    }
-    ctx.save_mcp();
-    crate::audit::record(&ctx, "local-app", "mcp.connect", &name, json!({ "url": url }), true);
-    Ok(json!({ "server": server, "id": id }))
+    bit_core::commands_api::mcp_connect(&ctx(state), url).await
 }
 
 /// 已接入服务器列表
@@ -1907,135 +1969,133 @@ pub async fn mcp_list(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, S
     Ok(json!({ "servers": list }))
 }
 
-/// 暂停 / 继续某个 MCP 服务器（暂停后其全部工具拒绝调用）
+/// stdio 接入：spawn 本地命令并 initialize 握手，成功则保存（薄包装，逻辑在 bit-core::commands_api）
+#[tauri::command]
+pub async fn mcp_add_stdio(
+    state: State<'_, Arc<Ctx>>,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::mcp_add_stdio(&ctx, name, command, args, env).await
+}
+
+/// 暂停 / 继续某个 MCP 服务器（暂停后其全部工具拒绝调用；薄包装，stdio 拉起/杀进程在 core）
 #[tauri::command]
 pub async fn mcp_toggle(state: State<'_, Arc<Ctx>>, id: String, enabled: bool) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
-    let name = {
-        let mut list = ctx.mcp.lock().unwrap();
-        let s = list.iter_mut().find(|s| s.id == id).ok_or("MCP 服务器不存在")?;
-        s.enabled = enabled;
-        s.name.clone()
-    };
-    ctx.save_mcp();
-    crate::audit::record(&ctx, "local-app", if enabled { "mcp.enable" } else { "mcp.disable" }, &name, json!({ "enabled": enabled }), true);
-    Ok(json!({ "id": id, "enabled": enabled }))
+    crate::commands_api::mcp_toggle(&ctx, id, enabled).await
 }
 
-/// 移除接入（其导入的工具同步移除）
+/// 移除接入（其导入的工具同步移除；薄包装，stdio 子进程清理在 core）
 #[tauri::command]
 pub async fn mcp_remove(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
-    let removed = {
-        let mut list = ctx.mcp.lock().unwrap();
-        let before = list.len();
-        list.retain(|s| s.id != id);
-        list.len() != before
-    };
-    if !removed {
-        return Err("MCP 服务器不存在".into());
-    }
-    // 同步移除该服务器导入的工具
-    {
-        let mut tools = ctx.tools.lock().unwrap();
-        tools.retain(|t| match &t.kind {
-            crate::registry::ToolKind::Mcp { server_id, .. } => server_id != &id,
-            _ => true,
-        });
-    }
-    ctx.save_mcp();
-    ctx.save_tools();
-    crate::audit::record(&ctx, "local-app", "mcp.remove", &id, json!({}), true);
-    Ok(json!({ "removed": id }))
+    crate::commands_api::mcp_remove(&ctx, id).await
 }
 
-/// 重新拉取某服务器的工具清单并导入注册中心（同名跳过）
+/// 重新拉取某服务器的工具清单并导入注册中心（同名跳过；薄包装，stdio 懒拉起在 core）
 #[tauri::command]
 pub async fn mcp_import(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
-    let server = crate::mcp::find(&ctx, &id).ok_or("MCP 服务器不存在")?;
-    let tools = crate::mcp::list_tools(&server).await?;
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-    for t in &tools {
-        let ok = crate::registry::register(
-            &ctx,
-            &t.name,
-            &format!("{}（MCP · {}）", t.description, server.name),
-            if t.input_schema.is_null() || !t.input_schema.is_object() {
-                json!({"type": "object", "properties": {}, "additionalProperties": true})
-            } else {
-                t.input_schema.clone()
-            },
-            crate::registry::ToolKind::Mcp { server_id: id.clone(), tool: t.name.clone() },
-            "mcp",
-        );
-        match ok {
-            Ok(_) => imported += 1,
-            Err(_) => skipped += 1,
-        }
-    }
-    crate::audit::record(&ctx, "local-app", "mcp.import", &server.name, json!({ "imported": imported, "skipped": skipped }), true);
-    Ok(json!({ "imported": imported, "skipped": skipped, "total": tools.len() }))
+    crate::commands_api::mcp_import(&ctx, id).await
+}
+
+/// ── WorkWith 本地服务托管（薄包装，逻辑在 bit-core::workwith）──
+
+/// 条目列表 + 运行态
+#[tauri::command]
+pub fn list_workwith(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::list_workwith(&ctx)
+}
+
+/// 条目保存（新增或更新）
+#[tauri::command]
+pub fn save_workwith(state: State<'_, Arc<Ctx>>, entry: serde_json::Value) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::save_workwith(&ctx, entry)
+}
+
+/// 条目删除（运行中先停止并解绑 MCP）
+#[tauri::command]
+pub async fn remove_workwith(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::remove_workwith(&ctx, id).await
+}
+
+/// 手动启动
+#[tauri::command]
+pub async fn start_workwith(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::start_workwith(&ctx, id).await
+}
+
+/// 手动停止
+#[tauri::command]
+pub async fn stop_workwith(state: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::stop_workwith(&ctx, id).await
+}
+
+/// 实时日志（tail = 只取尾部 N 行）
+#[tauri::command]
+pub fn workwith_logs(id: String, tail: Option<u64>) -> Result<serde_json::Value, String> {
+    crate::commands_api::workwith_logs(id, tail)
 }
 
 /// 手动压缩会话：用 AI 把全部历史总结为一条摘要（system 消息），释放上下文空间。
-/// 摘要写入会话后返回新消息列表；压缩不影响会话本身，可继续对话。
+/// provider_id 可指定压缩用模型（如便宜的小模型），空 = 当前激活模型。
 #[tauri::command]
 pub async fn compress_session(
     state: State<'_, Arc<Ctx>>,
     session_id: String,
+    provider_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let ctx = ctx(state);
-    let target = if session_id.is_empty() {
-        ctx.sessions.lock().unwrap().active.clone()
-    } else {
-        session_id
-    };
+    bit_core::commands_api::compress_session(&ctx(state), session_id, provider_id).await
+}
 
-    // 取出历史（在锁外进行 AI 调用，避免阻塞其他会话）
-    let history: Vec<crate::ai::ChatMessage> = {
-        let store = ctx.sessions.lock().unwrap();
-        let sess = store
-            .sessions
-            .iter()
-            .find(|s| s.id == target)
-            .ok_or("会话不存在")?;
-        sess.messages.iter().filter(|m| m.role != "system").cloned().collect()
-    };
-    if history.len() < 4 {
-        return Err("对话内容太少，无需压缩".into());
-    }
+/// 自动压缩配置（开关 / 阈值字符数 / 压缩用模型 id，空 = 当前模型）
+#[tauri::command]
+pub fn compact_config_get(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::compact_config_get(&ctx(state))
+}
 
-    let mut convo = vec![crate::ai::ChatMessage::system(
-        "你是对话压缩助手。请把下面这段 AI 对话历史浓缩成一份结构化中文摘要，保留：用户的需求与偏好、已达成的结论、关键事实与数据、未完成的待办。直接输出摘要正文，不要寒暄，控制在 800 字以内。",
-    )];
-    for m in &history {
-        let who = if m.role == "user" { "用户" } else { "AI" };
-        convo.push(crate::ai::ChatMessage::user(format!("【{who}】{}", m.content)));
-    }
-    let summary = crate::ai::chat(&ctx, &convo).await?;
+#[tauri::command]
+pub fn compact_config_set(
+    state: State<'_, Arc<Ctx>>,
+    auto: bool,
+    chars: Option<u64>,
+    provider: Option<String>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::compact_config_set(&ctx(state), auto, chars, provider)
+}
 
-    // 用摘要替换全部历史（摘要以 system 消息存放，前端气泡不显示）
-    let before = {
-        let mut store = ctx.sessions.lock().unwrap();
-        let sess = store.get_mut(&target).ok_or("会话不存在")?;
-        let n = sess.messages.len();
-        sess.messages = vec![crate::ai::ChatMessage::system(format!(
-            "以下是对此前对话的压缩摘要，请结合它继续对话：\n\n{summary}"
-        ))];
-        sess.touch();
-        n
-    };
-    crate::session::persist(&ctx);
-    crate::audit::record(&ctx, "local-app", "session.compress", &target, json!({ "messages_before": before }), true);
-    Ok(json!({
-        "messages": ctx.sessions.lock().unwrap()
-            .sessions.iter().find(|s| s.id == target)
-            .map(|s| s.messages.clone()).unwrap_or_default(),
-        "summary": summary,
-        "messages_before": before
-    }))
+/// 重新生成 / 编辑重发：删尾 assistant 消息（可选改写最后一条 user），只跑模型回合
+#[tauri::command]
+pub async fn regenerate_last(
+    state: State<'_, Arc<Ctx>>,
+    session_id: String,
+    event_name: String,
+    edit_text: Option<String>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::regenerate_last(&ctx(state), session_id, event_name, edit_text).await
+}
+
+/// 提示词模板：读取（未保存过时返回内置默认）/ 整体保存（空数组 = 恢复默认）
+#[tauri::command]
+pub fn prompt_templates_get(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::prompt_templates_get(&ctx(state))
+}
+
+#[tauri::command]
+pub fn prompt_templates_set(
+    state: State<'_, Arc<Ctx>>,
+    templates: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::prompt_templates_set(&ctx(state), templates)
 }
 
 // ---------- 会话（多对话分组） ----------
@@ -2889,95 +2949,144 @@ pub async fn set_elevation(app: tauri::AppHandle, state: State<'_, Arc<Ctx>>, en
     }
 }
 
-/// 安装 `bit` 命令到终端 PATH：macOS/Linux 优先 /usr/local/bin 符号链接（无权限回退 ~/.local/bin），
-/// Windows 写 bit.cmd 到用户 PATH 自带的 %LOCALAPPDATA%\Microsoft\WindowsApps（start /wait 等待 GUI 进程）。
-/// BIT_CLI_DIR 环境变量可覆盖安装目录（E2E 测试用）。
-pub fn install_cli_impl(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
-    // AppImage：current_exe() 指向 /tmp/.mount_xxx 临时挂载点（退出即失效），
-    // 链接必须指向 $APPIMAGE（AppImage 运行时注入的 .AppImage 本体，参数会透传给内部二进制）
-    let exe = std::env::var_os("APPIMAGE")
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_file())
-        .or_else(|| std::env::current_exe().ok())
-        .ok_or("无法定位可执行文件")?;
-    let record_audit = |path: &str, hint: &str| {
-        crate::audit::record(
-            ctx,
-            "local-user",
-            "cli.install",
-            path,
-            serde_json::json!({ "hint": hint }),
-            true,
-        );
-    };
-
-    // 测试覆盖目录：直接在其中创建链接/启动器
-    if let Ok(dir) = std::env::var("BIT_CLI_DIR") {
-        if !dir.trim().is_empty() {
-            let dir = std::path::PathBuf::from(dir.trim());
-            std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
-            let r = install_cli_into(&dir, &exe)?;
-            record_audit(r["path"].as_str().unwrap_or_default(), r["hint"].as_str().unwrap_or_default());
-            return Ok(r);
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let dir = std::path::PathBuf::from(local).join("Microsoft").join("WindowsApps");
-            let r = install_cli_into(&dir, &exe)?;
-            record_audit(r["path"].as_str().unwrap_or_default(), r["hint"].as_str().unwrap_or_default());
-            return Ok(r);
-        }
-        return Err("无法定位 %LOCALAPPDATA%".into());
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // 优先系统级 /usr/local/bin（已在 PATH）；权限不足回退用户级 ~/.local/bin
-        let system = std::path::PathBuf::from("/usr/local/bin");
-        if let Ok(r) = install_cli_into(&system, &exe) {
-            record_audit(r["path"].as_str().unwrap_or_default(), "");
-            return Ok(r);
-        }
-        let home = std::env::var_os("HOME").ok_or("无法确定用户主目录")?;
-        let user = std::path::PathBuf::from(home).join(".local").join("bin");
-        let r = install_cli_into(&user, &exe)?;
-        let hint = r["hint"].as_str().unwrap_or_default().to_string();
-        record_audit(r["path"].as_str().unwrap_or_default(), &hint);
-        Ok(r)
-    }
-}
-
-/// 把可执行文件（符号链接 / Windows 启动脚本）放进指定目录，目录不存在则创建
-fn install_cli_into(dir: &std::path::Path, exe: &std::path::Path) -> Result<serde_json::Value, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录 {} 失败: {e}", dir.display()))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        let launcher = dir.join("bit.cmd");
-        let script = format!("@echo off\r\nstart \"\" /b /wait \"{}\" tui %*\r\n", exe.display());
-        std::fs::write(&launcher, script).map_err(|e| format!("写入启动器失败: {e}"))?;
-        Ok(serde_json::json!({ "path": launcher.display().to_string(), "hint": "重新打开终端后生效，运行 bit tui 进入终端模式" }))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let link = dir.join("bit");
-        let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink(exe, &link).map_err(|e| format!("创建符号链接失败: {e}"))?;
-        let hint = if dir.starts_with("/usr") {
-            String::new()
-        } else {
-            format!("请确保 {} 在 PATH 中（写入 shell 配置后重开终端）", dir.display())
-        };
-        Ok(serde_json::json!({ "path": link.display().to_string(), "hint": hint }))
-    }
-}
-
-/// 安装 `bit` 终端命令（设置页 / TUI 均可触发）
+/// 检测独立 CLI（npm 全局包 BrainTentacle_cli）是否已安装（设置页自动展示状态）
 #[tauri::command]
-pub fn install_cli(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
-    install_cli_impl(&ctx(state))
+pub fn detect_cli(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::api::detect_cli(&ctx(state))
+}
+
+/// 安装独立 CLI（npm 全局安装，耗时数十秒 → 阻塞线程池，避免卡 UI）
+#[tauri::command]
+pub async fn install_cli(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    let c = ctx(state);
+    tokio::task::spawn_blocking(move || bit_core::api::install_cli(&c))
+        .await
+        .map_err(|e| format!("安装任务失败: {e}"))?
+}
+
+/// 卸载独立 CLI（npm 全局卸载，同样走阻塞线程池）
+#[tauri::command]
+pub async fn uninstall_cli(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    let c = ctx(state);
+    tokio::task::spawn_blocking(move || bit_core::api::uninstall_cli(&c))
+        .await
+        .map_err(|e| format!("卸载任务失败: {e}"))?
+}
+
+/// DeepSeek Harness（dsh）：扫描 dsh 技能根导入 SKILL.md 为 BIT 技能（同名跳过）
+#[tauri::command]
+pub fn dsh_import_skills(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::api::dsh_import_skills(&ctx(state))
+}
+
+/// DeepSeek Harness（dsh）状态：已装插件 + 启停情况 + 桥注册情况 + 技能根路径
+#[tauri::command]
+pub fn dsh_status(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::api::dsh_status(&ctx(state))
+}
+
+/// DeepSeek Harness（dsh）插件启停：写 toolhomes/dsh/disabled.json，返回新状态
+#[tauri::command]
+pub fn dsh_toggle_plugin(
+    state: State<'_, Arc<Ctx>>,
+    name: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    bit_core::api::dsh_toggle_plugin(&ctx(state), name, enabled)
+}
+
+/// DeepSeek Harness（dsh）首次接入：建 dsh 目录 + 定位桥脚本并注册为 stdio MCP server
+#[tauri::command]
+pub async fn dsh_setup_bridge(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::api::dsh_setup_bridge(&ctx(state)).await
+}
+
+/// 语音输入状态：当前模型 / 全变体清单 / 就绪与进度 / 识别进程存活 / 最近错误
+#[tauri::command]
+pub fn voice_status(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_status(&ctx(state))
+}
+
+/// 选择识别模型（写配置 + 热切换识别进程）
+#[tauri::command]
+pub fn voice_select(
+    state: State<'_, Arc<Ctx>>,
+    variant: String,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_select(&ctx(state), variant)
+}
+
+/// 唤醒开关/灵敏度/自定义词表（写配置 + 重建识别进程使 kws 配置生效）
+#[tauri::command]
+pub async fn voice_kws_set(
+    state: State<'_, Arc<Ctx>>,
+    enabled: bool,
+    score: Option<f64>,
+    keywords: Option<Vec<bit_core::voice::KwsWord>>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_kws_set(&ctx(state), enabled, score, keywords).await
+}
+
+/// 下载唤醒模型（后台任务，进度走 voice-progress 事件；幂等）
+#[tauri::command]
+pub async fn voice_kws_prepare(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_kws_prepare(&ctx(state)).await
+}
+
+/// 下载离线识别模型（后台任务，进度走 voice-progress 事件；重复调用幂等）
+#[tauri::command]
+pub async fn voice_prepare(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_prepare(&ctx(state)).await
+}
+
+/// WAV（base64）转写：确保识别进程在跑 → 转写，失败自动重启重试一次
+#[tauri::command]
+pub async fn voice_transcribe(
+    state: State<'_, Arc<Ctx>>,
+    wav_base64: String,
+    language: Option<String>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::voice_transcribe(&ctx(state), wav_base64, language).await
+}
+
+/// 语音合成状态：逐引擎就绪/体积 + key 是否配置 + 下载进度 + 最近错误；
+/// patch 为可选设置补丁（保存引擎/音色/参数/key）
+#[tauri::command]
+pub fn tts_status(
+    state: State<'_, Arc<Ctx>>,
+    patch: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::tts_status(&ctx(state), patch)
+}
+
+/// 准备语音引擎：本地引擎后台下载模型（进度走 tts-progress 事件；幂等），
+/// 在线引擎直接返回就绪；engine 可为字符串或设置补丁对象
+#[tauri::command]
+pub async fn tts_prepare(
+    state: State<'_, Arc<Ctx>>,
+    engine: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::tts_prepare(&ctx(state), engine).await
+}
+
+/// 语音合成：本地引擎走 sherpa CLI，在线引擎走 tts-worker；
+/// 返回 {audioBase64, sampleRate, format}
+#[tauri::command]
+pub async fn tts_speak(
+    state: State<'_, Arc<Ctx>>,
+    text: String,
+    opts: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::tts_speak(&ctx(state), text, opts).await
+}
+
+/// 在线引擎音色列表（目前仅 EdgeTTS 动态拉取，按语言分组）
+#[tauri::command]
+pub async fn tts_voices(
+    state: State<'_, Arc<Ctx>>,
+    engine: String,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::tts_voices(&ctx(state), engine).await
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3145,12 +3254,19 @@ pub fn set_security_settings(
         let mut cfg = ctx.config.lock().unwrap();
         cfg.hidden_code_enabled = hidden_code_enabled;
         cfg.l2pass_enabled = l2pass_enabled;
-        cfg.l2pass_provider_id = l2pass_provider_id;
+        cfg.l2pass_provider_id = l2pass_provider_id.clone();
         cfg.l2pass_cover_auto = l2pass_cover_auto;
         cfg.revision += 1;
     }
     ctx.save_config();
-    Ok(json!({ "ok": true }))
+    // 返回更新后的完整设置（与 napi 版一致：前端整包覆盖状态，只回 {ok} 会把开关全部打挂）
+    Ok(json!({
+        "ok": true,
+        "hidden_code_enabled": hidden_code_enabled,
+        "l2pass_enabled": l2pass_enabled,
+        "l2pass_provider_id": l2pass_provider_id.clone(),
+        "l2pass_cover_auto": l2pass_cover_auto,
+    }))
 }
 
 /// 自动更新检测结果
@@ -3222,6 +3338,21 @@ pub async fn update_download(state: State<'_, Arc<Ctx>>) -> Result<serde_json::V
     let status = crate::update::download_update(&ctx).await?;
     ctx.emit("update-state", status.clone());
     Ok(status)
+}
+
+/// 自动更新开关状态（更新详情弹窗展示「不再更新/继续更新」用）
+#[tauri::command]
+pub fn get_auto_update(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::get_auto_update(&ctx(state))
+}
+
+/// 写自动更新开关（false = 启动不检测不静默下载，手动检查不受影响），立即持久化 bit.db
+#[tauri::command]
+pub fn set_auto_update(
+    state: State<'_, Arc<Ctx>>,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    bit_core::commands_api::set_auto_update(&ctx(state), enabled)
 }
 
 /// 应用已下载的更新：换装并重启（托盘退出时由 quit 处理器静默换装，不重启）

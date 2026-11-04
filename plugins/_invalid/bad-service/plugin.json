@@ -1,0 +1,9 @@
+{
+  "name": "闸门夹具·服务程序缺失",
+  "version": "0.0.1",
+  "description": "services 指向一个不存在的程序，装上了也起不来，不如在扫描阶段就报错",
+  "permissions": ["workwith"],
+  "services": [
+    { "name": "ghost", "runtime": "node", "program": "svc/does-not-exist.js" }
+  ]
+}

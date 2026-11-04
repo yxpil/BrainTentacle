@@ -21,9 +21,11 @@ regex = "1"
 encoding_rs = "0.8"
 serde.workspace = true
 serde_json.workspace = true
+# 用户主目录定位：dsh 标准技能发现根 ~/.dsh（Windows 取 USERPROFILE 展开的家目录）
+dirs = "6"
 tokio.workspace = true
 axum = "0.8"
-reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream", "socks"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
@@ -31,10 +33,13 @@ rhai = { version = "1", features = ["serde"] }
 futures-util = "0.3"
 # 附件解析：Excel(calamine) / Word(.docx via zip+xml) / 网页正文(scraper) / base64 解析
 # calamine/quick-xml 保持跟随上游修复版：quick-xml <0.41 有 DoS 公告（RUSTSEC-2026-0194/0195）
-calamine = "0.36"
+calamine = "0.37"
+# PDF 正文抽取（MIT）。关掉默认特性：rayon 与 chrono-clock 这里用不上，别拖进核心
+lopdf = { version = "0.46", default-features = false }
 scraper = "0.20"
 base64 = "0.22"
-zip = "2"
+# zip 升 9.x 修复 dependabot 告警的旧版漏洞，calamine 0.37 亦要求 zip ^9.0
+zip = "9"
 quick-xml = "0.42"
 # 页眉仪表盘：本进程内存占用查询
 sysinfo = "0.33"
@@ -65,4 +70,11 @@ tui-ui = ["dep:ratatui", "dep:crossterm"]
 
 # Windows 原生加密第二层：DPAPI（CryptProtectData，CurrentUser 绑定本机本用户）
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Security_Cryptography",
+    "Win32_Foundation",
+    # 全局语音「粘回原应用」：前台窗口读写 + Ctrl+V 注入，全在进程内做
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Threading",
+] }

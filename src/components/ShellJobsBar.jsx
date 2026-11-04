@@ -100,7 +100,7 @@ export default function ShellJobsBar() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50/70 px-2.5 py-1.5 text-xs dark:border-sky-900/50 dark:bg-sky-950/40">
+      <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-sky-200 bg-sky-50/70 px-2.5 py-1.5 text-xs dark:border-sky-900/50 dark:bg-sky-950/40">
         <span
           className="flex shrink-0 items-center gap-1 font-medium text-sky-700 dark:text-sky-300"
           title={t("chat.bgShellHint")}
@@ -112,7 +112,7 @@ export default function ShellJobsBar() {
           <span
             key={j.job_id}
             onClick={() => setLogJob(j)}
-            className="flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-white px-1.5 py-0.5 ring-1 ring-neutral-200 hover:ring-sky-400 dark:bg-neutral-800 dark:ring-neutral-700 dark:hover:ring-sky-600"
+            className="flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-full bg-white px-1.5 py-0.5 ring-1 ring-neutral-200 hover:ring-sky-400 dark:bg-neutral-800 dark:ring-neutral-700 dark:hover:ring-sky-600"
             title={`${j.job_id} · ${j.command}\n${t("chat.bgLogClickHint") || "点击查看实时日志"}`}
           >
             <code className="max-w-[40vw] truncate font-mono text-[11px]">{j.command}</code>

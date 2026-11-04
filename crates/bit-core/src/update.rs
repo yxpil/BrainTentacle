@@ -251,8 +251,12 @@ static DL_BUSY: AtomicBool = AtomicBool::new(false);
 /// 完成后写 state.json 并返回状态。
 pub async fn download_update(ctx: &Arc<Ctx>) -> Result<serde_json::Value, String> {
     let latest = fetch_latest().await?;
-    let current = env!("CARGO_PKG_VERSION");
-    if !version_gt(&latest.version, current) {
+    // 版本源必须与 apply_update 的防降级判定（ctx.app_version）一致：
+    // env!("CARGO_PKG_VERSION") 是 bit-core 编译期常量，Electron 侧升版本时不会变，
+    // 于是「有新版本」恒真 → 每次手动检查都重下整包，再被防降级拒装。
+    // CLI/TUI 传的 ctx.app_version 本身就是 CARGO_PKG_VERSION（bin/bit-cli.rs:43,67），行为不变。
+    let current = ctx.app_version.clone();
+    if !version_gt(&latest.version, &current) {
         return Ok(json_status("none", &latest, None));
     }
     let Some((name, url)) = pick_asset(&serde_json::json!({
@@ -530,6 +534,10 @@ fn find_app_dir(dir: &Path) -> Option<PathBuf> {
 /// 启动后台自动更新：延时后检测 → 有新版本即静默下载（一次），发 update-state 事件。
 /// 下载失败静默跳过（不打扰用户，pill 仍可手动点击打开下载页）。
 pub async fn auto_update_task(ctx: Arc<Ctx>) {
+    // 用户点了「不再更新」：启动链路完全静默（手动检查更新不受影响）
+    if !ctx.config.lock().unwrap().auto_update {
+        return;
+    }
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
     let latest = match fetch_latest().await {
         Ok(l) => l,

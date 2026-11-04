@@ -1,0 +1,82 @@
+<!doctype html>
+<!-- 投研流水线页：清单型静态页。用 invoke 权限直接点工具（宿主侧与 AI 走同一条 invoke_tool），
+     因此这一页也是「工具执行链」的现场入口。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>投研流水线</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#0e7490; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#22d3ee; } }
+      * { box-sizing:border-box; }
+      body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 4px; font-size:16px; }
+      h2 { margin:0 0 6px; font-size:12px; color:var(--muted); }
+      .sub { color:var(--muted); margin-bottom:12px; }
+      .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+      button { margin:4px 6px 0 0; padding:6px 10px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; font:inherit; }
+      pre { margin:8px 0 0; padding:8px; border:1px dashed var(--line); border-radius:8px; min-height:48px; white-space:pre-wrap; word-break:break-all; font:12px/1.5 ui-monospace,Consolas,monospace; }
+    </style>
+  </head>
+  <body>
+    <h1>投研流水线</h1>
+    <div class="sub" id="who">正在握手…</div>
+    <div class="grid">
+      <div class="card">
+        <h2>本插件注入的工具</h2>
+        <pre id="tools">…</pre>
+      </div>
+      <div class="card">
+        <h2>点一次加权均价</h2>
+        <button id="run">weighted_price</button>
+        <button id="risk">risk_score</button>
+        <button id="norm">ticker_normalize</button>
+        <pre id="out">—</pre>
+      </div>
+      <div class="card">
+        <h2>能力清单（all 通配展开）</h2>
+        <pre id="caps">…</pre>
+      </div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const PID = "biz-heavy-tools";
+      const dump = (v) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
+
+      async function call(tool, params) {
+        const r = await Bit.invoke("invoke_tool", { id: `plugin::${PID}::${tool}`, params: params || {} });
+        return r;
+      }
+
+      async function boot() {
+        const info = await Bit.ready();
+        $("who").textContent = info ? `${info.plugin_name} · 申报权限里写了 all，展开后共 ${info.permissions.length} 项` : "握手尚未完成";
+        const r = await Bit.invoke("list_tools", {});
+        const all = Array.isArray(r) ? r : (r && (r.tools || r.list)) || [];
+        $("tools").textContent = all
+          .filter((t) => String(t.id || "").startsWith(`plugin::${PID}::`))
+          .map((t) => `${t.name}  ← ${String(t.id).split("::").pop()}`)
+          .join("\n");
+        const caps = await Bit.caps();
+        $("caps").textContent = caps.caps.join(", ");
+      }
+
+      $("run").addEventListener("click", async () => {
+        try {
+          $("out").textContent = dump(await call("weighted_price", { rows: [{ price: 100, weight: 0.6 }, { price: 40, weight: 0.4 }] }));
+        } catch (e) { $("out").textContent = "调用失败：" + String(e.message || e); }
+      });
+      $("risk").addEventListener("click", async () => {
+        try { $("out").textContent = dump(await call("risk_score", { volatility: 0.22, drawdown: 0.11 })); }
+        catch (e) { $("out").textContent = "调用失败：" + String(e.message || e); }
+      });
+      $("norm").addEventListener("click", async () => {
+        try { $("out").textContent = dump(await call("ticker_normalize", { codes: ["600519", " 000858 ", "300750"] })); }
+        catch (e) { $("out").textContent = "调用失败：" + String(e.message || e); }
+      });
+
+      boot().catch((e) => ($("who").textContent = "初始化失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

@@ -50,7 +50,7 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         created_at: now.clone(),
         enabled: true,
     };
-    vec![
+    let mut list = vec![
         // 1. 命令行
         mk(
             "builtin.shell",
@@ -115,6 +115,22 @@ pub fn builtin_tools() -> Vec<ToolDef> {
                 "required": ["path"]
             }),
             "read_file",
+        ),
+        // 2.5b read_doc：附件正文按路径分页回读（配合概览：概览进上下文，细节按需取）
+        mk(
+            "builtin.read_doc",
+            "read_doc",
+            "Read an attached document by absolute path and return numbered lines of its extracted text. Supports .pdf/.docx/.pptx/.xlsx/.xls/.csv and plain text/code files. Page with offset/limit. Use it when an attachment overview is not enough",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute path of the document (as given in the attachment overview)" },
+                    "offset": { "type": "integer", "description": "1-based start line of the extracted text (default 1)" },
+                    "limit": { "type": "integer", "description": "Max lines to return (default 200, max 2000)" }
+                },
+                "required": ["path"]
+            }),
+            "read_doc",
         ),
         // 3. 制定计划（目标 + 待办清单）
         mk(
@@ -276,16 +292,16 @@ pub fn builtin_tools() -> Vec<ToolDef> {
             }),
             "compact_history",
         ),
-        // 6. SKILL：写入 / 搜索技能
+        // 6. SKILL：写入 / 搜索技能 / 按需调取工具 schema
         mk(
             "builtin.skill",
             "skill",
-            "Skill library: save a reusable skill (action=save) or search existing skills by keyword (action=search)",
+            "Skill library and tool activation. action=save stores a reusable skill (same name overwrites); action=search finds skills; action=load_tool fetches a tool's full JSON Schema (when lazy loading is on, load a tool before calling it; its schema also joins your tools next turn).",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["save", "search"], "description": "save=write, search=search" },
-                    "name": { "type": "string", "description": "For action=save: skill name (same name overwrites)" },
+                    "action": { "type": "string", "enum": ["save", "search", "load_tool"], "description": "save=write, search=search, load_tool=activate a tool by name" },
+                    "name": { "type": "string", "description": "For action=save: skill name (same name overwrites). For action=load_tool: tool name to activate" },
                     "summary": { "type": "string", "description": "For action=save: skill content / step summary" },
                     "query": { "type": "string", "description": "For action=search: search keyword (empty returns all)" }
                 },
@@ -344,15 +360,16 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         mk(
             "builtin.screen",
             "screen",
-            "Capture the screen (full or a region) and show the screenshot to yourself via view_image. Use display index for multi-monitor",
+            "Capture the screen (full or a region) and show the screenshot to yourself via view_image. Full-screen captures are overlaid with a labeled grid: columns A-Z on X, rows 1..N on Y. Prefer clicking via grid refs (e.g. mouse action=click cell=\"K7\") instead of estimating pixel coordinates",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "display": { "type": "integer", "description": "Monitor index, 0 = primary (default 0)" },
-                    "x": { "type": "integer", "description": "Region crop: left (physical px, optional)" },
+                    "x": { "type": "integer", "description": "Region crop: left (physical px, optional; disables grid overlay)" },
                     "y": { "type": "integer", "description": "Region crop: top (optional)" },
                     "width": { "type": "integer", "description": "Region crop: width (optional)" },
-                    "height": { "type": "integer", "description": "Region crop: height (optional)" }
+                    "height": { "type": "integer", "description": "Region crop: height (optional)" },
+                    "grid": { "type": "boolean", "description": "Overlay labeled grid for cell-referenced clicking (default true; only applies to full-screen capture)" }
                 }
             }),
             "screen",
@@ -360,13 +377,15 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         mk(
             "builtin.mouse",
             "mouse",
-            "Control the mouse: position / move / click / double_click / right_click / drag / scroll. Coordinates are physical screen pixels (top-left origin)",
+            "Control the mouse: position / move / click / double_click / right_click / drag / scroll. Preferred: pass cell=\"K7\" (grid ref from the last full-screen screenshot, optional anchor like \"K7.br\") instead of pixel x/y. Pixels are physical, top-left origin",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": { "type": "string", "enum": ["position", "move", "click", "double_click", "right_click", "drag", "scroll"] },
+                    "cell": { "type": "string", "description": "Grid ref for target, e.g. \"K7\" or \"K7.br\" (overrides x/y)" },
                     "x": { "type": "integer", "description": "Target x (move/click/drag)" },
                     "y": { "type": "integer", "description": "Target y (move/click/drag)" },
+                    "cell2": { "type": "string", "description": "drag: destination grid ref (overrides x2/y2)" },
                     "x2": { "type": "integer", "description": "drag: destination x" },
                     "y2": { "type": "integer", "description": "drag: destination y" },
                     "dx": { "type": "integer", "description": "scroll: horizontal pixels" },
@@ -395,7 +414,70 @@ pub fn builtin_tools() -> Vec<ToolDef> {
             }),
             "keyboard",
         ),
-    ]
+        mk(
+            "builtin.ask_user",
+            "ask_user",
+            "Ask the user a question with selectable options and wait for their answer. Use when a decision or missing info blocks progress: which approach to take, which file variant to keep, confirm before an irreversible action, etc. The user picks option(s) and may add a free-form supplement. Do NOT use for trivial choices you can reasonably decide yourself",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "The question, one or two sentences, self-contained (the user may not see your surrounding reasoning)" },
+                    "options": { "type": "array", "items": { "type": "string" }, "description": "2-6 concise choices, each a short phrase (e.g. [\"方案A：先编译验证\", \"方案B：直接提交\"]). Omit for open questions where the user types the answer" },
+                    "allow_multiple": { "type": "boolean", "description": "true = user may select several options (default false, single choice)" }
+                },
+                "required": ["question"]
+            }),
+            "ask_user",
+        ),
+    ];
+    // 8. schedule_task：为待办设置/清除计划执行时间（到点唤回会话执行）。
+    // 单独构造：mk 闭包恒 enabled:true，而本工具默认关闭——不进提示词节约上下文，
+    // 用户在工具页开启后由 set_enabled 持久化，重启后沿用磁盘状态（见 state.rs 合并逻辑）。
+    list.push(ToolDef {
+        id: "builtin.schedule_task".into(),
+        name: "schedule_task".into(),
+        description: "为待办设置/清除计划执行时间（到点唤回会话执行）".into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": { "type": "string", "enum": ["set", "clear"] },
+                "todo_id": { "type": "string" },
+                "scheduled_at": { "type": "string", "description": "计划执行时间，格式 YYYY-MM-DD HH:MM（本地时间），可选" },
+                "schedule": { "type": "string", "description": "重复规则，如 every 30m / daily 9:00，可选" }
+            },
+            "required": ["action", "todo_id"]
+        }),
+        kind: ToolKind::Builtin { handler: "schedule_task".into() },
+        created_by: "system".into(),
+        created_at: now.clone(),
+        enabled: false, // 默认关闭：按需开启，节约常驻上下文
+    });
+    // 9. workwith：本地服务托管的 AI 入口（条目增删查改 + 服务启停 + 实时日志）。
+    // 同样出厂关闭：它能拉起 / 杀掉本机进程，属于高权限操作，用户在工具页显式开启才进提示词。
+    list.push(ToolDef {
+        id: "builtin.workwith".into(),
+        name: "workwith".into(),
+        description: "Host local service programs (WorkWith 本地服务托管) and control them: list / status / logs / save / start / stop / remove. An entry runs a program under a detected runtime (node / java / python / custom exe); with mcp_mode it links the running service out as an MCP server whose tools become available to you (http = wait for its port, stdio = the process itself speaks MCP over stdin/stdout, e.g. the DeepSeek Harness bridge). Start a stopped entry to bring its tools online; stopping removes them again.".into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": { "type": "string", "enum": ["list", "status", "logs", "save", "start", "stop", "remove"] },
+                "id": { "type": "string", "description": "Entry id for status/logs/start/stop/remove. Get ids from action=\"list\"" },
+                "entry": {
+                    "type": "object",
+                    "description": "For save: {id? (omit to create), name, program, runtime_id? (node/java/python/custom), args? [], cwd? \"\", env? {}, port? 0, mcp_mode? \"\"|\"http\"|\"stdio\", auto_with_session? false}. Updating an entry requires it to be stopped first",
+                    "additionalProperties": true
+                },
+                "tail": { "type": "integer", "description": "For logs: return only the last N lines (default 100)" }
+            },
+            "required": ["action"]
+        }),
+        kind: ToolKind::Builtin { handler: "workwith".into() },
+        created_by: "system".into(),
+        created_at: now.clone(),
+        enabled: false,
+    });
+    list
 }
 
 /// 注册新工具。name 唯一；Remote 需要回调 URL。
@@ -661,6 +743,11 @@ mod relax_tests {
 pub fn reload_custom_tools(ctx: &Arc<crate::state::Ctx>) {
     let disk: Vec<ToolDef> = crate::store::get_json(&ctx.db.lock().unwrap(), "tools")
         .unwrap_or_default();
+    // 内置工具重建前先记下磁盘上的用户开关状态（按 name 对齐），
+    // 重建后沿用：用户关过的保持关、开过的保持开；磁盘没有的内置工具用代码默认值
+    // （新装的 schedule_task 默认关，其余内置默认开）。否则重启/刷新会把开关打回代码值。
+    let prev_enabled: std::collections::HashMap<String, bool> =
+        disk.iter().map(|t| (t.name.clone(), t.enabled)).collect();
     let builtin = builtin_tools();
     let builtin_names: std::collections::HashSet<String> =
         builtin.iter().map(|t| t.name.clone()).collect();
@@ -669,6 +756,11 @@ pub fn reload_custom_tools(ctx: &Arc<crate::state::Ctx>) {
         .filter(|t| !matches!(t.kind, ToolKind::Builtin { .. }) && !builtin_names.contains(&t.name))
         .collect();
     let mut merged = builtin;
+    for t in merged.iter_mut() {
+        if let Some(&en) = prev_enabled.get(&t.name) {
+            t.enabled = en;
+        }
+    }
     merged.extend(custom);
     *ctx.tools.lock().unwrap() = merged;
 }
@@ -737,12 +829,21 @@ pub async fn invoke(
             let server = crate::mcp::find(ctx, server_id)
                 .ok_or_else(|| format!("MCP server `{server_id}` is not connected"))?;
             if !server.enabled {
-                return Err(format!(
-                    "MCP server `{}` is paused; enable it on the Tools page first",
-                    server.name
-                ));
+                // 插件声明的外部连接在工具页没有开关（生命周期归插件），报错要指对地方
+                return Err(if server.plugin_id.is_empty() {
+                    format!(
+                        "MCP server `{}` is paused; enable it on the Tools page first",
+                        server.name
+                    )
+                } else {
+                    format!(
+                        "MCP server `{}` comes from plugin `{}` and is not connected; connect it on that plugin's page",
+                        server.name, server.plugin_id
+                    )
+                });
             }
-            crate::mcp::call_tool(&server, tool, params.clone()).await
+            // 统一入口：stdio 自动拉起子进程（懒恢复），http 走原有 call_tool
+            crate::mcp::exec_tool(ctx, &server, tool, params.clone()).await
         }
         ToolKind::Script { code } => {
             // 在阻塞线程池中执行 Rhai 沙盒脚本，整体限时 30 秒
@@ -765,13 +866,17 @@ pub async fn invoke(
             let runtime = runtime.clone();
             let code = code.clone();
             let params_owned = params.clone();
+            // 插件自带的工具：把该插件的身份与令牌一并带进进程，
+            // 脚本里 require("bit") 就能直接回连宿主能力（内置工具拿到空表）
+            let extra_env = crate::plugin_sdk::tool_env(ctx, &tool.id);
             let handle = crate::task::spawn_blocking(move || {
-                crate::script_runtime::run(
+                crate::script_runtime::run_env(
                     &ctx_cloned,
                     &runtime,
                     &code,
                     &params_owned,
                     std::time::Duration::from_secs(timeout_secs),
+                    &extra_env,
                 )
             });
             match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs + 5), handle).await {
@@ -831,6 +936,47 @@ pub fn no_window_tokio(cmd: &mut tokio::process::Command) {
 }
 #[cfg(not(windows))]
 pub fn no_window_tokio(_cmd: &mut tokio::process::Command) {}
+
+/// 路径比较：Windows 下大小写与分隔符都不敏感
+/// 同一个路径？（用于「这条文件是不是用户亲手拖进来的附件」这道可见范围闸门）
+///
+/// 大小写要按文件系统说话：Windows 与 macOS 默认卷不区分大小写，归一到小写才算同一份；
+/// Linux 区分，`Data.csv` 与 `data.csv` 是两个文件——一律小写会把模型请求的另一个文件
+/// 认成"已授权的附件"，等于把闸门放宽了一格。同理：反斜杠只在 Windows 才是分隔符。
+fn same_path(a: &str, b: &str) -> bool {
+    let case_insensitive = cfg!(windows) || cfg!(target_os = "macos");
+    let norm = |s: &str| {
+        let t = if cfg!(windows) { s.replace('\\', "/") } else { s.to_string() };
+        let t = t.trim_end_matches('/').to_string();
+        if case_insensitive { t.to_ascii_lowercase() } else { t }
+    };
+    norm(a) == norm(b)
+}
+
+/// 这个路径是不是本会话里用户亲手拖进来的附件（看 `[[bit-file …]]` 标记里的 path 字段）。
+/// 附件正文已经以概览的形式给过模型，允许它按同一份文件回读细节不构成新的可见范围。
+fn attached_in_session(ctx: &Arc<crate::state::Ctx>, session: Option<&str>, want: &str) -> bool {
+    let Some(sid) = session else { return false };
+    let store = ctx.sessions.lock().unwrap();
+    let Some(sess) = store.sessions.iter().find(|s| s.id == sid) else {
+        return false;
+    };
+    sess.messages.iter().any(|m| {
+        m.content.lines().any(|l| {
+            let Some(json_part) = l
+                .trim()
+                .strip_prefix("[[bit-file ")
+                .and_then(|s| s.strip_suffix("]]"))
+            else {
+                return false;
+            };
+            serde_json::from_str::<serde_json::Value>(json_part)
+                .ok()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str().map(String::from)))
+                .is_some_and(|p| same_path(&p, want))
+        })
+    })
+}
 
 /// 五个出厂内置工具的真实实现
 async fn builtin_invoke(
@@ -909,6 +1055,8 @@ async fn builtin_invoke(
             let path = params.get("path").and_then(|v| v.as_str()).ok_or("Missing parameter: path")?;
             let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
             let path = crate::sandbox::resolve_path(ctx, path)?;
+            // 写前快照：回退到此轮之前时把文件恢复成原样（原来不存在则删除）
+            let checkpoint = session.and_then(|s| crate::checkpoint::capture(ctx, s, &path, None));
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -925,8 +1073,17 @@ async fn builtin_invoke(
                     crate::console_codec::encode_for_write(&path_str, content, source.as_deref())
                 }
             };
-            std::fs::write(&path, &enc).map_err(|e| format!("Failed to write: {e}"))?;
-            Ok(serde_json::json!({ "path": path_str, "bytes": enc.len() }))
+            if let Err(e) = std::fs::write(&path, &enc) {
+                if let (Some(s), Some(id)) = (session, &checkpoint) {
+                    crate::checkpoint::discard(ctx, s, id);
+                }
+                return Err(format!("Failed to write: {e}"));
+            }
+            let mut res = serde_json::json!({ "path": path_str, "bytes": enc.len() });
+            if let Some(id) = checkpoint {
+                res["_checkpoints"] = serde_json::json!([id]);
+            }
+            Ok(res)
         }
         // ── 2.2 read_file：分块读取 + 行号（模型可直接按行号 edit）──
         "read_file" => {
@@ -976,6 +1133,58 @@ async fn builtin_invoke(
             Ok(serde_json::json!({
                 "path": path,
                 "total_lines": total,
+                "offset": start + 1,
+                "returned": end - start,
+                "truncated": truncated,
+                "next_offset": truncated.then_some(end + 1),
+                "content": body,
+            }))
+        }
+        // ── 2.5b 读附件正文：按绝对路径解析后分页回读 ──
+        "read_doc" => {
+            let path_raw = params.get("path").and_then(|v| v.as_str()).ok_or("Missing parameter: path")?;
+            // 只放开两类路径：工作区内的（与 read_file 同一沙箱口径），以及本会话里用户
+            // 亲手拖进来的附件（概览就是让它读这份文件的细节）。没设工作区时沙箱本身放行。
+            if crate::sandbox::resolve_path(ctx, path_raw).is_err() && !attached_in_session(ctx, session, path_raw) {
+                return Err(format!(
+                    "`{path_raw}` 既不在工作区内，也不是本会话的附件；read_doc 只读这两类路径"
+                ));
+            }
+            let p = std::path::Path::new(path_raw);
+            // 附件本来就是用户亲手拖进对话的，正文也已经以概览形式给过模型，
+            // 这里只是只读地把细节捞回来，与 view_image 同口径（不要求在工作区内）
+            let meta = std::fs::metadata(p).map_err(|e| format!("找不到文件 {path_raw}: {e}"))?;
+            if meta.is_dir() {
+                return Err(format!("`{path_raw}` 是目录；read_doc 要的是单个文档文件"));
+            }
+            let name = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path_raw)
+                .to_string();
+            let bytes = std::fs::read(p).map_err(|e| format!("读取失败: {e}"))?;
+            // 内置类型在阻塞线程解析（Office/PDF 不轻），插件登记的类型交给它的解析工具
+            let text = crate::commands_api::extract_any(ctx, &name, bytes, Some(path_raw)).await?;
+            let lines: Vec<&str> = text.lines().collect();
+            let total = lines.len();
+            let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
+            let limit = params
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(200)
+                .clamp(1, 2000) as usize;
+            let start = (offset - 1).min(total);
+            let end = (start + limit).min(total);
+            let width = total.to_string().len();
+            let mut body = String::new();
+            for (i, line) in lines[start..end].iter().enumerate() {
+                body.push_str(&format!("{:>width$}\u{2192}{}\n", start + i + 1, line, width = width));
+            }
+            let truncated = end < total;
+            Ok(serde_json::json!({
+                "path": path_raw,
+                "total_lines": total,
+                "chars": text.chars().count(),
                 "offset": start + 1,
                 "returned": end - start,
                 "truncated": truncated,
@@ -1099,6 +1308,107 @@ async fn builtin_invoke(
                 "note": "Diagram delivered to the user in the chat UI. The user has seen it; do NOT redraw or re-explain the diagram syntax in your reply text.",
             }))
         }
+        // ── 2.11 ask_user：模型主动向用户提问（选项卡片 + 补充输入）。挂起等待用户应答
+        // （与工具审批同款 oneshot 通道模式），答案作为工具结果回喂模型；会话中断/超时自动取消
+        "ask_user" => {
+            let question = params
+                .get("question")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or("Missing parameter: question")?;
+            if question.len() > 4000 {
+                return Err("Question too long (limit 4000 chars)".into());
+            }
+            let options: Vec<String> = params
+                .get("options")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .take(8)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let allow_multiple = params
+                .get("allow_multiple")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let Some(session) = session else {
+                return Err("ask_user requires a chat session to deliver the question to".into());
+            };
+            // TUI 无 WebView 应答通道：让模型自行决策，不挂起空等
+            if std::env::var("BIT_TUI").is_ok() {
+                return Err(
+                    "ask_user is unavailable in TUI mode: decide by yourself or proceed with the most reasonable default".into(),
+                );
+            }
+            let id = format!("ask-{}", ctx.ask_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+            let (tx, rx) = tokio::sync::oneshot::channel::<serde_json::Value>();
+            ctx.asks.lock().unwrap().insert(
+                id.clone(),
+                crate::state::PendingAsk {
+                    tx,
+                    session: session.to_string(),
+                    created: std::time::Instant::now(),
+                },
+            );
+            ctx.emit(
+                "chat-ask",
+                serde_json::json!({
+                    "id": id, "session": session, "question": question,
+                    "options": options, "allow_multiple": allow_multiple,
+                }),
+            );
+            crate::audit::record(
+                ctx,
+                "model",
+                "ask.request",
+                "ask_user",
+                serde_json::json!({ "question": question, "options": options }),
+                true,
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            let mut rx = rx;
+            let outcome = loop {
+                tokio::select! {
+                    r = &mut rx => {
+                        break r.map_err(|_| "Ask channel closed; auto-cancelled".to_string());
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                        // 等待期间用户中断了会话：立即取消提问
+                        if crate::agent::interrupted(ctx, session) {
+                            break Err("对话已中断".into());
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            break Err("Ask timed out (300s): the user did not respond. Proceed with your best judgment instead of asking again".into());
+                        }
+                    }
+                }
+            };
+            ctx.asks.lock().unwrap().remove(&id);
+            match &outcome {
+                Ok(ans) => crate::audit::record(ctx, "user", "ask.answered", "ask_user", ans.clone(), true),
+                Err(e) => crate::audit::record(
+                    ctx,
+                    "user",
+                    "ask.cancelled",
+                    "ask_user",
+                    serde_json::json!({ "reason": e }),
+                    false,
+                ),
+            }
+            outcome.map(|ans| {
+                serde_json::json!({
+                    "answered": true,
+                    "choices": ans.get("choices").cloned().unwrap_or(serde_json::json!([])),
+                    "supplement": ans.get("supplement").and_then(|v| v.as_str()).unwrap_or(""),
+                    "note": "This is the user's own decision. Act on it; do not re-ask the same question.",
+                })
+            })
+        }
         // ── 2.7 screen：截屏（desktop_ctl 跨平台实现；截图自动显示给用户并落盘）──
         "screen" => {
             if !ctx.config.lock().unwrap().tool_gate("screen") {
@@ -1114,15 +1424,21 @@ async fn builtin_invoke(
                 (Some(x), Some(y), Some(w), Some(h)) => Some((x as u32, y as u32, w as u32, h as u32)),
                 _ => None,
             };
+            let grid = params.get("grid").and_then(|v| v.as_bool()).unwrap_or(true);
             let ctx2 = ctx.clone();
-            let path = tokio::task::spawn_blocking(move || crate::desktop_ctl::screenshot(&ctx2, display, region))
+            let path = tokio::task::spawn_blocking(move || crate::desktop_ctl::screenshot(&ctx2, display, region, grid))
                 .await
                 .map_err(|e| format!("截屏任务失败: {e}"))??;
             // image 字段 → 对话 UI 自动出图（extract_tool_image 统一路径）；模型用 view_image 看图
             Ok(serde_json::json!({
                 "path": path,
                 "image": path,
-                "note": "Screenshot captured and shown to the user. Call view_image with this path to see it yourself.",
+                "note": if region.is_some() {
+                    "Screenshot captured (region crop, no grid). Use pixel coordinates for mouse."
+                } else {
+                    "Full-screen screenshot with labeled grid: columns A-Z (X), rows 1..N (Y). Click via mouse tool with cell=\"K7\" (anchors .c/.tl/.tr/.bl/.br, default center)."
+                },
+                "grid": region.is_none() && grid,
             }))
         }
         // ── 2.8 mouse：查看/操作鼠标（desktop_ctl 跨平台实现）──
@@ -1135,7 +1451,29 @@ async fn builtin_invoke(
                 .and_then(|v| v.as_str())
                 .ok_or("Missing parameter: action")?
                 .to_string();
-            let p2 = params.clone();
+            // 格子引用 → 像素：cell/cell2 来自最近一次全屏网格截图（坐标 = 物理屏幕尺寸换算）
+            let mut p2 = params.clone();
+            let resolve = |cell: &str| -> Result<(i32, i32), String> {
+                let (w, h, scale) = crate::desktop_ctl::screen_dims(0)
+                    .map_err(|e| format!("格子引用换算失败: {e}"))?;
+                let (x, y) = crate::desktop_ctl::parse_cell(cell, w, h)?;
+                // macOS 的 enigo 绝对坐标用逻辑点；Windows/Linux 用物理像素
+                #[cfg(target_os = "macos")]
+                let (x, y) = ((x as f64 / scale) as i32, (y as f64 / scale) as i32);
+                #[cfg(not(target_os = "macos"))]
+                let _ = scale;
+                Ok((x, y))
+            };
+            if let Some(cell) = params.get("cell").and_then(|v| v.as_str()) {
+                let (x, y) = resolve(cell)?;
+                p2["x"] = serde_json::json!(x);
+                p2["y"] = serde_json::json!(y);
+            }
+            if let Some(cell2) = params.get("cell2").and_then(|v| v.as_str()) {
+                let (x, y) = resolve(cell2)?;
+                p2["x2"] = serde_json::json!(x);
+                p2["y2"] = serde_json::json!(y);
+            }
             tokio::task::spawn_blocking(move || crate::desktop_ctl::mouse(&action, &p2))
                 .await
                 .map_err(|e| format!("鼠标任务失败: {e}"))?
@@ -1222,6 +1560,20 @@ async fn builtin_invoke(
             let written = crate::goal::rewrite_todos(ctx, goal_id, &items, actor, session)?;
             Ok(serde_json::json!({ "written": written }))
         }
+        // ── 3.7 设置/清除待办计划执行时间（默认关闭的子工具；invoke 入口已拦 disabled，无需 tool_gate）──
+        "schedule_task" => {
+            let action = params.get("action").and_then(|v| v.as_str()).ok_or("Missing parameter: action")?;
+            let todo_id = params.get("todo_id").and_then(|v| v.as_str()).ok_or("Missing parameter: todo_id")?;
+            let scheduled_at = params.get("scheduled_at").and_then(|v| v.as_str());
+            let schedule = params.get("schedule").and_then(|v| v.as_str());
+            let detail = crate::goal::schedule_task_set(ctx, todo_id, action, scheduled_at, schedule)?;
+            Ok(serde_json::json!({ "ok": true, "detail": detail }))
+        }
+        // ── 3.9 workwith：本地服务托管（默认关闭；启停本机进程的权限由用户显式授予）──
+        "workwith" => {
+            let action = params.get("action").and_then(|v| v.as_str()).ok_or("Missing parameter: action")?;
+            crate::workwith::ai_call(ctx, action, params).await
+        }
         // ── 4. edit：增量补丁（old_string 精确匹配 或 start_line/end_line 行范围）──
         "edit" => {
             let path_raw = params.get("path").and_then(|v| v.as_str()).ok_or("缺少参数 path")?;
@@ -1263,9 +1615,20 @@ async fn builtin_invoke(
                     ),
                     None => crate::console_codec::encode_for_write(path, &updated, Some(&raw)),
                 };
-                std::fs::write(path, &enc).map_err(|e| format!("Failed to write back: {e}"))?;
+                // 写前快照（raw 即改前原始字节，不重复读盘）
+                let checkpoint =
+                    session.and_then(|s| crate::checkpoint::capture(ctx, s, std::path::Path::new(path), Some(&raw)));
+                if let Err(e) = std::fs::write(path, &enc) {
+                    if let (Some(s), Some(id)) = (session, &checkpoint) {
+                        crate::checkpoint::discard(ctx, s, id);
+                    }
+                    return Err(format!("Failed to write back: {e}"));
+                }
                 let replaced = el - sl + 1;
-                let res = serde_json::json!({ "path": path, "mode": "line_range", "replaced_lines": replaced, "total_lines": lines.len() });
+                let mut res = serde_json::json!({ "path": path, "mode": "line_range", "replaced_lines": replaced, "total_lines": lines.len() });
+                if let Some(id) = checkpoint {
+                    res["_checkpoints"] = serde_json::json!([id]);
+                }
                 let warn = crate::syntax::check(ctx, path).await;
                 return Ok(crate::syntax::annotate(ctx, session, path, warn, res));
             }
@@ -1323,8 +1686,20 @@ async fn builtin_invoke(
                 ),
                 None => crate::console_codec::encode_for_write(path, &updated, Some(&raw)),
             };
-            std::fs::write(path, &enc).map_err(|e| format!("Failed to write back: {e}"))?;
-            Ok(serde_json::json!({ "path": path, "replaced": if replace_all { count } else { 1 } }))
+            // 写前快照（raw 即改前原始字节，不重复读盘）
+            let checkpoint =
+                session.and_then(|s| crate::checkpoint::capture(ctx, s, std::path::Path::new(path), Some(&raw)));
+            if let Err(e) = std::fs::write(path, &enc) {
+                if let (Some(s), Some(id)) = (session, &checkpoint) {
+                    crate::checkpoint::discard(ctx, s, id);
+                }
+                return Err(format!("Failed to write back: {e}"));
+            }
+            let mut res = serde_json::json!({ "path": path, "replaced": if replace_all { count } else { 1 } });
+            if let Some(id) = checkpoint {
+                res["_checkpoints"] = serde_json::json!([id]);
+            }
+            Ok(res)
         }
         // ── 5. 子智能体：开新会话独立完成任务 ──
         "sub_agent" => {
@@ -1608,9 +1983,126 @@ async fn builtin_invoke(
                         .collect();
                     Ok(serde_json::json!({ "count": hits.len(), "skills": hits }))
                 }
-                other => Err(format!("skill action must be save or search, got `{other}`")),
+                // 按需加载：取回某个工具的完整 schema，下一轮起它才进 tools 参数
+                "load_tool" => {
+                    let name = params.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                    crate::tool_load::load(ctx, session, name)
+                }
+                other => Err(format!(
+                    "skill action must be save, search or load_tool, got `{other}`"
+                )),
             }
         }
         other => Err(format!("Unknown builtin handler `{other}`")),
+    }
+}
+
+#[cfg(test)]
+mod default_off_tool_tests {
+    use super::*;
+
+    /// schedule_task 必须出厂关闭（不进系统提示词，节约上下文），且注册在内置工具表中
+    #[test]
+    fn schedule_task_defaults_disabled_and_registered() {
+        let list = builtin_tools();
+        let t = list
+            .iter()
+            .find(|t| t.name == "schedule_task")
+            .expect("schedule_task 应注册在内置工具表");
+        assert!(!t.enabled, "schedule_task 出厂必须默认关闭");
+        // schema 关键约束：action/todo_id 必填，action 限 set/clear
+        assert_eq!(t.parameters["required"], serde_json::json!(["action", "todo_id"]));
+        assert_eq!(
+            t.parameters["properties"]["action"]["enum"],
+            serde_json::json!(["set", "clear"])
+        );
+        // 默认关闭 → 不注入提示词（tool_visible 只认 enabled，无闸门字段干扰）
+        let cfg = crate::config::Config::default();
+        assert!(
+            !crate::ai::tool_visible(&cfg, t),
+            "默认关闭的 schedule_task 不应出现在提示词工具清单"
+        );
+        // 用户开启后即可见（工具页开关语义）
+        let mut on = t.clone();
+        on.enabled = true;
+        assert!(crate::ai::tool_visible(&cfg, &on));
+    }
+
+    /// workwith 同样出厂关闭，且 action 枚举必须覆盖托管引擎的全部动作
+    #[test]
+    fn workwith_defaults_disabled_with_full_actions() {
+        let t = builtin_tools()
+            .into_iter()
+            .find(|t| t.name == "workwith")
+            .expect("workwith 应注册在内置工具表");
+        assert!(!t.enabled, "workwith 能启停本机进程，出厂必须默认关闭");
+        assert_eq!(t.parameters["required"], serde_json::json!(["action"]));
+        assert_eq!(
+            t.parameters["properties"]["action"]["enum"],
+            serde_json::json!(["list", "status", "logs", "save", "start", "stop", "remove"])
+        );
+        let cfg = crate::config::Config::default();
+        assert!(!crate::ai::tool_visible(&cfg, &t));
+    }
+}
+
+#[cfg(test)]
+mod read_doc_tool_tests {
+    use super::*;
+
+    /// read_doc 是「概览 → 按需取细节」那条路的回捞通道：出厂就该开着，只有 path 必填
+    #[test]
+    fn read_doc_is_registered_enabled_with_path_required() {
+        let t = builtin_tools()
+            .into_iter()
+            .find(|t| t.name == "read_doc")
+            .expect("read_doc 应注册在内置工具表");
+        assert!(t.enabled, "只读回捞不该默认关");
+        assert_eq!(t.parameters["required"], serde_json::json!(["path"]));
+        assert!(t.parameters["properties"].get("offset").is_some(), "要能分页");
+        let cfg = crate::config::Config::default();
+        assert!(crate::ai::tool_visible(&cfg, &t), "默认配置下就该发给模型");
+    }
+
+    /// 路径同一性按平台文件系统说话：Windows/macOS 默认卷不区分大小写、反斜杠是分隔符；
+    /// Linux 区分大小写且反斜杠是合法文件名字符——同一份判定逻辑在三种系统上都得是真的
+    #[test]
+    fn same_path_follows_platform_filesystem() {
+        let ci = cfg!(windows) || cfg!(target_os = "macos");
+        assert!(same_path("/a/b.txt", "/a/b.txt/"), "尾斜杠不该算两个文件");
+        assert!(!same_path("/a/b.txt", "/a/c.txt"), "不同文件名必须算两个");
+        if ci {
+            assert!(same_path("C:\\Users\\X\\a.PDF", "c:/users/x/a.pdf"), "大小写与分隔符不能成为绕过的缝");
+            assert!(same_path("/tmp/A.TXT", "/tmp/a.txt"));
+        } else {
+            assert!(!same_path("/tmp/A.TXT", "/tmp/a.txt"), "区分大小的文件系统上这是两个文件");
+            assert!(same_path("/tmp/a.txt", "/tmp/a.txt"));
+            assert!(!same_path("/tmp/a\\b.txt", "/tmp/a/b.txt"), "这里反斜杠不是分隔符");
+        }
+    }
+
+    /// 没设工作区时 read_doc 靠这条放行：只认本会话附件标记里出现过的路径
+    #[test]
+    fn attached_in_session_matches_marker_paths() {
+        let ctx = crate::plugins::test_ctx("readdoc-guard");
+        let sid = "s-readdoc";
+        {
+            let mut store = ctx.sessions.lock().unwrap();
+            store.get_or_create_mut(sid);
+            store.get_mut(sid).unwrap().messages.push(crate::ai::ChatMessage::user(
+                "[[bit-file {\"name\":\"a.pdf\",\"path\":\"C:/tmp/a.pdf\"}]]\n正文",
+            ));
+        }
+        assert!(attached_in_session(&ctx, Some(sid), "C:/tmp/a.pdf"), "附件路径要认得");
+        if cfg!(windows) || cfg!(target_os = "macos") {
+            assert!(attached_in_session(&ctx, Some(sid), "c:\\tmp\\A.PDF"), "默认卷上换个写法还是同一份");
+        } else {
+            assert!(
+                !attached_in_session(&ctx, Some(sid), "c:\\tmp\\A.PDF"),
+                "区分大小的系统上这是另一条路径，不该跟着放行"
+            );
+        }
+        assert!(!attached_in_session(&ctx, Some(sid), "C:/Windows/win.ini"), "没拖进来的不给读");
+        assert!(!attached_in_session(&ctx, None, "C:/tmp/a.pdf"), "没有会话上下文就不放行");
     }
 }

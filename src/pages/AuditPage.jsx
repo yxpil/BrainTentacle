@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useLang } from "../i18n.js";
+import { confirmDialog } from "../components/ConfirmHost.jsx";
 import { IconAudit, IconRefresh, IconTrash } from "../components/Icons.jsx";
+import SearchBox from "../components/SearchBox.jsx";
+import SystemPanel from "../components/SystemPanel.jsx";
 
 // 审计日志：所有工具调用 / 注册 / HTTP 访问 / Autopilot 动作；点行弹层查看完整详情。
 // 顶部内置诊断报告（折叠）：版本 / 守护 / 数据文件 / 最近崩溃 / 低成功率工具
@@ -14,7 +17,37 @@ export default function AuditPage() {
   const [diagOpen, setDiagOpen] = useState(false);
 
   const reload = () => api.listAudit().then((r) => setEntries(r.entries || []));
-  const loadDiag = () => api.getDiagnostics().then(setDiag).catch(() => {});
+  const loadDiag = () =>
+    api
+      .getDiagnostics()
+      .then(setDiag)
+      .catch(() => {});
+
+  // 清空 / 删除审计记录：统一走确认弹窗
+  const clearAll = async () => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("audit.confirmClear"),
+        danger: true,
+      }))
+    )
+      return;
+    api.clearAudit().then(reload);
+  };
+
+  const removeOne = async (id) => {
+    if (
+      !(await confirmDialog({
+        title: t("dialog.deleteTitle"),
+        message: t("common.confirmDelete"),
+        danger: true,
+      }))
+    )
+      return;
+    api.deleteAuditEntry(id).then(reload);
+  };
+
   useEffect(() => {
     reload();
     loadDiag();
@@ -37,81 +70,104 @@ export default function AuditPage() {
     return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
   };
   const fmtBytes = (b) =>
-    b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : b >= 1024 ? `${(b / 1024).toFixed(1)} KB` : `${b} B`;
+    b >= 1048576
+      ? `${(b / 1048576).toFixed(1)} MB`
+      : b >= 1024
+        ? `${(b / 1024).toFixed(1)} KB`
+        : `${b} B`;
 
   const shown = entries.filter(
     (e) =>
       !filter ||
-      `${e.actor} ${e.action} ${e.target}`.toLowerCase().includes(filter.toLowerCase())
+      `${e.actor} ${e.action} ${e.target}`
+        .toLowerCase()
+        .includes(filter.toLowerCase()),
   );
 
+  // 诊断条：折叠时也能一眼看到的关键数字（体积/会话/工具/守护/远程），展开才给全量明细
+  const dataBytes = (diag?.files || []).reduce((a, f) => a + (f.bytes || 0), 0);
+  const strip = diag
+    ? [
+        [t("diag.uptime"), fmtUptime(diag.uptime_secs)],
+        [
+          t("diag.sessions"),
+          `${diag.sessions?.count ?? 0} / ${diag.sessions?.messages ?? 0}`,
+        ],
+        [
+          t("diag.tools"),
+          `${diag.tools?.enabled ?? 0} / ${diag.tools?.total ?? 0}`,
+        ],
+        [t("diag.files"), fmtBytes(dataBytes)],
+        [
+          t("diag.guardian"),
+          diag.guardian?.armed ? t("diag.on") : t("diag.off"),
+        ],
+        [
+          t("diag.remote"),
+          diag.remote?.enabled
+            ? `${t("diag.on")} :${diag.remote.port}`
+            : t("diag.off"),
+        ],
+      ]
+    : [];
+
   return (
-    <div className="flex h-full flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">{t("audit.title")}</h2>
-          <p className="text-xs text-neutral-500">
-            {t("audit.subtitle")}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => api.clearAudit().then(reload)}
-            className="pill pill-outline pill-hover"
-          >
-            <IconTrash size={14} />
-            {t("audit.clear")}
-          </button>
-          <button onClick={reload} className="pill pill-outline pill-hover">
-            <IconRefresh size={14} />
-            {t("common.refresh")}
-          </button>
-        </div>
+    <div className="page-wide h-full overflow-y-auto">
+      <div className="page-head shrink-0">
+        <h2>{t("nav.system")}</h2>
+        <p className="page-sub">{t("system.subtitle")}</p>
       </div>
 
-      <input
-        className="field"
-        placeholder={t("audit.filterPlaceholder")}
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-      />
+      {/* 系统状态：版本 / 更新 / 自动更新开关 / 安卓版（原「关于」悬浮弹窗） */}
+      <SystemPanel />
 
-      {/* 诊断报告：默认折叠，展开查看版本/守护/数据文件/崩溃记录/低成功率工具 */}
+      {/* 诊断：标题行自带关键数字，展开补全平台/提权/数据目录/文件/低成功率工具/崩溃 */}
       <div className="card shrink-0 p-0">
         <button
           onClick={() => setDiagOpen((v) => !v)}
-          className="flex w-full items-center justify-between px-4 py-3"
+          className="flex w-full items-center gap-2 px-3 py-2 text-left"
         >
-          <span className="flex items-center gap-2 text-sm font-semibold">
-            <span
-              className={`inline-block text-[10px] transition-transform ${diagOpen ? "rotate-90" : ""}`}
-            >
-              ▶
-            </span>
+          <span
+            className={`inline-block text-[10px] transition-transform ${diagOpen ? "rotate-90" : ""}`}
+          >
+            ▶
+          </span>
+          <span className="shrink-0 text-sm font-semibold">
             {t("diag.title")}
           </span>
-          {diag && (
-            <span className="text-xs text-neutral-400">
-              {diag.version} · {diag.platform}
-              {diag.crashes?.length > 0 && (
-                <span className="ml-2 text-red-500 dark:text-red-400">
-                  {diag.crashes.length} {t("diag.crashBadge")}
+          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-neutral-400">
+            {strip.map(([k, v]) => (
+              <span key={k} className="whitespace-nowrap">
+                {k}
+                <span className="ml-1 font-medium text-neutral-600 dark:text-neutral-300">
+                  {v}
                 </span>
-              )}
+              </span>
+            ))}
+            {!diag && <span>{t("diag.loading")}</span>}
+          </span>
+          {diag?.crashes?.length > 0 && (
+            <span className="shrink-0 text-[11px] font-medium text-red-500 dark:text-red-400">
+              {diag.crashes.length} {t("diag.crashBadge")}
             </span>
           )}
         </button>
         {diagOpen && (
-          <div className="border-t border-neutral-200/70 p-4 text-xs dark:border-neutral-800/70">
+          <div className="border-t border-neutral-200/70 px-3 py-2.5 text-xs dark:border-neutral-800/70">
             {!diag ? (
-              <p className="py-4 text-center text-neutral-400">{t("diag.loading")}</p>
+              <p className="py-2 text-center text-neutral-400">
+                {t("diag.loading")}
+              </p>
             ) : (
-              <div className="flex flex-col gap-3">
-                <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 md:grid-cols-3">
+              <div className="flex flex-col gap-2.5">
+                <div className="grid grid-cols-2 gap-x-5 gap-y-1 sm:grid-cols-3 lg:grid-cols-4">
                   {[
                     [t("diag.version"), diag.version],
                     [t("diag.platform"), diag.platform],
-                    [t("diag.elevated"), diag.elevated ? t("diag.yes") : t("diag.no")],
+                    [
+                      t("diag.elevated"),
+                      diag.elevated ? t("diag.yes") : t("diag.no"),
+                    ],
                     [t("diag.uptime"), fmtUptime(diag.uptime_secs)],
                     [
                       t("diag.remote"),
@@ -132,35 +188,57 @@ export default function AuditPage() {
                       diag.guardian?.armed ? t("diag.on") : t("diag.off"),
                     ],
                   ].map(([k, v]) => (
-                    <div key={k} className="flex min-w-0 items-baseline gap-2">
+                    <div
+                      key={k}
+                      className="flex min-w-0 items-baseline gap-1.5"
+                    >
                       <span className="shrink-0 text-neutral-500">{k}</span>
                       <span className="truncate font-medium">{v}</span>
                     </div>
                   ))}
                 </div>
 
-                <div>
-                  <p className="mb-1 font-medium text-neutral-500">{t("diag.dataDir")}</p>
-                  <p className="truncate font-mono text-neutral-400">{diag.data_dir}</p>
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <p className="font-medium text-neutral-500">
+                    {t("diag.dataDir")}
+                  </p>
+                  <p
+                    className="truncate font-mono text-[11px] text-neutral-400"
+                    title={diag.data_dir}
+                  >
+                    {diag.data_dir}
+                  </p>
                 </div>
 
                 <div>
-                  <p className="mb-1 font-medium text-neutral-500">{t("diag.files")}</p>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+                  <p className="mb-1 font-medium text-neutral-500">
+                    {t("diag.files")}
+                    <span className="ml-1 font-normal text-neutral-400">
+                      {fmtBytes(dataBytes)}
+                    </span>
+                  </p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-3">
                     {(diag.files || []).map((f) => {
                       const missing = !f.exists;
                       const optional = !!f.optional;
                       return (
-                        <div key={f.name} className="flex items-baseline justify-between gap-2">
-                          <span className="truncate font-mono">
+                        <div
+                          key={f.name}
+                          className="flex items-baseline justify-between gap-2"
+                        >
+                          <span className="truncate font-mono text-[11px]">
                             {f.name}
-                            {optional && <span className="ml-1 text-xs text-neutral-400">·可选</span>}
+                            {optional && (
+                              <span className="ml-1 text-[10px] text-neutral-400">
+                                {t("common.optional")}
+                              </span>
+                            )}
                           </span>
                           <span
                             className={
                               missing
                                 ? optional
-                                  ? "shrink-0 text-neutral-400"  // 可选文件缺失 = 正常
+                                  ? "shrink-0 text-neutral-400" // 可选文件缺失 = 正常
                                   : "shrink-0 text-amber-600 dark:text-amber-400"
                                 : "shrink-0 text-neutral-400"
                             }
@@ -179,8 +257,10 @@ export default function AuditPage() {
 
                 {(diag.worst_tools || []).length > 0 && (
                   <div>
-                    <p className="mb-1 font-medium text-neutral-500">{t("diag.worstTools")}</p>
-                    <div className="flex flex-col gap-1">
+                    <p className="mb-1 font-medium text-neutral-500">
+                      {t("diag.worstTools")}
+                    </p>
+                    <div className="flex flex-col gap-0.5">
                       {diag.worst_tools.map((w) => (
                         <div
                           key={w.id}
@@ -196,8 +276,8 @@ export default function AuditPage() {
                             }
                           >
                             {t("tools.successRate")}{" "}
-                            {Math.round((w.recent_rate ?? 0) * 100)}% ·{" "}
-                            {w.fail}/{w.total} {t("diag.failOf")}
+                            {Math.round((w.recent_rate ?? 0) * 100)}% · {w.fail}
+                            /{w.total} {t("diag.failOf")}
                           </span>
                         </div>
                       ))}
@@ -206,15 +286,17 @@ export default function AuditPage() {
                 )}
 
                 <div>
-                  <p className="mb-1 font-medium text-neutral-500">{t("diag.crashes")}</p>
+                  <p className="mb-1 font-medium text-neutral-500">
+                    {t("diag.crashes")}
+                  </p>
                   {(diag.crashes || []).length === 0 ? (
                     <p className="text-neutral-400">{t("diag.noCrashes")}</p>
                   ) : (
-                    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-xl bg-neutral-100 p-3 font-mono leading-relaxed dark:bg-neutral-800/60">
+                    <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-2xl bg-neutral-100 p-2.5 font-mono leading-relaxed dark:bg-neutral-800/60">
                       {diag.crashes
                         .map(
                           (c) =>
-                            `${c.time} [${c.thread}] ${c.msg}\n  ${c.loc || "?"}`
+                            `${c.time} [${c.thread}] ${c.msg}\n  ${c.loc || "?"}`,
                         )
                         .join("\n")}
                     </pre>
@@ -226,16 +308,49 @@ export default function AuditPage() {
         )}
       </div>
 
-      <div className="card flex-1 overflow-y-auto p-0">
+      {/* 审计日志小节：标题 / 条数 / 过滤 / 刷新 / 清空 收进同一行 */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <h3 className="shrink-0 text-sm font-semibold">{t("audit.title")}</h3>
+        <span className="shrink-0 text-[11px] text-neutral-400">
+          {t("audit.count", { n: shown.length, total: entries.length })}
+        </span>
+        <SearchBox
+          className="min-w-0 max-w-[22rem] flex-1"
+          value={filter}
+          onChange={setFilter}
+          placeholder={t("audit.filterPlaceholder")}
+          right={
+            <>
+              <button onClick={reload} title={t("common.refresh")} className="icon-btn shrink-0">
+                <IconRefresh size={14} />
+              </button>
+              <button onClick={clearAll} title={t("audit.clear")} className="icon-btn shrink-0 hover:text-red-500">
+                <IconTrash size={14} />
+              </button>
+            </>
+          }
+        />
+      </div>
+
+      {/* 表格卡自己滚动：整页不再被 2000 条记录撑到九千多像素 */}
+      <div className="card min-h-[10rem] flex-1 overflow-y-auto p-0">
         <table className="w-full text-left text-xs">
-          <thead className="sticky top-0 border-b border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+          <thead className="sticky top-0 z-10 border-b border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
             <tr className="text-neutral-500">
-              <th className="px-4 py-3 font-medium">{t("audit.time")}</th>
-              <th className="px-4 py-3 font-medium">{t("audit.actor")}</th>
-              <th className="px-4 py-3 font-medium">{t("audit.action")}</th>
-              <th className="px-4 py-3 font-medium">{t("audit.target")}</th>
-              <th className="px-4 py-3 font-medium">{t("audit.detail")}</th>
-              <th className="px-4 py-3 font-medium">{t("audit.result")}</th>
+              <th className="whitespace-nowrap px-3 py-2 font-medium">
+                {t("audit.time")}
+              </th>
+              <th className="whitespace-nowrap px-3 py-2 font-medium">
+                {t("audit.actor")}
+              </th>
+              <th className="whitespace-nowrap px-3 py-2 font-medium">
+                {t("audit.action")}
+              </th>
+              <th className="px-3 py-2 font-medium">{t("audit.target")}</th>
+              <th className="px-3 py-2 font-medium">{t("audit.detail")}</th>
+              <th className="px-3 py-2 text-right font-medium">
+                {t("audit.result")}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -243,28 +358,25 @@ export default function AuditPage() {
               <tr
                 key={e.id}
                 onClick={() => setDetail(e)}
+                title={t("audit.rowHint")}
                 className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800/60 dark:hover:bg-neutral-800/60"
               >
-                <td className="whitespace-nowrap px-4 py-2.5 text-neutral-400">{e.ts}</td>
-                <td className="whitespace-nowrap px-4 py-2.5">{e.actor}</td>
-                <td className="whitespace-nowrap px-4 py-2.5 font-medium">{e.action}</td>
-                <td className="max-w-40 truncate px-4 py-2.5">{e.target}</td>
-                <td className="max-w-64 truncate px-4 py-2.5 font-mono text-neutral-500">
+                <td className="whitespace-nowrap px-3 py-1.5 text-neutral-400">
+                  {e.ts}
+                </td>
+                <td className="whitespace-nowrap px-3 py-1.5">{e.actor}</td>
+                <td className="whitespace-nowrap px-3 py-1.5 font-medium">
+                  {e.action}
+                </td>
+                <td className="max-w-40 truncate px-3 py-1.5">{e.target}</td>
+                <td className="max-w-64 truncate px-3 py-1.5 font-mono text-neutral-500">
                   {JSON.stringify(e.detail)}
                 </td>
-                <td className="px-4 py-2.5">
-                  <div className="flex items-center justify-end gap-2 pr-1">
-                    <span className={`inline-block h-2 w-2 rounded-full ${e.ok ? "bg-neutral-900" : "bg-red-500"}`} />
-                    <button
-                      onClick={(ev) => {
-                        ev.stopPropagation();
-                        api.deleteAuditEntry(e.id).then(reload);
-                      }}
-                      title={t("audit.delete")}
-                      className="text-neutral-300 transition-colors hover:text-red-500"
-                    >
-                      <IconTrash size={13} />
-                    </button>
+                <td className="px-3 py-1.5">
+                  <div className="flex items-center justify-end">
+                    <span
+                      className={`inline-block h-2 w-2 rounded-full ${e.ok ? "bg-neutral-900 dark:bg-white" : "bg-red-500"}`}
+                    />
                   </div>
                 </td>
               </tr>
@@ -272,14 +384,14 @@ export default function AuditPage() {
           </tbody>
         </table>
         {shown.length === 0 && (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-neutral-400">
+          <div className="m-3 flex items-center justify-center gap-2 rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
             <IconAudit size={16} />
             {t("audit.empty")}
           </div>
         )}
       </div>
 
-      {/* 详情弹层：完整字段 + 格式化 JSON，点遮罩关闭 */}
+      {/* 详情弹层：完整字段 + 格式化 JSON + 删除这一条，点遮罩关闭 */}
       {detail && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
@@ -287,15 +399,15 @@ export default function AuditPage() {
         >
           <div
             onClick={(ev) => ev.stopPropagation()}
-            className="card max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-5"
+            className="card anim-pop max-h-[80vh] w-full max-w-2xl overflow-y-auto"
           >
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h3 className="min-w-0 truncate text-sm font-semibold">
                 {detail.action} · {detail.target}
               </h3>
               <button
                 onClick={() => setDetail(null)}
-                className="pill pill-outline pill-hover px-3 py-1 text-xs"
+                className="pill pill-outline pill-hover shrink-0 px-3 py-1 text-xs"
               >
                 {t("common.close")}
               </button>
@@ -310,12 +422,26 @@ export default function AuditPage() {
                 <span
                   className={`inline-block h-2 w-2 rounded-full ${detail.ok ? "bg-neutral-900 dark:bg-white" : "bg-red-500"}`}
                 />
-                <span className="ml-1.5">{detail.ok ? t("toolcard.success") : t("toolcard.fail")}</span>
+                <span className="ml-1.5">
+                  {detail.ok ? t("toolcard.success") : t("toolcard.fail")}
+                </span>
               </div>
             </div>
-            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-neutral-100 p-3 font-mono text-[11px] leading-relaxed dark:bg-neutral-800">
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-neutral-100 p-3 font-mono text-[11px] leading-relaxed dark:bg-neutral-800">
               {JSON.stringify(detail.detail, null, 2)}
             </pre>
+            <div className="mt-3 flex justify-end border-t border-neutral-200/70 pt-2 dark:border-neutral-800/70">
+              <button
+                onClick={() => {
+                  setDetail(null);
+                  removeOne(detail.id);
+                }}
+                className="pill-outline pill-hover inline-flex items-center gap-1.5 px-3 py-1 text-xs hover:text-red-500"
+              >
+                <IconTrash size={13} />
+                {t("audit.delete")}
+              </button>
+            </div>
           </div>
         </div>
       )}

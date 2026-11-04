@@ -1,0 +1,7 @@
+{
+  "name": "闸门夹具·坏周期",
+  "version": "0.0.1",
+  "description": "every 0m 解析不出周期，任务文法必须在清单校验阶段就拦住",
+  "permissions": ["page"],
+  "jobs": [{ "name": "zero", "schedule": "every 0m", "runtime": "node", "code": "1" }]
+}

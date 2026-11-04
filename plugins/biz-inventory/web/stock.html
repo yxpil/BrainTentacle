@@ -1,0 +1,93 @@
+<!doctype html>
+<!-- 库存盘点页：把实盘数字存进插件数据目录，设置中心那两个键在这里也读得到。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>库存盘点</title>
+    <style>
+      :root { --bg:#fafafa; --fg:#171717; --muted:#6b7280; --line:#e5e5e5; --card:#fff; --accent:#0d9488; }
+      @media (prefers-color-scheme: dark){ :root{ --bg:#171717; --fg:#f5f5f5; --muted:#a3a3a3; --line:#333; --card:#1f1f1f; --accent:#2dd4bf; } }
+      * { box-sizing: border-box; }
+      body { margin:0; padding:18px; background:var(--bg); color:var(--fg); font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+      h1 { margin:0 0 2px; font-size:16px; }
+      h2 { margin:0 0 8px; font-size:13px; }
+      .sub { color:var(--muted); margin-bottom:14px; }
+      .row { display:flex; gap:8px; flex-wrap:wrap; }
+      .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+      textarea { width:100%; min-height:110px; padding:8px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--fg); font:12px/1.5 ui-monospace,Consolas,monospace; }
+      button { margin-top:8px; padding:6px 12px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; font:inherit; }
+      table { width:100%; border-collapse:collapse; }
+      td,th { padding:4px 6px; border-bottom:1px solid var(--line); text-align:left; font-size:12px; }
+      .num { text-align:right; font-variant-numeric:tabular-nums; }
+      .bad { color:#dc2626; }
+    </style>
+  </head>
+  <body>
+    <h1>库存盘点</h1>
+    <div class="sub" id="who">正在握手…</div>
+    <div class="card">
+      <h2>录入实盘（每行一条：SKU, 数量）</h2>
+      <textarea id="raw">K-01, 118
+K-02, 45
+K-07, 294
+P-11, 6
+P-19, 64</textarea>
+      <button id="save">存进我的数据目录</button>
+      <div class="sub" id="msg"></div>
+    </div>
+    <div class="card">
+      <h2>与系统库存的差异</h2>
+      <table><thead><tr><th>SKU</th><th class="num">系统</th><th class="num">实盘</th><th class="num">差</th></tr></thead><tbody id="rows"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>设置中心那两个键</h2>
+      <div class="sub" id="cfg">—</div>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const FILE = "counted.json";
+      const SYSTEM = { "K-01": 120, "K-02": 45, "K-07": 300, "P-11": 8, "P-19": 64 };
+
+      function parse() {
+        return $("raw").value.split(/\r?\n/).filter((l) => l.trim()).map((l) => {
+          const [sku, qty] = l.split(/[,，]/).map((s) => (s || "").trim());
+          return { sku, qty: Number(qty) || 0 };
+        });
+      }
+
+      function render(rows) {
+        $("rows").innerHTML = "";
+        for (const r of rows) {
+          const sys = SYSTEM[r.sku];
+          const diff = sys === undefined ? null : sys - r.qty;
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${r.sku}</td><td class="num">${sys ?? "—"}</td><td class="num">${r.qty}</td><td class="num${diff && diff !== 0 ? " bad" : ""}">${diff ?? "—"}</td>`;
+          $("rows").appendChild(tr);
+        }
+      }
+
+      async function boot() {
+        const info = await Bit.ready();
+        $("who").textContent = info ? `${info.plugin_name}：本页只写自己的数据目录，不碰插件包文件` : "握手尚未完成";
+        const rows = parse();
+        render(rows);
+        const [lead, safety] = await Promise.all([Bit.settings.get("reorder_lead_days"), Bit.settings.get("safety_factor")]);
+        $("cfg").textContent = `reorder_lead_days = ${lead ?? "（未设置）"} · safety_factor = ${safety ?? "（未设置）"}`;
+        try {
+          const saved = JSON.parse((await Bit.data.read(FILE)) || "[]");
+          if (saved.length) { render(saved); $("msg").textContent = `已载入上次保存的 ${saved.length} 条实盘`; }
+        } catch { /* 首次使用还没有文件 */ }
+      }
+
+      $("save").addEventListener("click", async () => {
+        const rows = parse();
+        await Bit.data.write(FILE, JSON.stringify(rows, null, 2));
+        $("msg").textContent = `已保存 ${rows.length} 条`;
+        render(rows);
+      });
+
+      boot().catch((e) => ($("who").textContent = "握手失败：" + (e.message || e)));
+    </script>
+  </body>
+</html>

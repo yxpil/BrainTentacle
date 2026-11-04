@@ -1,0 +1,9 @@
+{
+  "name": "闸门夹具·MCP 取值非法",
+  "version": "0.0.1",
+  "description": "mcp_mode 只认 http / stdio，写成 grpc 必须在清单阶段就拒绝",
+  "permissions": ["workwith"],
+  "services": [
+    { "name": "m", "runtime": "node", "program": "svc/m.js", "mcp_mode": "grpc", "port": 0 }
+  ]
+}

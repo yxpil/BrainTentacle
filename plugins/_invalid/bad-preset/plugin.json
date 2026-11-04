@@ -1,0 +1,6 @@
+{
+  "name": "坏预设",
+  "version": "1.0.0",
+  "description": "拒收夹具：preset 写了不存在的组合名",
+  "preset": "magic"
+}

@@ -17,14 +17,38 @@ directories:
 files:
   - dist/**
   - electron/**
+  - dsh-bridge/**
+  - voice-bridge/**
   - package.json
   - "!**/*.map"
   - "!node_modules/**"
+  # 依赖自带的测试与示例：files 一旦被自定义，electron-builder 默认的 node_modules
+  # 清理规则就不再套用，dsh-bridge/node_modules 里 zod / MCP SDK / fast-uri 等自带的
+  # test/、examples/、*.test.js 会原样进包（实测 464 个文件、2.6 MB，运行期没人 require）。
+  # 只按「测试形状」清，LICENSE/README 保留 —— MIT 许可要求随包带上许可证文本。
+  - "!**/node_modules/**/{test,tests,__tests__,example,examples,spec,fixture,fixtures}/**"
+  - "!**/node_modules/**/*.{test,spec}.{js,mjs,cjs,ts}"
 extraResources:
   - from: packaging/native
     to: .
 asar: true
+# dsh-bridge / voice-bridge 保持磁盘真实文件（不进 asar）：作为 stdio MCP server 与
+# 语音识别子进程时由 Electron 二进制以 ELECTRON_RUN_AS_NODE=1 直接执行脚本路径，
+# 对应 Rust find_bridge_script / find_worker_script 的
+# resources/app.asar.unpacked/{dsh-bridge/dsh-mcp.mjs, voice-bridge/voice-worker.mjs}。
+# 本地合成内核（sherpa-onnx-offline-tts CLI）不再随包分发：跨平台单架构二进制打包时
+# 无法通用，改由 Rust tts::ensure_cli 按 assets.json 的 tts_bin 分区在首启下载时装到
+# 数据目录 tts/cli/<os-arch>/，与各引擎模型同一条下载链路。
+asarUnpack:
+  - dsh-bridge/**
+  - voice-bridge/**
 compression: maximum
+# 打包前：按目标平台/架构补齐 voice-bridge 的 sherpa-onnx-<os>-<arch> 原生包。
+# npm 只会装「构建机」那一份，跨架构出包（macos-14 runner 出 x64 包等）会漏掉目标架构，
+# 用户端识别以「Could not find sherpa-onnx-node」失败——钩子负责补装并校验落位。
+beforePack: scripts/before-pack.cjs
+# 打包收尾：删除 Electron 自带 default_app（防止 BIT.exe 回退成裸 Chromium 浏览器）
+afterPack: scripts/after-pack.cjs
 
 win:
   icon: src-tauri/icons/icon.ico

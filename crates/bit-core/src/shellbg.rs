@@ -557,7 +557,7 @@ mod amp_tests {
 /// 进程树终止：shell 壳（pwsh/cmd）被杀后，它启动的孙进程会变成孤儿继续运行，
 /// 既占资源又握着 stdout 管道写端，卡住收尾任务。start_kill 只杀直接子进程，
 /// 这里 Windows 用 taskkill /T（整棵树）/F（强制），其他平台逐个杀子进程树尽力而为。
-fn tree_kill(child: &mut tokio::process::Child) {
+pub(crate) fn tree_kill(child: &mut tokio::process::Child) {
     if let Some(pid) = child.id() {
         #[cfg(target_os = "windows")]
         {

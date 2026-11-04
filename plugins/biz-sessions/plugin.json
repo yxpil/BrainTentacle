@@ -1,0 +1,17 @@
+{
+  "name": "工单收件箱",
+  "version": "1.1.0",
+  "description": "会话能力正例：工单写进 plugin:biz-sessions 命名空间，带拼图图标进左侧列表，还能唤醒",
+  "bridge": { "token": "required" },
+  "permissions": ["page", "session", "chat", "data", "notify", "events"],
+  "pages": [
+    {
+      "id": "tickets",
+      "label": "工单收件箱",
+      "src": "web/tickets.html",
+      "paths": ["M4 6 H20 V18 H4 Z", "M4 6 L12 12 L20 6"]
+    }
+  ],
+  "skills": [{ "name": "工单分级", "summary": "P1 立刻唤醒、P2 当日内、P3 进周清单" }],
+  "memories": ["工单一律写进本插件的会话命名空间，标题用「工单 P? - 摘要」。"]
+}

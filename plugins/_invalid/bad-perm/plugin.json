@@ -1,0 +1,6 @@
+{
+  "name": "闸门夹具·未知权限",
+  "version": "0.0.1",
+  "description": "申报了一个不存在的权限位，scan 阶段就应当整体拒收",
+  "permissions": ["page", "root"]
+}
