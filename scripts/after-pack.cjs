@@ -20,10 +20,20 @@ exports.default = async function afterPack(context) {
   checkPackContents(resourcesDir);
 };
 
-// mac 的 --mac --dir 产物是 BIT.app/Contents/Resources，win/linux 是 <out>/resources
+// mac 的 --dir 出包时 electron-builder 传的 appOutDir 是 .app 的父目录
+// （release/mac），真身是 <productName>.app/Contents/Resources（universal 同理：
+// 两架构先各自打进 <appOutDir>-<arch>-temp，合并回父目录下的 BIT.app）。
+// win/linux 是 <out>/resources，直接拼。
 function findResourcesDir(appOutDir) {
-  const mac = path.join(appOutDir, 'Contents', 'Resources');
-  if (fs.existsSync(mac)) return mac;
+  const direct = path.join(appOutDir, 'Contents', 'Resources');
+  if (fs.existsSync(direct)) return direct;
+  let entries = [];
+  try { entries = fs.readdirSync(appOutDir); } catch {}
+  for (const name of entries) {
+    if (!name.endsWith('.app')) continue;
+    const r = path.join(appOutDir, name, 'Contents', 'Resources');
+    if (fs.existsSync(r)) return r;
+  }
   return path.join(appOutDir, 'resources');
 }
 
@@ -34,6 +44,9 @@ function checkPackContents(resourcesDir) {
   const files = [];
   if (fs.existsSync(asarPath)) files.push(...listAsar(asarPath));
   if (fs.existsSync(unpacked)) files.push(...walk(unpacked, resourcesDir, []));
+  if (files.length === 0) {
+    throw new Error(`[afterPack] 找不到产物条目：${resourcesDir} 下既无 app.asar 也无 app.asar.unpacked（resources 定位可能错了）`);
+  }
   let packed = null;
   try {
     packed = JSON.parse(require('@electron/asar').extractFile(asarPath, 'package.json').toString('utf8'));
