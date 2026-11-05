@@ -36,3 +36,21 @@ npx --yes wrangler@3 pages deploy . --project-name=osbt-space --branch=main --co
 预览可用 `--branch=<任意分支名>`，会得到 `https://<项目>.<分支>.pages.dev` 而不动生产。
 
 改动上线后请复验：`/`、`/privacy`、`/docs`、`/latest.json`、`/dl/v<版本>/<任意资产>`（HEAD 与 Range）。
+
+## R2 加速层（可选）
+
+`functions/dl/[[path]].js` 是双路径的：
+
+- **配了 R2 绑定 `DL_BUCKET`**：先读桶，命中直接吐字节，不碰 GitHub；
+- **未配或未命中**：照旧从 GitHub Releases 转发，同时后台把整包灌进桶（写完核对大小，不符即删）。
+
+启用步骤（账户需先在 Dashboard 里开通 R2，API 无法代开）：
+
+1. Cloudflare Dashboard → R2 → 首次进入时确认开通（免费额度 10GB 存储，需绑定支付方式）；
+2. 建桶 `osbt-dl`；
+3. Pages 项目 `osbt-space` → Settings → Functions → R2 bucket bindings，
+   变量名 **`DL_BUCKET`**，桶选 `osbt-dl`，环境 Production（要预览也生效就两个环境都加）；
+4. 无需重新部署函数代码，绑定生效后新请求自动走 R2。
+
+验证：`curl -I https://osbt.space/dl/v0.7.6/BIT_0.7.6_x64.dmg`，响应头出现 `x-dl-source: r2` 即命中。
+
