@@ -306,6 +306,46 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
 .foot-links a:hover{text-decoration:underline;text-underline-offset:3px}
 .foot-line{margin-top:18px;font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.02em}
 
+
+/* ── 小屏手机 (<=480px) ── */
+@media (max-width:480px){
+  .wrap{padding:0 14px}
+  .nav-inner{padding:0 14px;height:54px;gap:10px}
+  .brand-tag{display:none}
+  .brand-name{font-size:14px}
+  .nav-right{gap:6px}
+  .btn.sm{padding:8px 11px;font-size:12.5px}
+  .btn.ghost.sm:has(.ico) span{display:none}
+  .hero{padding:36px 0 30px}
+  h1{font-size:30px;max-width:100%;line-height:1.08}
+  .hero-lead{font-size:14.5px;margin-top:16px;line-height:1.7}
+  .hero-cta{margin-top:20px;gap:8px}
+  .hero-cta .btn{padding:11px 15px;font-size:13.5px}
+  .hero-note{font-size:12px}
+  .spec{margin-top:24px}
+  .spec div{padding:9px 10px}
+  .spec dd{font-size:13px}
+  .sec{padding:40px 0}
+  .sec-head{margin-bottom:24px}
+  .lead{font-size:14.5px}
+  .step{gap:10px}
+  .step-no{width:34px;height:34px;font-size:10.5px}
+  .step-body h3{font-size:15px}
+  .step-body p{font-size:14px}
+  .flow{padding:14px 12px}
+  .flow svg{min-width:340px}
+  .dl{padding:20px 14px}
+  .tab{padding:7px 11px;font-size:12.5px}
+  .asset{padding:11px 0}
+  .asset-name{font-size:12px}
+  .cmd-head{flex-wrap:wrap}
+  .code{padding:10px 10px 10px 12px;gap:8px}
+  .code pre{font-size:11.5px}
+  .faq summary{padding:13px 0;font-size:14.5px}
+  .faq .a{font-size:14px}
+  .foot{padding:32px 0 40px}
+}
+
 /* 宽屏 */
 @media (min-width:720px){
   .wrap,.nav-inner{padding:0 28px}
