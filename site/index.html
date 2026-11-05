@@ -173,6 +173,26 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
   padding:1px 5px;border-radius:2px;color:var(--ink);
 }
 
+/* 插件生态 */
+.plug-list{display:grid;gap:0;border-top:1px solid var(--rule)}
+.plug-item{display:grid;gap:3px;padding:14px 0;border-bottom:1px solid var(--rule-soft);min-width:0}
+.plug-item dt{font-size:14.5px;font-weight:650;letter-spacing:-.01em;display:flex;flex-wrap:wrap;align-items:baseline;gap:9px}
+.plug-item dt .f{font-family:var(--mono);font-size:11.5px;font-weight:400;color:var(--muted);letter-spacing:0}
+.plug-item dd{margin:0;font-size:14px;color:var(--muted);line-height:1.7}
+.paths{display:grid;gap:6px;margin:10px 0 0}
+.path-row{display:flex;gap:10px;align-items:baseline;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);min-width:0}
+.path-row span.os{color:var(--muted);flex:none;width:64px}
+.path-row code{word-break:break-all}
+.plugs{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.chip{
+  display:inline-flex;align-items:baseline;gap:7px;background:#fff;
+  border:1px solid var(--rule);border-radius:3px;padding:6px 10px;
+  font-size:12.5px;color:var(--ink-2);text-decoration:none;
+}
+.chip:hover{border-color:var(--ink);color:var(--ink)}
+.chip b{font-weight:600;color:inherit}
+.chip em{font-style:normal;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+
 /* 安全 */
 .safe-grid{display:grid;gap:28px}
 .flow{
@@ -326,6 +346,7 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
     <nav class="navlinks" aria-label="主导航">
       <a href="#caps">能力</a>
       <a href="#extend">扩展</a>
+      <a href="#plugins">插件</a>
       <a href="#safety">安全</a>
       <a href="#download">下载</a>
       <a href="#channels">安装渠道</a>
@@ -452,6 +473,175 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
         </div>
       </div>
     </div>
+  </div>
+</section>
+
+<section class="sec" id="plugins">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>插件生态：一个文件夹，就是一项新能力</h2>
+      <p class="lead">不用打包、不用编译、不用碰宿主代码。在插件目录里放一个 <code class="k">plugin.json</code>，工具、提示词、技能、记忆、定时任务、常驻服务和独立页面就同时交到 AI 手里；改完点一次「重扫插件」即刻生效。插件是本地声明式文件——没下载就不会被执行。</p>
+    </div>
+
+    <dl class="plug-list">
+      <div class="plug-item">
+        <dt>工具<span class="f">tools[]</span></dt>
+        <dd>声明一件 AI 能调用的工具：参数用 JSON Schema 描述，脚本从 stdin 读参数、把结果打到 stdout。跑本机解释器（Python / Node / PowerShell / Perl / Julia…），或走内置 Rhai 沙盒。每件工具都带成功率与平均耗时。</dd>
+      </div>
+      <div class="plug-item">
+        <dt>提示词<span class="f">prompts[]</span></dt>
+        <dd>启用即追加到系统提示词。把「这个项目用 pnpm 不用 npm」「回答先给结论」这类规矩写进插件，换台机器装同一个插件，AI 的做事方式跟着走。</dd>
+      </div>
+      <div class="plug-item">
+        <dt>技能<span class="f">skills[]</span></dt>
+        <dd>注入可复用流程（名字 + 摘要），与 AI 自己提炼的技能同构。适合把一套排查步骤、一类文档的写法固化成插件的一部分。</dd>
+      </div>
+      <div class="plug-item">
+        <dt>记忆<span class="f">memories[]</span></dt>
+        <dd>作为长期事实注入：本机默认工作目录、内网域名、团队口径，装好就在，不必每次重新交代。</dd>
+      </div>
+      <div class="plug-item">
+        <dt>定时任务<span class="f">jobs[]</span></dt>
+        <dd><code>every 30m</code> / <code>daily 09:00</code> 这类频率，脚本定期跑；结果可以注入指定会话让 AI 接着处理，也可以只记审计日志。</dd>
+      </div>
+      <div class="plug-item">
+        <dt>常驻服务<span class="f">services[]</span></dt>
+        <dd>最多 16 条：插件自带一个进程，端口由宿主分配（写 <code>0</code> 即自动，经 <code>BIT_PLUGIN_PORT</code> 下发），日志与退出统一托管；<code>mcp_mode</code> 选 <code>http</code> 时端口就绪后自动接成 MCP 服务器，选 <code>stdio</code> 则进程本身即 MCP。</dd>
+      </div>
+      <div class="plug-item">
+        <dt>页面<span class="f">pages[] · status_page</span></dt>
+        <dd>在左栏注册独立页面（沙箱 iframe，静态 <code>src</code> 或动态 <code>url</code> 二选一），还能给插件详情配一块实时状态面板——看板、指标、健康检查都放得下。</dd>
+      </div>
+      <div class="plug-item">
+        <dt>对话页入口<span class="f">chat_icons[] · takeover[]</span></dt>
+        <dd>最多 4 个图标入口：点了跳本插件页面，或把一段提示词填进输入框。要更彻底就声明接管内置按钮（语音 / 预览 / 附件 / 计划 / 模板 / 网页 / 后台任务），用插件自己的入口顶上；设置入口永不参与接管，随时可一键恢复内置。</dd>
+      </div>
+      <div class="plug-item">
+        <dt>权限申报<span class="f">permissions[] · bridge</span></dt>
+        <dd>每一项能力都要明示申报，没申报的调用直接被拒。设置中心把权限逐项列出、逐项开关，<code>exec</code>（执行命令）与 <code>write</code>（改任意文件）标为高风险。要对外开接口（自带服务器 / 页面 / 设置页）必须写 <code>bridge</code>，令牌每次启动现发，不随插件包分发。</dd>
+      </div>
+    </dl>
+
+    <div class="sec-head" style="margin:42px 0 18px">
+      <h3 style="margin:0;font-size:19px;letter-spacing:-.02em">三步接入</h3>
+    </div>
+
+    <div class="ladder">
+      <div class="step">
+        <span class="step-no" aria-hidden="true">01</span>
+        <div class="step-body">
+          <h3>找到插件目录</h3>
+          <p>固定在数据目录下的 <code>toolhomes/plugins/</code>。装了 BIT 的话，「工具」页 →「本地插件」区块会直接显示完整路径，点一下就能复制。</p>
+          <div class="paths">
+            <div class="path-row"><span class="os">Windows</span><code>%APPDATA%\com.bit.hub\toolhomes\plugins\</code></div>
+            <div class="path-row"><span class="os">macOS</span><code>~/Library/Application Support/com.bit.hub/toolhomes/plugins/</code></div>
+            <div class="path-row"><span class="os">Linux</span><code>${XDG_DATA_HOME:-~/.local/share}/com.bit.hub/toolhomes/plugins/</code></div>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-no" aria-hidden="true">02</span>
+        <div class="step-body">
+          <h3>放一个文件夹进去</h3>
+          <p>目录名就是插件 id，层级必须是 <code>plugins/&lt;插件名&gt;/plugin.json</code>，不能多层嵌套。现成的插件包解压到这里即可；自己写的就在目录里放一个 <code>plugin.json</code>——它是唯一的清单文件，脚本、页面、设置都写在同目录、按相对路径引用。</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-no" aria-hidden="true">03</span>
+        <div class="step-body">
+          <h3>点「重扫插件」</h3>
+          <p>工具立刻出现在工具列表，<code>prompts</code> 与 <code>memories</code> 下次对话生效。每个插件有独立启停开关，重扫不会丢掉你的选择；扫不动的插件会被跳过并列出具体原因，不会静默消失。</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="lead" style="margin:30px 0 10px">一份能跑通的最小清单（工具 + 提示词 + 技能 + 记忆 + 定时任务）：</p>
+    <div class="code">
+      <pre>{
+  "name": "我的插件",
+  "version": "0.1.0",
+  "description": "一句话说明这个插件干什么",
+  "tools": [{
+    "name": "disk_usage",
+    "description": "查看指定目录的磁盘占用",
+    "parameters": {
+      "type": "object",
+      "properties": { "path": { "type": "string", "description": "目录路径" } },
+      "required": ["path"]
+    },
+    "kind": "interpreter",
+    "runtime": "py",
+    "file": "disk_usage.py"
+  }],
+  "prompts": ["回答时优先使用中文。"],
+  "skills": [{ "name": "磁盘排查", "summary": "先用 disk_usage 看占用，再逐层往下钻" }],
+  "memories": ["本机默认工作目录是 D:/work"],
+  "jobs": [{
+    "name": "日报",
+    "schedule": "daily 09:00",
+    "runtime": "py",
+    "file": "daily.py"
+  }]
+}</pre>
+      <button class="copy" type="button" data-copy='{
+  "name": "我的插件",
+  "version": "0.1.0",
+  "description": "一句话说明这个插件干什么",
+  "tools": [{
+    "name": "disk_usage",
+    "description": "查看指定目录的磁盘占用",
+    "parameters": {
+      "type": "object",
+      "properties": { "path": { "type": "string", "description": "目录路径" } },
+      "required": ["path"]
+    },
+    "kind": "interpreter",
+    "runtime": "py",
+    "file": "disk_usage.py"
+  }],
+  "prompts": ["回答时优先使用中文。"],
+  "skills": [{ "name": "磁盘排查", "summary": "先用 disk_usage 看占用，再逐层往下钻" }],
+  "memories": ["本机默认工作目录是 D:/work"],
+  "jobs": [{
+    "name": "日报",
+    "schedule": "daily 09:00",
+    "runtime": "py",
+    "file": "daily.py"
+  }]
+}'>复制</button>
+    </div>
+
+    <p class="lead" style="margin:22px 0 10px">工具脚本的通讯约定和手写工具完全一致——<b>从 stdin 读参数 JSON，把结果打到 stdout</b>：</p>
+    <div class="code">
+      <pre>import json, sys, shutil
+
+params = json.loads(sys.stdin.read() or "{}")
+total, used, free = shutil.disk_usage(params.get("path", "."))
+print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=False))</pre>
+      <button class="copy" type="button" data-copy='import json, sys, shutil
+
+params = json.loads(sys.stdin.read() or "{}")
+total, used, free = shutil.disk_usage(params.get("path", "."))
+print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=False))'>复制</button>
+    </div>
+
+    <div class="sec-head" style="margin:42px 0 14px">
+      <h3 style="margin:0;font-size:19px;letter-spacing:-.02em">仓库里躺着一整个插件库，直接抄就能改</h3>
+      <p class="lead">二十来个示例，每个演示一类能力：最小面积的样式插件、带定时快照的盯盘、自己开服务器的看板、进程即 MCP 的设备桥。复制整个目录、改个名就是你的插件。</p>
+    </div>
+    <div class="plugs">
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-notes" target="_blank" rel="noopener"><b>便签本</b><em>data · storage</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/dash-kanban" target="_blank" rel="noopener"><b>项目看板</b><em>pages · 图标</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-price-watcher" target="_blank" rel="noopener"><b>商品价格盯盘</b><em>jobs · 看板</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-inventory" target="_blank" rel="noopener"><b>库存盘点</b><em>多语言工具</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/srv-dashboard" target="_blank" rel="noopener"><b>经营看板服务</b><em>自带服务器</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/svc-mcp-stdio" target="_blank" rel="noopener"><b>设备桥</b><em>stdio MCP</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-net" target="_blank" rel="noopener"><b>外部网关连接器</b><em>外部 MCP · 设置</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-alerts" target="_blank" rel="noopener"><b>告警中心</b><em>events · notify</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/ui-terminal" target="_blank" rel="noopener"><b>运维速记台</b><em>React 页 · 设置页</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/ui-theme" target="_blank" rel="noopener"><b>外观微调</b><em>最小 css</em></a>
+    </div>
+    <p class="lead" style="margin-top:18px">完整字段规范见 <a href="https://github.com/yxpil/BrainTentacle/wiki/扩展与插件" target="_blank" rel="noopener">Wiki · 扩展与插件</a>；想把自己的插件收进这个库，向仓库提 PR 或在 issues 里留个链接。插件同样受安全章约束：能力逐项授权、执行留审计、密钥脱敏不外发——<a href="#safety">看安全设计</a>。</p>
   </div>
 </section>
 
