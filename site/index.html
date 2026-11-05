@@ -1,16 +1,16 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>触手怪 BIT — 桌面 AI Agent 中枢 | osbt.space</title>
-<meta name="description" content="触手怪 BIT 是本地优先的桌面 AI Agent 中枢：Electron 壳 + Rust 核心 + React 界面，配置任意模型即可流式对话，让 AI 调用本机工具、自建脚本、沉淀记忆与技能。密钥对 AI 脱敏、数据不出本机、全程可审计。Apache-2.0 开源，永久免费，覆盖 Windows / macOS / Linux / 龙芯 / RISC-V。">
-<meta name="keywords" content="触手怪,BIT,AI Agent,桌面 Agent,MCP,Model Context Protocol,本地优先,开源,龙芯,RISC-V,AI 工具中枢">
+<title>BrainTentacle BIT — Desktop AI Agent Hub | osbt.space</title>
+<meta name="description" content="BrainTentacle BIT is a local-first desktop AI agent hub: an Electron shell with a Rust core (bit-core) and a React UI. Plug in any model and chat in streaming — let the AI call local tools, write scripts on the fly, and save conclusions as memory and skills. Secrets are masked before the model sees them, data never leaves your machine, and every call is auditable. Apache-2.0, free forever, for Windows / macOS / Linux / LoongArch / RISC-V.">
+<meta name="keywords" content="BrainTentacle,BIT,AI agent,desktop agent,MCP,Model Context Protocol,local-first,open source,LoongArch,RISC-V,tool registry">
 <meta name="theme-color" content="#0E0F10">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="osbt.space">
-<meta property="og:title" content="触手怪 BIT — 桌面 AI Agent 中枢">
-<meta property="og:description" content="AI 的触手，长在你的桌面上。本地优先、可审计、密钥脱敏的桌面 Agent 中枢，Apache-2.0 开源。">
+<meta property="og:title" content="BrainTentacle BIT — Desktop AI Agent Hub">
+<meta property="og:description" content="Give the AI tentacles on your desktop. A local-first, auditable, secret-masking desktop agent hub. Apache-2.0.">
 <meta property="og:url" content="https://osbt.space/">
 <meta property="og:image" content="https://osbt.space/icon.png">
 <link rel="canonical" href="https://osbt.space/">
@@ -20,7 +20,7 @@
 {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  "name": "触手怪 BIT",
+  "name": "BrainTentacle BIT",
   "alternateName": "BrainTentacle",
   "url": "https://osbt.space/",
   "downloadUrl": "https://github.com/yxpil/BrainTentacle/releases",
@@ -29,14 +29,14 @@
   "operatingSystem": "Windows, macOS, Linux",
   "license": "https://opensource.org/licenses/Apache-2.0",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
-  "description": "本地优先的桌面 AI Agent 中枢，Electron 壳 + Rust 核心，双端实现标准 MCP 协议。",
+  "description": "A local-first desktop AI agent hub: Electron shell, Rust core, and a standard MCP server endpoint.",
   "featureList": [
-    "工具中枢：注册、启停、成功率与耗时统计",
-    "三层扩展：本地插件 / MCP 服务器 / 托管常驻程序",
-    "HiddenCode 密钥脱敏与 L2 PASS 二级审核",
-    "标准 MCP 协议双向对接（POST /mcp）",
-    "OpenAI 兼容端点 /v1/chat/completions",
-    "终端模式 bit TUI、审计日志、自动更新"
+    "Tool registry: register, toggle, success-rate and latency stats",
+    "Three extension layers: local plugins / MCP servers / hosted processes",
+    "HiddenCode secret masking and L2 PASS review",
+    "Standard MCP both ways (POST /mcp)",
+    "OpenAI-compatible endpoint /v1/chat/completions",
+    "bit TUI, audit log, auto-update"
   ]
 }
 </script>
@@ -339,26 +339,26 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
 <body>
 <header class="nav">
   <div class="nav-inner">
-    <a class="brand" href="/" aria-label="触手怪 BIT 首页">
+    <a class="brand" href="/" aria-label="BrainTentacle BIT home">
       <img src="/icon.png" alt="" width="26" height="26">
-      <span class="brand-name">触手怪</span><span class="brand-tag">BIT</span>
+      <span class="brand-name">BrainTentacle</span><span class="brand-tag">BIT</span>
     </a>
-    <nav class="navlinks" aria-label="主导航">
-      <a href="#caps">能力</a>
-      <a href="#extend">扩展</a>
-      <a href="#plugins">插件</a>
-      <a href="#safety">安全</a>
-      <a href="#download">下载</a>
-      <a href="#channels">安装渠道</a>
-      <a href="#docs">文档</a>
+    <nav class="navlinks" aria-label="Primary navigation">
+      <a href="#caps">Features</a>
+      <a href="#extend">Extend</a>
+      <a href="#plugins">Plugins</a>
+      <a href="#safety">Security</a>
+      <a href="#download">Download</a>
+      <a href="#channels">Install</a>
+      <a href="#docs">Docs</a>
     </nav>
     <div class="nav-right">
-      <a class="btn ghost sm" href="/en/">EN</a>
+      <a class="btn ghost sm" href="/zh/">中文</a>
       <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle" target="_blank" rel="noopener">
         <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-        <span>源码</span>
+        <span>Source</span>
       </a>
-      <a class="btn sm" href="#download">下载</a>
+      <a class="btn sm" href="#download">Download</a>
     </div>
   </div>
 </header>
@@ -368,31 +368,31 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
   <div class="wrap">
     <div class="hero-grid">
       <div>
-        <p class="eyebrow"><span class="dot" aria-hidden="true"></span>本地优先 · <span id="ver-chip">v0.7.6</span> · Apache-2.0 · 永久免费</p>
-        <h1>AI 的触手，<br>长在你的桌面上。</h1>
+        <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Local-first · <span id="ver-chip">v0.7.6</span> · Apache-2.0 · Free forever</p>
+        <h1>Give the AI<br>tentacles on your desktop.</h1>
         <p class="hero-lead">
-          触手怪 BIT 是一个桌面 Agent 中枢：Electron 壳 + Rust 核心（bit-core）+ React 界面。
-          配置任意模型即可流式对话，让它调用本机工具、现写脚本、把结论沉淀成记忆与技能。
-          密钥对 AI 脱敏，数据不出本机，每一次调用都留下审计记录。
+          BrainTentacle BIT is a desktop agent hub: an Electron shell, a Rust core (bit-core), and a React UI.
+          Point it at any model and chat in streaming — let the AI call local tools, write scripts on the fly, and save conclusions as memory and skills.
+          Secrets are masked before they reach the model, data never leaves this machine, and every call leaves an audit trail.
         </p>
         <div class="hero-cta">
           <a class="btn" id="cta-primary" href="#download">
             <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7.25 1.5v7.44l-2.5-2.5-1.06 1.06L8 10.56l4.31-4.31-1.06-1.06-2.5 2.5V1.5h-1.5ZM2 12.25v1.5h12v-1.5H2Z"/></svg>
-            <span id="cta-label">下载安装包</span>
+            <span id="cta-label">Download installer</span>
           </a>
-          <a class="btn ghost" href="https://github.com/yxpil/BrainTentacle" target="_blank" rel="noopener">查看源码与文档</a>
+          <a class="btn ghost" href="https://github.com/yxpil/BrainTentacle" target="_blank" rel="noopener">Source &amp; docs</a>
         </div>
-        <p class="hero-note">也可以一行装好：<a href="#channels">Homebrew · Scoop · npm · APT · DNF · pacman</a></p>
+        <p class="hero-note">Or install it in one line: <a href="#channels">Homebrew · Scoop · npm · APT · DNF · pacman</a></p>
         <dl class="spec">
-          <div><dt>最新版本</dt><dd><span id="ver-spec">v0.7.6</span></dd></div>
-          <div><dt>系统</dt><dd>Windows · macOS · Linux</dd></div>
-          <div><dt>架构</dt><dd>x64 · arm64 · 龙芯 · RISC-V</dd></div>
-          <div><dt>许可</dt><dd>Apache-2.0</dd></div>
+          <div><dt>Latest</dt><dd><span id="ver-spec">v0.7.6</span></dd></div>
+          <div><dt>Platform</dt><dd>Windows · macOS · Linux</dd></div>
+          <div><dt>Arch</dt><dd>x64 · arm64 · LoongArch · RISC-V</dd></div>
+          <div><dt>License</dt><dd>Apache-2.0</dd></div>
         </dl>
       </div>
       <figure class="emblem">
-        <img src="/icon.png" alt="触手怪 BIT 标志：黑底白色的像素触手" width="512" height="512">
-        <figcaption><b>5 种 CPU 架构</b>　·　<b>7 种包管理器</b><br>每一条触手，都是一件能被调用的工具。</figcaption>
+        <img src="/icon.png" alt="BrainTentacle BIT logo: white pixel tentacles on black" width="512" height="512">
+        <figcaption><b>5 CPU architectures</b>　·　<b>7 package managers</b><br>Every tentacle is a callable tool.</figcaption>
       </figure>
     </div>
   </div>
@@ -401,41 +401,41 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
 <section class="sec" id="caps">
   <div class="wrap">
     <div class="sec-head">
-      <h2>它把 AI 从聊天框里放出来</h2>
-      <p class="lead">不只是问答。工具在本机执行、脚本由 AI 自己写、结论跨会话留在你机器上——下面这些能力全部离线可用，不需要任何账号。</p>
+      <h2>It gets the AI out of the chat box</h2>
+      <p class="lead">More than Q&amp;A. Tools run on your machine, scripts are written by the AI itself, and conclusions persist across sessions on your disk. Everything below works offline, with zero accounts required.</p>
     </div>
     <div class="caps">
       <div class="cap">
-        <h3>工具中枢</h3>
-        <p>注册、启停、调用工具；自动探测本机解释器（Python / Node / PowerShell / Perl / Julia…）。AI 只要写一段能从 stdin 读参、向 stdout 输出的脚本，它就变成一件工具，热更新，每项带成功率与平均耗时。</p>
+        <h3>Tool registry</h3>
+        <p>Register, toggle and call tools; local interpreters are auto-detected (Python / Node / PowerShell / Perl / Julia…). The AI writes a script that reads args on stdin and prints results to stdout, and it becomes a tool — hot-reloaded, with success rate and average latency shown for each one.</p>
       </div>
       <div class="cap">
-        <h3>三层扩展</h3>
-        <p>一个 <code>plugin.json</code> 的本地插件、任意标准 MCP 服务器、或者直接托管你自己的常驻程序。三层能力最终都汇进同一个工具注册中心，AI 一视同仁地调用。</p>
+        <h3>Three extension layers</h3>
+        <p>A local plugin with one <code>plugin.json</code>, any standard MCP server, or your own long-running process hosted directly. All three end up in the same tool registry, and the AI calls them identically.</p>
       </div>
       <div class="cap">
-        <h3>记忆与技能</h3>
-        <p>AI 用内置的 <code>add_memory</code> 与 <code>skill</code> 自主沉淀：这次踩的坑、这套项目的规矩、这段流程的做法，下次直接复用，不需要你手动整理。</p>
+        <h3>Memory &amp; skills</h3>
+        <p>The AI saves things on its own via the built-in <code>add_memory</code> and <code>skill</code> tools: today’s gotcha, this project’s conventions, the way a given flow works — reused next time, no manual organizing.</p>
       </div>
       <div class="cap">
-        <h3>子智能体</h3>
-        <p>Autopilot 打开后，待办会被自动派给子代理并行推进；计划目标与任务进度在「记忆」页随时可查、可删。</p>
+        <h3>Sub-agents</h3>
+        <p>With Autopilot on, todos are dispatched to sub-agents and worked in parallel; plan goals and task progress are visible and deletable on the Memory page at any time.</p>
       </div>
       <div class="cap">
-        <h3>长任务不中断</h3>
-        <p>关窗即驻留托盘，右键任务面板看会话回合、后台命令、子代理与活跃目标；长命令自动转后台，执行中切走不中断，可开启「阻止系统休眠」。</p>
+        <h3>Long tasks don’t get cut off</h3>
+        <p>Close the window and it lives in the tray; right-click the task panel to inspect chat turns, background commands, sub-agents and active goals. Long commands auto-background and keep running when you switch away; enable “prevent system sleep” if needed.</p>
       </div>
       <div class="cap">
-        <h3>远程与网关</h3>
-        <p>开启远程访问后暴露完整 HTTP API（默认 <code>0.0.0.0:8600</code>），并提供 OpenAI 兼容端点 <code>/v1/chat/completions</code>，把桌面上的模型与工具变成局域网里的网关。</p>
+        <h3>Remote access &amp; gateway</h3>
+        <p>Turn on remote access and a full HTTP API is exposed (default <code>0.0.0.0:8600</code>), including an OpenAI-compatible <code>/v1/chat/completions</code> endpoint — your desktop model and tools become a gateway on the LAN.</p>
       </div>
       <div class="cap">
-        <h3>标准 MCP 双端</h3>
-        <p>既是 MCP 客户端（Streamable HTTP 或 stdio 导入外部工具），也是标准 MCP 服务端：<code>POST /mcp</code>，协议版本自动协商，Claude Desktop / MCP Inspector 可直接接入。</p>
+        <h3>MCP client &amp; server</h3>
+        <p>It is an MCP client (Streamable HTTP or stdio, to import external tools) and a standard MCP server at <code>POST /mcp</code> with automatic protocol version negotiation — Claude Desktop and MCP Inspector connect out of the box.</p>
       </div>
       <div class="cap">
-        <h3>终端模式</h3>
-        <p>装好后在任意终端输入 <code>bit</code> 直接进 TUI：无窗口、无单实例约束、不监听端口，适合 SSH 与无桌面环境。</p>
+        <h3>Terminal mode</h3>
+        <p>After install, type <code>bit</code> in any terminal for the TUI: no window, no single-instance lock, no listening port — made for SSH and headless boxes.</p>
       </div>
     </div>
   </div>
@@ -444,33 +444,33 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
 <section class="sec" id="extend">
   <div class="wrap">
     <div class="sec-head">
-      <h2>三层扩展，从轻到重</h2>
-      <p class="lead">本地插件最省事，MCP 接现成生态，WorkWith 直接托管你自己的程序。三者最终都把能力汇进同一个工具注册中心，AI 一视同仁地调用。</p>
+      <h2>Three layers of extension, light to heavy</h2>
+      <p class="lead">Local plugins are the lightest lift, MCP plugs into an existing ecosystem, and WorkWith hosts your own process directly. All three feed the same tool registry, and the AI treats them the same.</p>
     </div>
     <div class="ladder">
       <div class="step">
         <span class="step-no" aria-hidden="true">01</span>
         <div class="step-body">
-          <h3>本地插件：一个文件夹，一份 <code>plugin.json</code></h3>
-          <p>把插件包丢进数据目录的 <code>toolhomes/plugins/</code>，点一次「重扫插件」，工具、提示词、技能、记忆与定时任务同时生效。也可以在里面直接声明常驻服务、独立页面和对话页图标入口。</p>
+          <h3>Local plugins: one folder, one <code>plugin.json</code></h3>
+          <p>Drop the plugin folder into <code>toolhomes/plugins/</code> under your data dir and hit “rescan plugins” — tools, prompts, skills, memories and scheduled jobs go live together. You can also declare long-running services, standalone pages and chat-page icon entries in the same file.</p>
         </div>
       </div>
       <div class="step">
         <span class="step-no" aria-hidden="true">02</span>
         <div class="step-body">
-          <h3>MCP 扩展：粘贴一份 <code>mcpServers</code> 配置</h3>
-          <p>兼容 Cursor 与 Claude Desktop 的配置格式，支持 <code>command</code> + <code>args</code> + <code>env</code>；也能扫描端口范围，自动发现局域网里跑着的 MCP 服务。</p>
+          <h3>MCP servers: paste an <code>mcpServers</code> block</h3>
+          <p>Same config format as Cursor and Claude Desktop (<code>command</code> + <code>args</code> + <code>env</code>); it can also scan a port range and auto-discover MCP servers already running on your LAN.</p>
           <div class="code">
             <pre>{ "mcpServers": { "files": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"] } } }</pre>
-            <button class="copy" type="button" data-copy='{ "mcpServers": { "files": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"] } } }'>复制</button>
+            <button class="copy" type="button" data-copy='{ "mcpServers": { "files": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"] } } }'>Copy</button>
           </div>
         </div>
       </div>
       <div class="step">
         <span class="step-no" aria-hidden="true">03</span>
         <div class="step-body">
-          <h3>WorkWith：把常驻程序交给它托管</h3>
-          <p>在「服务」页填一下程序路径，添加即完成——自动拉起进程、自动扫描端口、自动接入 MCP。工具即插即用，端口、日志与退出都由宿主统一管理。</p>
+          <h3>WorkWith: host your own long-running process</h3>
+          <p>Point it at an executable on the Services page and you’re done — the host launches the process, scans its port and wires up MCP automatically. Ports, logs and shutdown are all managed by the host.</p>
         </div>
       </div>
     </div>
@@ -480,59 +480,59 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
 <section class="sec" id="plugins">
   <div class="wrap">
     <div class="sec-head">
-      <h2>插件生态：一个文件夹，就是一项新能力</h2>
-      <p class="lead">不用打包、不用编译、不用碰宿主代码。在插件目录里放一个 <code class="k">plugin.json</code>，工具、提示词、技能、记忆、定时任务、常驻服务和独立页面就同时交到 AI 手里；改完点一次「重扫插件」即刻生效。插件是本地声明式文件——没下载就不会被执行。</p>
+      <h2>The plugin ecosystem: one folder is one new capability</h2>
+      <p class="lead">No packaging, no compiling, no host code to touch. Drop a <code class="k">plugin.json</code> into the plugins directory and tools, prompts, skills, memories, jobs, services and standalone pages are handed to the AI at once; hit rescan and your changes are live. Plugins are declarative local files — nothing runs until you download it.</p>
     </div>
 
     <dl class="plug-list">
       <div class="plug-item">
-        <dt>工具<span class="f">tools[]</span></dt>
-        <dd>声明一件 AI 能调用的工具：参数用 JSON Schema 描述，脚本从 stdin 读参数、把结果打到 stdout。跑本机解释器（Python / Node / PowerShell / Perl / Julia…），或走内置 Rhai 沙盒。每件工具都带成功率与平均耗时。</dd>
+        <dt>Tools<span class="f">tools[]</span></dt>
+        <dd>Declare one tool the AI can call: parameters described by JSON Schema; the script reads args on stdin and prints results to stdout. It runs on a local interpreter (Python / Node / PowerShell / Perl / Julia…) or in the built-in Rhai sandbox. Every tool shows its success rate and average latency.</dd>
       </div>
       <div class="plug-item">
-        <dt>提示词<span class="f">prompts[]</span></dt>
-        <dd>启用即追加到系统提示词。把「这个项目用 pnpm 不用 npm」「回答先给结论」这类规矩写进插件，换台机器装同一个插件，AI 的做事方式跟着走。</dd>
+        <dt>Prompts<span class="f">prompts[]</span></dt>
+        <dd>Appended to the system prompt when enabled. Write rules like “this project uses pnpm, not npm” or “lead with the conclusion” into a plugin; install it on another machine and the AI works the same way.</dd>
       </div>
       <div class="plug-item">
-        <dt>技能<span class="f">skills[]</span></dt>
-        <dd>注入可复用流程（名字 + 摘要），与 AI 自己提炼的技能同构。适合把一套排查步骤、一类文档的写法固化成插件的一部分。</dd>
+        <dt>Skills<span class="f">skills[]</span></dt>
+        <dd>Inject reusable procedures (name + summary), same shape as skills the AI derives on its own. A good way to bake in a troubleshooting checklist or a document template.</dd>
       </div>
       <div class="plug-item">
-        <dt>记忆<span class="f">memories[]</span></dt>
-        <dd>作为长期事实注入：本机默认工作目录、内网域名、团队口径，装好就在，不必每次重新交代。</dd>
+        <dt>Memories<span class="f">memories[]</span></dt>
+        <dd>Injected as long-term facts: this machine’s default working directory, internal hostnames, team conventions — present from install, no need to restate them every chat.</dd>
       </div>
       <div class="plug-item">
-        <dt>定时任务<span class="f">jobs[]</span></dt>
-        <dd><code>every 30m</code> / <code>daily 09:00</code> 这类频率，脚本定期跑；结果可以注入指定会话让 AI 接着处理，也可以只记审计日志。</dd>
+        <dt>Jobs<span class="f">jobs[]</span></dt>
+        <dd>Run a script on a cadence like <code>every 30m</code> / <code>daily 09:00</code>; the output can be injected into a chosen session so the AI takes over, or just land in the audit log.</dd>
       </div>
       <div class="plug-item">
-        <dt>常驻服务<span class="f">services[]</span></dt>
-        <dd>最多 16 条：插件自带一个进程，端口由宿主分配（写 <code>0</code> 即自动，经 <code>BIT_PLUGIN_PORT</code> 下发），日志与退出统一托管；<code>mcp_mode</code> 选 <code>http</code> 时端口就绪后自动接成 MCP 服务器，选 <code>stdio</code> 则进程本身即 MCP。</dd>
+        <dt>Services<span class="f">services[]</span></dt>
+        <dd>Up to 16: the plugin ships a process; the host assigns a port (write <code>0</code> for auto, delivered via <code>BIT_PLUGIN_PORT</code>) and manages logs and shutdown. With <code>mcp_mode</code> set to <code>http</code> the port is auto-wired as an MCP server once ready; with <code>stdio</code> the process itself is the MCP server.</dd>
       </div>
       <div class="plug-item">
-        <dt>页面<span class="f">pages[] · status_page</span></dt>
-        <dd>在左栏注册独立页面（沙箱 iframe，静态 <code>src</code> 或动态 <code>url</code> 二选一），还能给插件详情配一块实时状态面板——看板、指标、健康检查都放得下。</dd>
+        <dt>Pages<span class="f">pages[] · status_page</span></dt>
+        <dd>Register standalone pages in the sidebar (sandboxed iframe, static <code>src</code> or dynamic <code>url</code>), plus a live status panel on the plugin detail page — dashboards, metrics, health checks all fit.</dd>
       </div>
       <div class="plug-item">
-        <dt>对话页入口<span class="f">chat_icons[] · takeover[]</span></dt>
-        <dd>最多 4 个图标入口：点了跳本插件页面，或把一段提示词填进输入框。要更彻底就声明接管内置按钮（语音 / 预览 / 附件 / 计划 / 模板 / 网页 / 后台任务），用插件自己的入口顶上；设置入口永不参与接管，随时可一键恢复内置。</dd>
+        <dt>Chat entries<span class="f">chat_icons[] · takeover[]</span></dt>
+        <dd>Up to 4 icon entries: tapping one opens the plugin page, or fills a prompt into the composer. Go further and take over built-in buttons (voice / preview / attachments / plan / templates / web / background tasks) with your own entry — Settings is never takeover-able, and built-ins can be restored with one click.</dd>
       </div>
       <div class="plug-item">
-        <dt>权限申报<span class="f">permissions[] · bridge</span></dt>
-        <dd>每一项能力都要明示申报，没申报的调用直接被拒。设置中心把权限逐项列出、逐项开关，<code>exec</code>（执行命令）与 <code>write</code>（改任意文件）标为高风险。要对外开接口（自带服务器 / 页面 / 设置页）必须写 <code>bridge</code>，令牌每次启动现发，不随插件包分发。</dd>
+        <dt>Permissions<span class="f">permissions[] · bridge</span></dt>
+        <dd>Every capability must be declared up front; undeclared calls are refused outright. Settings lists permissions one by one with individual toggles — <code>exec</code> (run commands) and <code>write</code> (touch any file) are flagged high-risk. Exposing an endpoint (bundled server / page / settings UI) requires a <code>bridge</code> block; tokens are minted at each launch and never ship inside the plugin.</dd>
       </div>
     </dl>
 
     <div class="sec-head" style="margin:42px 0 18px">
-      <h3 style="margin:0;font-size:19px;letter-spacing:-.02em">三步接入</h3>
+      <h3 style="margin:0;font-size:19px;letter-spacing:-.02em">Three steps to get in</h3>
     </div>
 
     <div class="ladder">
       <div class="step">
         <span class="step-no" aria-hidden="true">01</span>
         <div class="step-body">
-          <h3>找到插件目录</h3>
-          <p>固定在数据目录下的 <code>toolhomes/plugins/</code>。装了 BIT 的话，「工具」页 →「本地插件」区块会直接显示完整路径，点一下就能复制。</p>
+          <h3>Find the plugins directory</h3>
+          <p>It’s always <code>toolhomes/plugins/</code> under your data dir. With BIT installed, the Tools page → Local plugins block shows the full path with a one-click copy.</p>
           <div class="paths">
             <div class="path-row"><span class="os">Windows</span><code>%APPDATA%\com.bit.hub\toolhomes\plugins\</code></div>
             <div class="path-row"><span class="os">macOS</span><code>~/Library/Application Support/com.bit.hub/toolhomes/plugins/</code></div>
@@ -543,76 +543,76 @@ h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.0
       <div class="step">
         <span class="step-no" aria-hidden="true">02</span>
         <div class="step-body">
-          <h3>放一个文件夹进去</h3>
-          <p>目录名就是插件 id，层级必须是 <code>plugins/&lt;插件名&gt;/plugin.json</code>，不能多层嵌套。现成的插件包解压到这里即可；自己写的就在目录里放一个 <code>plugin.json</code>——它是唯一的清单文件，脚本、页面、设置都写在同目录、按相对路径引用。</p>
+          <h3>Drop a folder in</h3>
+          <p>The folder name is the plugin id; the layout must be <code>plugins/&lt;plugin-name&gt;/plugin.json</code> — no extra nesting. Unzip a ready-made bundle here, or write your own <code>plugin.json</code>: it’s the single manifest, and scripts / pages / settings live next to it, referenced by relative path.</p>
         </div>
       </div>
       <div class="step">
         <span class="step-no" aria-hidden="true">03</span>
         <div class="step-body">
-          <h3>点「重扫插件」</h3>
-          <p>工具立刻出现在工具列表，<code>prompts</code> 与 <code>memories</code> 下次对话生效。每个插件有独立启停开关，重扫不会丢掉你的选择；扫不动的插件会被跳过并列出具体原因，不会静默消失。</p>
+          <h3>Hit “rescan plugins”</h3>
+          <p>Tools show up in the tool list immediately; <code>prompts</code> and <code>memories</code> apply from the next chat. Each plugin has its own on/off switch and rescans don’t reset your choices; plugins that fail to load are skipped with a reason listed, never dropped silently.</p>
         </div>
       </div>
     </div>
 
-    <p class="lead" style="margin:30px 0 10px">一份能跑通的最小清单（工具 + 提示词 + 技能 + 记忆 + 定时任务）：</p>
+    <p class="lead" style="margin:30px 0 10px">A minimal manifest that actually runs (tool + prompt + skill + memory + job):</p>
     <div class="code">
       <pre>{
-  "name": "我的插件",
+  "name": "my-plugin",
   "version": "0.1.0",
-  "description": "一句话说明这个插件干什么",
+  "description": "One line about what this plugin does",
   "tools": [{
     "name": "disk_usage",
-    "description": "查看指定目录的磁盘占用",
+    "description": "Disk usage of a given directory",
     "parameters": {
       "type": "object",
-      "properties": { "path": { "type": "string", "description": "目录路径" } },
+      "properties": { "path": { "type": "string", "description": "Directory path" } },
       "required": ["path"]
     },
     "kind": "interpreter",
     "runtime": "py",
     "file": "disk_usage.py"
   }],
-  "prompts": ["回答时优先使用中文。"],
-  "skills": [{ "name": "磁盘排查", "summary": "先用 disk_usage 看占用，再逐层往下钻" }],
-  "memories": ["本机默认工作目录是 D:/work"],
+  "prompts": ["Always answer in English."],
+  "skills": [{ "name": "Disk drilldown", "summary": "Run disk_usage first, then drill down level by level" }],
+  "memories": ["Default working directory on this machine is D:/work"],
   "jobs": [{
-    "name": "日报",
+    "name": "daily-report",
     "schedule": "daily 09:00",
     "runtime": "py",
     "file": "daily.py"
   }]
 }</pre>
       <button class="copy" type="button" data-copy='{
-  "name": "我的插件",
+  "name": "my-plugin",
   "version": "0.1.0",
-  "description": "一句话说明这个插件干什么",
+  "description": "One line about what this plugin does",
   "tools": [{
     "name": "disk_usage",
-    "description": "查看指定目录的磁盘占用",
+    "description": "Disk usage of a given directory",
     "parameters": {
       "type": "object",
-      "properties": { "path": { "type": "string", "description": "目录路径" } },
+      "properties": { "path": { "type": "string", "description": "Directory path" } },
       "required": ["path"]
     },
     "kind": "interpreter",
     "runtime": "py",
     "file": "disk_usage.py"
   }],
-  "prompts": ["回答时优先使用中文。"],
-  "skills": [{ "name": "磁盘排查", "summary": "先用 disk_usage 看占用，再逐层往下钻" }],
-  "memories": ["本机默认工作目录是 D:/work"],
+  "prompts": ["Always answer in English."],
+  "skills": [{ "name": "Disk drilldown", "summary": "Run disk_usage first, then drill down level by level" }],
+  "memories": ["Default working directory on this machine is D:/work"],
   "jobs": [{
-    "name": "日报",
+    "name": "daily-report",
     "schedule": "daily 09:00",
     "runtime": "py",
     "file": "daily.py"
   }]
-}'>复制</button>
+}'>Copy</button>
     </div>
 
-    <p class="lead" style="margin:22px 0 10px">工具脚本的通讯约定和手写工具完全一致——<b>从 stdin 读参数 JSON，把结果打到 stdout</b>：</p>
+    <p class="lead" style="margin:22px 0 10px">Tool scripts speak the same protocol as hand-written tools — <b>read args JSON on stdin, print results to stdout</b>:</p>
     <div class="code">
       <pre>import json, sys, shutil
 
@@ -623,39 +623,39 @@ print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=Fals
 
 params = json.loads(sys.stdin.read() or "{}")
 total, used, free = shutil.disk_usage(params.get("path", "."))
-print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=False))'>复制</button>
+print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=False))'>Copy</button>
     </div>
 
     <div class="sec-head" style="margin:42px 0 14px">
-      <h3 style="margin:0;font-size:19px;letter-spacing:-.02em">仓库里躺着一整个插件库，直接抄就能改</h3>
-      <p class="lead">二十来个示例，每个演示一类能力：最小面积的样式插件、带定时快照的盯盘、自己开服务器的看板、进程即 MCP 的设备桥。复制整个目录、改个名就是你的插件。</p>
+      <h3 style="margin:0;font-size:19px;letter-spacing:-.02em">The repo already ships a plugin library — copy and adapt</h3>
+      <p class="lead">Around twenty examples, each demonstrating one capability surface: a bare-bones theme plugin, a price watcher with scheduled snapshots, a dashboard that runs its own server, a device bridge whose process is the MCP server. Copy the whole folder, rename it, and it’s yours.</p>
     </div>
     <div class="plugs">
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-notes" target="_blank" rel="noopener"><b>便签本</b><em>data · storage</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/dash-kanban" target="_blank" rel="noopener"><b>项目看板</b><em>pages · 图标</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-price-watcher" target="_blank" rel="noopener"><b>商品价格盯盘</b><em>jobs · 看板</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-inventory" target="_blank" rel="noopener"><b>库存盘点</b><em>多语言工具</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/srv-dashboard" target="_blank" rel="noopener"><b>经营看板服务</b><em>自带服务器</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/svc-mcp-stdio" target="_blank" rel="noopener"><b>设备桥</b><em>stdio MCP</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-net" target="_blank" rel="noopener"><b>外部网关连接器</b><em>外部 MCP · 设置</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-alerts" target="_blank" rel="noopener"><b>告警中心</b><em>events · notify</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/ui-terminal" target="_blank" rel="noopener"><b>运维速记台</b><em>React 页 · 设置页</em></a>
-      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/ui-theme" target="_blank" rel="noopener"><b>外观微调</b><em>最小 css</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-notes" target="_blank" rel="noopener"><b>Sticky notes</b><em>data · storage</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/dash-kanban" target="_blank" rel="noopener"><b>Project board</b><em>pages · icon</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-price-watcher" target="_blank" rel="noopener"><b>Price watcher</b><em>jobs · dashboard</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-inventory" target="_blank" rel="noopener"><b>Inventory</b><em>multi-lang tools</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/srv-dashboard" target="_blank" rel="noopener"><b>Dashboard server</b><em>bundled server</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/svc-mcp-stdio" target="_blank" rel="noopener"><b>Device bridge</b><em>stdio MCP</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-net" target="_blank" rel="noopener"><b>External gateway</b><em>external MCP · settings</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-alerts" target="_blank" rel="noopener"><b>Alerts</b><em>events · notify</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/ui-terminal" target="_blank" rel="noopener"><b>Ops console</b><em>React UI · settings</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/ui-theme" target="_blank" rel="noopener"><b>Theme tweak</b><em>minimal css</em></a>
     </div>
-    <p class="lead" style="margin-top:18px">完整字段规范见 <a href="https://github.com/yxpil/BrainTentacle/wiki/扩展与插件" target="_blank" rel="noopener">Wiki · 扩展与插件</a>；想把自己的插件收进这个库，向仓库提 PR，或到 <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">问题反馈页</a> 留个链接。插件同样受安全章约束：能力逐项授权、执行留审计、密钥脱敏不外发——<a href="#safety">看安全设计</a>。</p>
+    <p class="lead" style="margin-top:18px">Full field reference: <a href="https://github.com/yxpil/BrainTentacle/wiki/扩展与插件" target="_blank" rel="noopener">Wiki · Extensions &amp; plugins</a>. To get your plugin into the library, open a PR in the repo or drop a link on the <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">feedback page</a>. Plugins live under the same security contract: per-capability grants, execution audit, secrets masked — <a href="#safety">see the security design</a>.</p>
   </div>
 </section>
 
 <section class="sec" id="safety">
   <div class="wrap">
     <div class="sec-head">
-      <h2>密钥不进模型，数据不出本机</h2>
-      <p class="lead">发给 AI 之前先脱敏，危险工具执行之前先二审，所有调用事后可查。没有账号系统，也没有任何遥测。</p>
+      <h2>Keys never reach the model. Data never leaves this machine.</h2>
+      <p class="lead">Secrets are masked before anything is sent to the AI; risky tools get a second-pass review before they run; every call is replayable afterwards. No account system, no telemetry at all.</p>
     </div>
     <div class="safe-grid">
       <div>
         <div class="flow">
-          <svg viewBox="0 0 660 196" role="img" aria-label="HiddenCode 脱敏流程：原文先替换为占位符再发给 AI，工具在本机执行时自动还原">
+          <svg viewBox="0 0 660 196" role="img" aria-label="HiddenCode masking flow: raw text is replaced with placeholders before being sent to the AI, then restored locally when tools run">
             <g fill="none" stroke="#131416" stroke-width="1">
               <rect x="1.5" y="20" width="190" height="66"/>
               <rect x="244" y="20" width="148" height="66" stroke="#BE3428" fill="#FBF2F0"/>
@@ -673,36 +673,36 @@ print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=Fals
               <path d="M396 142l7-4v8z"/>
             </g>
             <g font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif" fill="#131416" stroke="none">
-              <text x="14" y="44" font-size="11" fill="#757C83">你输入的原文</text>
+              <text x="14" y="44" font-size="11" fill="#757C83">Your raw input</text>
               <text x="14" y="70" font-family="ui-monospace,Consolas,monospace" font-size="12.5">sk-live-9f2a…</text>
               <text x="116" y="70" font-family="ui-monospace,Consolas,monospace" font-size="12.5" fill="#757C83">138****</text>
-              <text x="258" y="44" font-size="11" fill="#BE3428">HiddenCode 脱敏</text>
+              <text x="258" y="44" font-size="11" fill="#BE3428">HiddenCode masking</text>
               <text x="258" y="70" font-family="ui-monospace,Consolas,monospace" font-size="12.5">[HC:8f3a2c9e]</text>
-              <text x="460" y="44" font-size="11" fill="#757C83">AI 模型</text>
-              <text x="460" y="70" font-size="12.5">只看到占位符，拿不到原文</text>
-              <text x="258" y="150" font-size="11" fill="#757C83">本机工具执行</text>
-              <text x="258" y="174" font-size="12.5">自动还原成真实值</text>
+              <text x="460" y="44" font-size="11" fill="#757C83">AI model</text>
+              <text x="460" y="70" font-size="12.5">Only placeholders — never the raw value</text>
+              <text x="258" y="150" font-size="11" fill="#757C83">Tool runs locally</text>
+              <text x="258" y="174" font-size="12.5">Raw value restored on this machine</text>
             </g>
           </svg>
         </div>
-        <p class="flow-cap">虚线＝工具调用与本机还原，原文全程不经过模型上下文</p>
+        <p class="flow-cap">Dashed lines = tool call and local restore. Raw values never enter the model context.</p>
       </div>
       <div class="safe-list">
         <div class="cap">
-          <h3>HiddenCode 脱敏</h3>
-          <p>密钥、手机号、邮箱、用户名在发给 AI 前换成占位符或你设定的别名（小明 → 李四）；工具执行时自动还原。支持内置类型掩码、精确值、自定义正则与粘贴扫描。</p>
+          <h3>HiddenCode masking</h3>
+          <p>Keys, phone numbers, emails and usernames are swapped for placeholders or your own aliases (Alice → Bob) before anything leaves the machine, then restored when a tool runs. Built-in type masks, exact-value matching, custom regex and paste-time scanning are all supported.</p>
         </div>
         <div class="cap">
-          <h3>L2 PASS 二级审核</h3>
-          <p>工具执行前先由另一个模型判 Allow / Deny，可覆盖自动放行工具；审核模型不可达时回退人工审批，不打断正常使用。</p>
+          <h3>L2 PASS review</h3>
+          <p>Before a tool runs, a second model decides Allow / Deny and can override auto-approved tools. If the reviewer is unreachable, calls fall back to manual approval without interrupting normal use.</p>
         </div>
         <div class="cap">
-          <h3>审计日志</h3>
-          <p>每次工具调用与关键操作都留痕，可按主体 / 动作 / 目标过滤，事后复盘是谁在什么时候碰了什么。</p>
+          <h3>Audit log</h3>
+          <p>Every tool call and key action is logged and filterable by subject / action / target — afterwards you can reconstruct who touched what, and when.</p>
         </div>
         <div class="cap">
-          <h3>数据本地化</h3>
-          <p>会话、记忆、技能、配置全部保存在本机数据目录（Windows <code>%APPDATA%\com.bit.hub</code>，macOS <code>~/Library/Application Support/com.bit.hub</code>），卸载即删除。</p>
+          <h3>Data stays local</h3>
+          <p>Chats, memories, skills and settings all live in the local data dir (Windows <code>%APPDATA%\com.bit.hub</code>, macOS <code>~/Library/Application Support/com.bit.hub</code>) and are gone on uninstall.</p>
         </div>
       </div>
     </div>
@@ -713,30 +713,30 @@ print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=Fals
   <div class="wrap">
     <div class="dl">
       <div class="dl-head">
-        <h2>下载</h2>
-        <p class="dl-meta">识别到你的系统：<span id="detected">正在识别…</span></p>
+        <h2>Download</h2>
+        <p class="dl-meta">Detected platform: <span id="detected">Detecting…</span></p>
       </div>
-      <p class="hint">安装包托管在 GitHub Releases，SHA256 校验值见 Release 页。下载经本站转发，客户端不会被跳转走。</p>
-      <div class="tabs" id="tabs" role="group" aria-label="选择平台">
+      <p class="hint">Installers are hosted on GitHub Releases; SHA256 checksums are on each Release page. Downloads are relayed through this site — your client is never redirected away.</p>
+      <div class="tabs" id="tabs" role="group" aria-label="Choose a platform">
         <button class="tab" aria-pressed="false" data-p="mac">macOS</button>
         <button class="tab" aria-pressed="false" data-p="win">Windows</button>
         <button class="tab" aria-pressed="false" data-p="linux">Linux / ChromeOS</button>
-        <button class="tab" aria-pressed="false" data-p="native">龙芯 / RISC-V</button>
+        <button class="tab" aria-pressed="false" data-p="native">LoongArch / RISC-V</button>
       </div>
       <div class="assets" id="assets"></div>
 
       <div class="cli">
         <div class="cli-head">
-          <span class="cli-title">命令行版 · bit-cli（TUI，无窗口）</span>
-          <span class="cli-note">同一核心的无头构建，适合服务器与 SSH</span>
+          <span class="cli-title">CLI · bit-cli (TUI, headless)</span>
+          <span class="cli-note">Same core, headless build — for servers and SSH</span>
         </div>
         <div class="assets" id="cli-assets"></div>
       </div>
 
       <div class="dl-foot">
-        <a href="https://github.com/yxpil/BrainTentacle/releases" target="_blank" rel="noopener">全部版本与 SHA256</a>
-        <a href="https://github.com/yxpil/bit-mobile" target="_blank" rel="noopener">安卓版 · 与桌面版扫码配对</a>
-        <a href="#faq-mac">macOS 提示「已损坏」怎么办</a>
+        <a href="https://github.com/yxpil/BrainTentacle/releases" target="_blank" rel="noopener">All releases &amp; SHA256</a>
+        <a href="https://github.com/yxpil/bit-mobile" target="_blank" rel="noopener">Android app · pair with desktop by QR</a>
+        <a href="#faq-mac">macOS says it’s “damaged”?</a>
       </div>
     </div>
   </div>
@@ -745,37 +745,37 @@ print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=Fals
 <section class="sec" id="channels">
   <div class="wrap">
     <div class="sec-head">
-      <h2>七种安装渠道</h2>
-      <p class="lead">各系统一条命令接入，之后的升级同样走包管理器。命令里的仓库地址全部公开，可以自己核对再执行。</p>
+      <h2>Install from seven channels</h2>
+      <p class="lead">One command per system, and upgrades go through the same package manager afterwards. Every repo URL here is public — inspect it yourself before running.</p>
     </div>
     <div class="cmds">
       <div class="cmd">
         <div class="cmd-head"><span class="cmd-name">macOS · Homebrew</span><span class="cmd-os">brew</span></div>
         <div class="code"><pre>brew tap yxpil/bit
 brew install --cask bit</pre><button class="copy" type="button" data-copy="brew tap yxpil/bit
-brew install --cask bit">复制</button></div>
+brew install --cask bit">Copy</button></div>
       </div>
       <div class="cmd">
         <div class="cmd-head"><span class="cmd-name">Windows · Scoop</span><span class="cmd-os">scoop</span></div>
         <div class="code"><pre>scoop bucket add bit https://github.com/yxpil/scoop-bit
 scoop install bit</pre><button class="copy" type="button" data-copy="scoop bucket add bit https://github.com/yxpil/scoop-bit
-scoop install bit">复制</button></div>
+scoop install bit">Copy</button></div>
       </div>
       <div class="cmd">
-        <div class="cmd-head"><span class="cmd-name">全平台 · npm</span><span class="cmd-os">npm</span></div>
-        <div class="code"><pre>npm install -g bit-agent</pre><button class="copy" type="button" data-copy="npm install -g bit-agent">复制</button></div>
+        <div class="cmd-head"><span class="cmd-name">All platforms · npm</span><span class="cmd-os">npm</span></div>
+        <div class="code"><pre>npm install -g bit-agent</pre><button class="copy" type="button" data-copy="npm install -g bit-agent">Copy</button></div>
       </div>
       <div class="cmd">
-        <div class="cmd-head"><span class="cmd-name">Debian / Ubuntu / 麒麟</span><span class="cmd-os">APT</span></div>
+        <div class="cmd-head"><span class="cmd-name">Debian / Ubuntu / Kylin</span><span class="cmd-os">APT</span></div>
         <div class="code"><pre>echo "deb [trusted=yes] https://yxpil.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/bit.list
 sudo apt update &amp;&amp; sudo apt install bit</pre><button class="copy" type="button" data-copy='echo "deb [trusted=yes] https://yxpil.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/bit.list
-sudo apt update && sudo apt install bit'>复制</button></div>
+sudo apt update && sudo apt install bit'>Copy</button></div>
       </div>
       <div class="cmd">
         <div class="cmd-head"><span class="cmd-name">Fedora / RHEL / openSUSE</span><span class="cmd-os">DNF</span></div>
         <div class="code"><pre>sudo dnf config-manager addrepo --from-repofile=https://yxpil.github.io/dnf-repo/bit.repo
 sudo dnf install bit</pre><button class="copy" type="button" data-copy="sudo dnf config-manager addrepo --from-repofile=https://yxpil.github.io/dnf-repo/bit.repo
-sudo dnf install bit">复制</button></div>
+sudo dnf install bit">Copy</button></div>
       </div>
       <div class="cmd">
         <div class="cmd-head"><span class="cmd-name">Arch / Manjaro</span><span class="cmd-os">pacman</span></div>
@@ -783,11 +783,11 @@ sudo dnf install bit">复制</button></div>
 Server = https://yxpil.github.io/pacman-repo/$arch
 SigLevel = Never</pre><button class="copy" type="button" data-copy='[bit]
 Server = https://yxpil.github.io/pacman-repo/$arch
-SigLevel = Never'>复制</button></div>
+SigLevel = Never'>Copy</button></div>
       </div>
       <div class="cmd">
         <div class="cmd-head"><span class="cmd-name">Windows · winget</span><span class="cmd-os">winget</span></div>
-        <div class="code"><pre>winget install yxpil.bit</pre><button class="copy" type="button" data-copy="winget install yxpil.bit">复制</button></div>
+        <div class="code"><pre>winget install yxpil.bit</pre><button class="copy" type="button" data-copy="winget install yxpil.bit">Copy</button></div>
       </div>
     </div>
   </div>
@@ -796,49 +796,49 @@ SigLevel = Never'>复制</button></div>
 <section class="sec" id="docs">
   <div class="wrap">
     <div class="sec-head">
-      <h2>文档与常见问题</h2>
-      <p class="lead">完整安装、插件规范、API 与 MCP 细节都在仓库里；下面是上手时最容易卡住的几处。</p>
+      <h2>Docs &amp; FAQ</h2>
+      <p class="lead">Full install notes, the plugin spec, and API / MCP details live in the repo; these are the spots people get stuck on first.</p>
     </div>
     <div class="hero-cta" style="margin:0 0 26px">
-      <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle#readme" target="_blank" rel="noopener">仓库说明</a>
-      <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle/wiki/快速上手" target="_blank" rel="noopener">Wiki · 快速上手</a>
+      <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle#readme" target="_blank" rel="noopener">Repo README</a>
+      <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle/wiki/快速上手" target="_blank" rel="noopener">Wiki · Quick start</a>
       <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle/blob/main/README_EN.md" target="_blank" rel="noopener">English README</a>
     </div>
     <div class="faq">
       <details id="faq-mac">
-        <summary>macOS 提示「已损坏，无法打开」<span class="plus" aria-hidden="true"></span></summary>
+        <summary>macOS says it’s “damaged, can’t be opened”<span class="plus" aria-hidden="true"></span></summary>
         <div class="a">
-          <p>触手怪目前是 ad-hoc 签名（没有付费开发者证书），浏览器下载会带上隔离标记，macOS 会把它误报成「已损坏」。应用本身的签名是完整的，去掉隔离标记即可：</p>
-          <div class="code"><pre>xattr -cr /Applications/BIT.app</pre><button class="copy" type="button" data-copy="xattr -cr /Applications/BIT.app">复制</button></div>
-          <p>也可以在 系统设置 → 隐私与安全性 中点「仍要打开」。</p>
+          <p>BIT is currently ad-hoc signed (no paid developer certificate), so browser downloads carry a quarantine flag that macOS misreports as “damaged”. The signature itself is fine — just clear the flag:</p>
+          <div class="code"><pre>xattr -cr /Applications/BIT.app</pre><button class="copy" type="button" data-copy="xattr -cr /Applications/BIT.app">Copy</button></div>
+          <p>Alternatively, open System Settings → Privacy &amp; Security and click “Open anyway”.</p>
         </div>
       </details>
       <details>
-        <summary>Windows 提示 SmartScreen 已阻止<span class="plus" aria-hidden="true"></span></summary>
-        <div class="a"><p>安装包未做代码签名，首次运行点「更多信息 → 仍要运行」即可。便携版同理。</p></div>
+        <summary>Windows SmartScreen blocked the app<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>The installer is not code-signed. On first run, click More info → Run anyway. Same for the portable build.</p></div>
       </details>
       <details>
-        <summary>第一次打开要配什么<span class="plus" aria-hidden="true"></span></summary>
-        <div class="a"><p>进入「AI 设置」→「添加提供方」→ 选协议（OpenAI / Gemini / Claude）、填 Base URL 与 API Key、填模型名（可点「从 API 获取」一键拉取模型列表）→ 点该条目上的播放按钮激活。同一时刻只有一个提供方生效，其余自动暂停。</p></div>
+        <summary>What do I set up on first launch?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Open AI settings → Add provider → pick the protocol (OpenAI / Gemini / Claude), fill in the Base URL and API key, type the model name (or click “fetch from API” to pull the list), then press the play button on the row to activate. Only one provider is active at a time; the rest pause automatically.</p></div>
       </details>
       <details>
-        <summary>怎么让 Claude Desktop 用上我的工具<span class="plus" aria-hidden="true"></span></summary>
-        <div class="a"><p>开启「远程访问」后，触手怪就是一个标准 MCP 服务端：端点 <code>POST /mcp</code>，协议版本 <code>2024-11-05</code> / <code>2025-03-26</code> / <code>2025-06-18</code> 自动协商，支持 <code>Mcp-Session-Id</code> 会话与 <code>tools/list</code> / <code>tools/call</code>。把 MCP 客户端指向 <code>http://主机:8600/mcp</code> 即可，认证与远程 API 同一套。</p></div>
+        <summary>How do my tools show up in Claude Desktop?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Turn on remote access and BIT is a standard MCP server: endpoint <code>POST /mcp</code>, with <code>2024-11-05</code> / <code>2025-03-26</code> / <code>2025-06-18</code> auto-negotiated, <code>Mcp-Session-Id</code> sessions and <code>tools/list</code> / <code>tools/call</code> supported. Point your MCP client at <code>http://host:8600/mcp</code> — the auth is the same set used by the remote API.</p></div>
       </details>
       <details>
-        <summary>数据存在哪，怎么彻底卸载<span class="plus" aria-hidden="true"></span></summary>
-        <div class="a"><p>Windows <code>%APPDATA%\com.bit.hub</code>，macOS <code>~/Library/Application Support/com.bit.hub</code>，Linux <code>${XDG_DATA_HOME:-~/.local/share}/com.bit.hub</code>。删掉这个目录就是彻底清空；设了 <code>BIT_DATA_DIR</code> 环境变量时以它为准。</p></div>
+        <summary>Where is data stored, and how do I uninstall cleanly?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Windows <code>%APPDATA%\com.bit.hub</code>, macOS <code>~/Library/Application Support/com.bit.hub</code>, Linux <code>${XDG_DATA_HOME:-~/.local/share}/com.bit.hub</code>. Deleting that directory wipes everything; if you set <code>BIT_DATA_DIR</code>, that wins.</p></div>
       </details>
       <details>
-        <summary>企业内网要走代理怎么办<span class="plus" aria-hidden="true"></span></summary>
-        <div class="a"><p>「设置 → AI 设置 → 网络代理」三档：跟随系统 / 强制直连 / 自定义代理。自定义支持 <code>http</code> / <code>https</code> / <code>socks5</code>，设一次三处同口径生效——模型请求与更新下载、<code>curl</code> / <code>git</code> / <code>npm</code> 等子进程的环境变量、内嵌浏览器会话。界面上地址与密码一律打码。</p></div>
+        <summary>How do I use it behind a corporate proxy?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Settings → AI settings → Network proxy, three modes: follow system / force direct / custom proxy. Custom supports <code>http</code> / <code>https</code> / <code>socks5</code> and applies everywhere at once: model requests and update downloads, env vars for child processes like <code>curl</code> / <code>git</code> / <code>npm</code>, and the embedded browser. Address and password are always masked in the UI.</p></div>
       </details>
       <details>
-        <summary>为什么永久免费，有没有遥测<span class="plus" aria-hidden="true"></span></summary>
-        <div class="a"><p>Apache-2.0 开源，所有功能对个人与商业用户免费：没有内购、没有订阅、没有功能锁、没有遥测，也可以自行编译。没有账号系统，软件不需要联网也能装好；只有在检查更新时才会请求版本清单。</p></div>
+        <summary>Why is it free forever — and is there any telemetry?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Apache-2.0 open source, every feature free for personal and commercial use: no in-app purchases, no subscriptions, no feature locks, no telemetry — or build it yourself. There is no account system, and the app installs fine offline; the only outbound request is the version manifest check on update.</p></div>
       </details>
     </div>
-    <p class="lead" style="margin-top:22px">没找到答案？到 <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">问题反馈页</a> 描述一下现象（系统、版本、复现步骤就够了），或加 <a href="https://qm.qq.com/q/qlFr8ct0ps" target="_blank" rel="noopener">QQ 群</a> 直接问。</p>
+    <p class="lead" style="margin-top:22px">Still stuck? Describe what happened on the <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">feedback page</a> (OS, version, steps to reproduce are enough), or ask in the <a href="https://qm.qq.com/q/qlFr8ct0ps" target="_blank" rel="noopener">QQ group</a>.</p>
   </div>
 </section>
 </main>
@@ -847,21 +847,21 @@ SigLevel = Never'>复制</button></div>
   <div class="wrap">
     <div class="foot-top">
       <div>
-        <div class="foot-brand"><img src="/icon.png" alt="" width="20" height="20"><span class="brand-name">触手怪</span><span class="brand-tag">BIT</span></div>
-        <p style="margin:10px 0 0;max-width:32rem">osbt.space 是触手怪 BIT 的官方站点：os = Open Source，bt = BIT。源码、发布与问题追踪都在 GitHub。</p>
+        <div class="foot-brand"><img src="/icon.png" alt="" width="20" height="20"><span class="brand-name">BrainTentacle</span><span class="brand-tag">BIT</span></div>
+        <p style="margin:10px 0 0;max-width:32rem">osbt.space is the home of BrainTentacle (BIT): os = Open Source, bt = BIT. Source, releases and issue tracking live on GitHub.</p>
       </div>
-      <nav class="foot-links" aria-label="相关链接">
-        <a href="https://github.com/yxpil/BrainTentacle" target="_blank" rel="noopener">源码仓库</a>
-        <a href="https://github.com/yxpil/BrainTentacle/releases" target="_blank" rel="noopener">版本发布</a>
-        <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">问题反馈</a>
-        <a href="https://qm.qq.com/q/qlFr8ct0ps" target="_blank" rel="noopener">QQ 群</a>
-        <a href="/privacy">隐私政策</a>
+      <nav class="foot-links" aria-label="Related links">
+        <a href="https://github.com/yxpil/BrainTentacle" target="_blank" rel="noopener">Repository</a>
+        <a href="https://github.com/yxpil/BrainTentacle/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">Feedback</a>
+        <a href="https://qm.qq.com/q/qlFr8ct0ps" target="_blank" rel="noopener">QQ group</a>
+        <a href="/privacy">Privacy</a>
         <a href="https://yxpil.com" target="_blank" rel="noopener">yxpil.com</a>
         <a href="https://yxp.hk" target="_blank" rel="noopener">yxp.hk</a>
         <a href="https://cidaiji.com" target="_blank" rel="noopener">cidaiji.com</a>
       </nav>
     </div>
-    <p class="foot-line">© 2026 yxpil · osbt.space · 软件以 Apache-2.0 授权 · 本站不收集任何访问者数据</p>
+    <p class="foot-line">© 2026 yxpil · osbt.space · Apache-2.0 · no visitor data collected</p>
   </div>
 </footer>
 
@@ -905,19 +905,19 @@ SigLevel = Never'>复制</button></div>
     if (/x86_64|x64|amd64/i.test(name)) return "x64";
     return null;
   }
-  var ARCH_LABEL = { x64:"x64", arm64:"arm64", loong:"龙芯 LoongArch", riscv:"RISC-V", ppc:"POWER ppc64le", null:"通用" };
+  var ARCH_LABEL = { x64:"x64", arm64:"arm64", loong:"LoongArch", riscv:"RISC-V", ppc:"POWER ppc64le", null:"Universal" };
   function kindOf(name){
-    if (/\.dmg$/i.test(name)) return "磁盘映像，拖进「应用程序」";
-    if (/-app\.zip$/i.test(name)) return "免安装包，解压即用";
-    if (/-setup\.exe$/i.test(name)) return "安装程序（NSIS）";
-    if (/-portable\.zip$/i.test(name)) return "便携版，解压即用";
-    if (/\.msi$/i.test(name)) return "MSI 安装包";
-    if (/\.AppImage$/i.test(name)) return "AppImage，chmod +x 后直接运行";
-    if (/\.deb$/i.test(name)) return "Debian / Ubuntu 包";
-    if (/\.rpm$/i.test(name)) return "Fedora / RHEL 包";
-    if (/musl/i.test(name)) return "静态链接，musl 环境首选";
-    if (/\.tar\.gz$/i.test(name)) return "压缩包，解压后放 PATH";
-    return "安装包";
+    if (/\.dmg$/i.test(name)) return "Disk image — drag into /Applications";
+    if (/-app\.zip$/i.test(name)) return "No-install archive — unzip and run";
+    if (/-setup\.exe$/i.test(name)) return "Installer (NSIS)";
+    if (/-portable\.zip$/i.test(name)) return "Portable — unzip and run";
+    if (/\.msi$/i.test(name)) return "MSI installer";
+    if (/\.AppImage$/i.test(name)) return "AppImage — chmod +x and run";
+    if (/\.deb$/i.test(name)) return "Debian / Ubuntu package";
+    if (/\.rpm$/i.test(name)) return "Fedora / RHEL package";
+    if (/musl/i.test(name)) return "Statically linked (musl)";
+    if (/\.tar\.gz$/i.test(name)) return "Tarball — extract and put on PATH";
+    return "Installer";
   }
   function ratio(bytes){
     if (!bytes) return "";
@@ -955,10 +955,10 @@ SigLevel = Never'>复制</button></div>
     var dl = "/dl/v" + state.ver + "/" + a.name;
     return '<div class="asset' + (rec ? ' rec' : '') + '">' +
       '<div class="asset-main"><div class="asset-name">' + a.name + '</div>' +
-      '<div class="asset-sub">' + (ARCH_LABEL[arch] || "通用") + ' · ' + kindOf(a.name) + (rec ? ' <em class="rec-tag">推荐</em>' : '') + '</div></div>' +
+      '<div class="asset-sub">' + (ARCH_LABEL[arch] || "Universal") + ' · ' + kindOf(a.name) + (rec ? ' <em class="rec-tag">Recommended</em>' : '') + '</div></div>' +
       '<div class="asset-size mono">' + ratio(a.size) + '</div>' +
       '<div class="asset-act"><a class="dlbtn" href="' + dl + '" download>' +
-      '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7.25 1.5v7.44l-2.5-2.5-1.06 1.06L8 10.56l4.31-4.31-1.06-1.06-2.5 2.5V1.5h-1.5ZM2 12.25v1.5h12v-1.5H2Z"/></svg>下载</a></div>' +
+      '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7.25 1.5v7.44l-2.5-2.5-1.06 1.06L8 10.56l4.31-4.31-1.06-1.06-2.5 2.5V1.5h-1.5ZM2 12.25v1.5h12v-1.5H2Z"/></svg>Download</a></div>' +
       '</div>';
   }
 
@@ -979,9 +979,9 @@ SigLevel = Never'>复制</button></div>
     var list = rows(state.plat);
     var rec = recommendName(state.plat);
     if (!list.length) {
-      box.innerHTML = '<div class="asset"><div class="asset-main"><div class="asset-name">该平台的构建暂未上传</div>' +
-        '<div class="asset-sub">可以直接看 Releases 页面</div></div><div class="asset-act">' +
-        '<a class="dlbtn" href="' + RELEASES + '" target="_blank" rel="noopener">前往 Releases</a></div></div>';
+      box.innerHTML = '<div class="asset"><div class="asset-main"><div class="asset-name">No build uploaded for this platform yet</div>' +
+        '<div class="asset-sub">Check the Releases page instead</div></div><div class="asset-act">' +
+        '<a class="dlbtn" href="' + RELEASES + '" target="_blank" rel="noopener">Go to Releases</a></div></div>';
     } else {
       box.innerHTML = list.map(function(a){ return assetHTML(a, a.name === rec); }).join("");
     }
@@ -1004,12 +1004,12 @@ SigLevel = Never'>复制</button></div>
     });
     var cur = document.getElementById("cta-label");
     if (cur) {
-      var label = { mac:"macOS", win:"Windows", linux:"Linux", native:"龙芯 / RISC-V" }[state.plat];
-      cur.textContent = "下载 " + label + " 版";
+      var label = { mac:"macOS", win:"Windows", linux:"Linux", native:"LoongArch / RISC-V" }[state.plat];
+      cur.textContent = "Download for " + label;
     }
     var det = document.getElementById("detected");
     if (det) {
-      var map = { mac:"macOS", win:"Windows", linux:"Linux", native:"龙芯 / RISC-V" }[state.plat];
+      var map = { mac:"macOS", win:"Windows", linux:"Linux", native:"LoongArch / RISC-V" }[state.plat];
       det.textContent = map + " · " + (state.arch === "arm64" ? "arm64" : "x64");
     }
   }
@@ -1048,7 +1048,7 @@ SigLevel = Never'>复制</button></div>
     var btn = e.target.closest(".copy");
     if (!btn) return;
     var text = btn.dataset.copy || (btn.parentNode.querySelector("pre") || {}).textContent || "";
-    var done = function(){ btn.textContent = "已复制"; btn.dataset.ok = "1"; setTimeout(function(){ btn.textContent = "复制"; delete btn.dataset.ok; }, 1400); };
+    var done = function(){ btn.textContent = "Copied"; btn.dataset.ok = "1"; setTimeout(function(){ btn.textContent = "Copy"; delete btn.dataset.ok; }, 1400); };
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(done).catch(function(){ fallback(text, done); });
     } else { fallback(text, done); }
