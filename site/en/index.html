@@ -1,0 +1,1066 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BrainTentacle BIT — Desktop AI Agent Hub | osbt.space</title>
+<meta name="description" content="BrainTentacle BIT is a local-first desktop AI agent hub: an Electron shell with a Rust core (bit-core) and a React UI. Plug in any model and chat in streaming — let the AI call local tools, write scripts on the fly, and save conclusions as memory and skills. Secrets are masked before the model sees them, data never leaves your machine, and every call is auditable. Apache-2.0, free forever, for Windows / macOS / Linux / LoongArch / RISC-V.">
+<meta name="keywords" content="BrainTentacle,BIT,AI agent,desktop agent,MCP,Model Context Protocol,local-first,open source,LoongArch,RISC-V,tool registry">
+<meta name="theme-color" content="#0E0F10">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="osbt.space">
+<meta property="og:title" content="BrainTentacle BIT — Desktop AI Agent Hub">
+<meta property="og:description" content="Give the AI tentacles on your desktop. A local-first, auditable, secret-masking desktop agent hub. Apache-2.0.">
+<meta property="og:url" content="https://osbt.space/">
+<meta property="og:image" content="https://osbt.space/icon.png">
+<link rel="canonical" href="https://osbt.space/en/">
+<link rel="icon" href="/icon.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "BrainTentacle BIT",
+  "alternateName": "BrainTentacle",
+  "url": "https://osbt.space/",
+  "downloadUrl": "https://github.com/yxpil/BrainTentacle/releases",
+  "codeRepository": "https://github.com/yxpil/BrainTentacle",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Windows, macOS, Linux",
+  "license": "https://opensource.org/licenses/Apache-2.0",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+  "description": "A local-first desktop AI agent hub: Electron shell, Rust core, and a standard MCP server endpoint.",
+  "featureList": [
+    "Tool registry: register, toggle, success-rate and latency stats",
+    "Three extension layers: local plugins / MCP servers / hosted processes",
+    "HiddenCode secret masking and L2 PASS review",
+    "Standard MCP both ways (POST /mcp)",
+    "OpenAI-compatible endpoint /v1/chat/completions",
+    "bit TUI, audit log, auto-update"
+  ]
+}
+</script>
+<style>
+:root{
+  --paper:#F4F5F3;
+  --paper-2:#ECEDE9;
+  --ink:#131416;
+  --ink-2:#3B4045;
+  --muted:#757C83;
+  --rule:#D7D9D3;
+  --rule-soft:#E4E5E0;
+  --plate:#0E0F10;
+  --plate-2:#17191A;
+  --plate-ink:#E9EAE6;
+  --plate-muted:#8B908C;
+  --plate-rule:#2A2D2E;
+  --seal:#BE3428;
+  --max:1140px;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Consolas","Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth;scroll-padding-top:84px}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--sans);font-size:15px;line-height:1.72;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+a{color:inherit}
+img{max-width:100%;height:auto}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 20px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ── 导航 ── */
+.nav{
+  position:sticky;top:0;z-index:20;
+  background:rgba(244,245,243,.86);
+  backdrop-filter:saturate(140%) blur(12px);
+  -webkit-backdrop-filter:saturate(140%) blur(12px);
+  border-bottom:1px solid var(--rule);
+}
+.nav-inner{display:flex;align-items:center;gap:14px;height:60px;max-width:var(--max);margin:0 auto;padding:0 20px}
+.brand{display:flex;align-items:center;gap:9px;text-decoration:none;flex:none}
+.brand img{width:26px;height:26px;border-radius:50%;flex:none}
+.brand-name{font-weight:700;font-size:15px;letter-spacing:-.01em}
+.brand-tag{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.06em}
+.navlinks{display:none;align-items:center;gap:2px;margin-left:14px}
+.navlinks a{
+  font-size:13.5px;color:var(--ink-2);text-decoration:none;padding:6px 10px;border-radius:3px;
+}
+.navlinks a:hover{background:var(--paper-2);color:var(--ink)}
+.nav-right{display:flex;align-items:center;gap:8px;margin-left:auto}
+.btn{
+  display:inline-flex;align-items:center;gap:8px;justify-content:center;
+  font-size:14px;font-weight:600;line-height:1;
+  padding:12px 18px;border-radius:3px;border:1px solid var(--ink);
+  background:var(--ink);color:#fff;text-decoration:none;cursor:pointer;
+  font-family:var(--sans);
+}
+.btn:hover{background:#000}
+.btn.ghost{background:transparent;color:var(--ink)}
+.btn.ghost:hover{background:var(--ink);color:#fff}
+.btn.sm{padding:9px 14px;font-size:13px}
+.btn.icon{padding:9px 10px;border-color:var(--rule);background:transparent;color:var(--ink)}
+.btn.icon:hover{border-color:var(--ink);background:transparent}
+.btn .ico{width:15px;height:15px;flex:none}
+
+/* ── 首屏 ── */
+.hero{padding:52px 0 44px;border-bottom:1px solid var(--rule)}
+.hero-grid{display:grid;gap:36px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11.5px;color:var(--muted);letter-spacing:.04em}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--seal);flex:none}
+h1{
+  margin:18px 0 0;font-size:clamp(34px,8.4vw,62px);line-height:1.04;
+  letter-spacing:-.035em;font-weight:700;max-width:16ch;
+}
+h1 .seal{color:var(--seal)}
+.hero-lead{margin:22px 0 0;max-width:33rem;font-size:16px;line-height:1.78;color:var(--ink-2)}
+.hero-cta{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+.hero-note{margin-top:14px;font-size:12.5px;color:var(--muted)}
+.hero-note a{color:var(--ink-2);text-underline-offset:3px}
+.spec{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:34px}
+.spec div{background:var(--paper);padding:11px 13px;min-width:0}
+.spec dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--muted);text-transform:none;margin:0}
+.spec dd{margin:2px 0 0;font-size:14px;font-weight:600;letter-spacing:-.01em;line-height:1.4}
+.emblem{
+  position:relative;background:var(--plate);border-radius:4px;overflow:hidden;
+  padding:26px;display:flex;flex-direction:column;justify-content:space-between;
+  min-height:300px;
+}
+.emblem::before{
+  content:"";position:absolute;inset:0;
+  background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.11) 1px,transparent 0);
+  background-size:16px 16px;opacity:.6;pointer-events:none;
+}
+.emblem img{
+  width:min(58%,220px);align-self:center;margin:auto;border-radius:50%;position:relative;
+  filter:grayscale(1) contrast(1.05);
+  animation:stamp .8s cubic-bezier(.2,.7,.2,1) both;
+}
+@keyframes stamp{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
+.emblem figcaption{
+  position:relative;font-family:var(--mono);font-size:11px;line-height:1.7;
+  color:var(--plate-muted);letter-spacing:.02em;margin-top:16px;
+}
+.emblem figcaption b{color:var(--plate-ink);font-weight:400}
+
+/* ── 章节 ── */
+.sec{padding:56px 0;border-bottom:1px solid var(--rule)}
+.sec-head{margin-bottom:34px;display:grid;gap:10px}
+h2{margin:0;font-size:clamp(24px,4.2vw,33px);line-height:1.18;letter-spacing:-.025em;font-weight:700}
+.lead{margin:0;color:var(--ink-2);max-width:42rem;font-size:15.5px}
+
+/* 能力清单 */
+.caps{display:grid;gap:0;border-top:1px solid var(--rule)}
+.cap{display:grid;gap:3px;padding:17px 0;border-bottom:1px solid var(--rule-soft);min-width:0}
+.cap h3{margin:0;font-size:15.5px;font-weight:650;letter-spacing:-.01em}
+.cap p{margin:0;font-size:14.5px;color:var(--muted);line-height:1.7}
+.cap .tag{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.04em}
+
+/* 三层扩展 */
+.ladder{display:grid;gap:20px}
+.step{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start}
+.step-no{
+  font-family:var(--mono);font-size:11.5px;color:var(--muted);letter-spacing:.06em;
+  border:1px solid var(--rule);width:40px;height:40px;display:grid;place-items:center;flex:none;
+}
+.step-body{min-width:0;padding-top:1px}
+.step-body h3{margin:0 0 4px;font-size:16px;font-weight:650;letter-spacing:-.01em}
+.step-body p{margin:0;color:var(--ink-2);font-size:14.5px}
+.step-body code,code.k{
+  font-family:var(--mono);font-size:12.5px;background:var(--paper-2);
+  padding:1px 5px;border-radius:2px;color:var(--ink);
+}
+
+/* 插件生态 */
+.plug-list{display:grid;gap:0;border-top:1px solid var(--rule)}
+.plug-item{display:grid;gap:3px;padding:14px 0;border-bottom:1px solid var(--rule-soft);min-width:0}
+.plug-item dt{font-size:14.5px;font-weight:650;letter-spacing:-.01em;display:flex;flex-wrap:wrap;align-items:baseline;gap:9px}
+.plug-item dt .f{font-family:var(--mono);font-size:11.5px;font-weight:400;color:var(--muted);letter-spacing:0}
+.plug-item dd{margin:0;font-size:14px;color:var(--muted);line-height:1.7}
+.paths{display:grid;gap:6px;margin:10px 0 0}
+.path-row{display:flex;gap:10px;align-items:baseline;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);min-width:0}
+.path-row span.os{color:var(--muted);flex:none;width:64px}
+.path-row code{word-break:break-all}
+.plugs{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.chip{
+  display:inline-flex;align-items:baseline;gap:7px;background:#fff;
+  border:1px solid var(--rule);border-radius:3px;padding:6px 10px;
+  font-size:12.5px;color:var(--ink-2);text-decoration:none;
+}
+.chip:hover{border-color:var(--ink);color:var(--ink)}
+.chip b{font-weight:600;color:inherit}
+.chip em{font-style:normal;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+
+/* 安全 */
+.safe-grid{display:grid;gap:28px}
+.flow{
+  border:1px solid var(--rule);background:#fff;padding:20px 18px;overflow-x:auto;
+}
+.flow svg{display:block;width:100%;min-width:460px;height:auto}
+.flow-cap{margin:12px 0 0;font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.02em}
+.safe-list{display:grid;gap:0}
+.safe-list .cap{border-bottom:1px solid var(--rule-soft)}
+
+/* 下载 */
+.dl{background:var(--plate);color:var(--plate-ink);border-radius:6px;padding:24px 18px}
+.dl-head{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;justify-content:space-between}
+.dl-head h2{color:var(--plate-ink);font-size:clamp(22px,3.6vw,28px)}
+.dl-meta{font-family:var(--mono);font-size:11px;color:var(--plate-muted);letter-spacing:.03em}
+.tabs{display:flex;gap:6px;margin:18px 0 6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  flex:none;font-family:var(--sans);font-size:13px;font-weight:550;
+  padding:8px 14px;border-radius:3px;border:1px solid var(--plate-rule);
+  background:transparent;color:var(--plate-muted);cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;
+}
+.tab[aria-pressed="true"]{background:var(--plate-ink);color:var(--plate);border-color:var(--plate-ink)}
+.tab:hover{color:var(--plate-ink);border-color:#4a4d4e}
+.tab[aria-pressed="true"]:hover{color:var(--plate)}
+.hint{font-size:12.5px;color:var(--plate-muted);margin:10px 0 0}
+.assets{display:grid;margin-top:16px;border-top:1px solid var(--plate-rule)}
+.asset{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:"info info" "size act";
+  gap:8px 12px;align-items:center;
+  padding:13px 0;border-bottom:1px solid var(--plate-rule);min-width:0;
+}
+.asset-main{grid-area:info;min-width:0}
+.asset-name{font-family:var(--mono);font-size:12.5px;color:var(--plate-ink);word-break:break-all;line-height:1.5}
+.asset-sub{font-size:11.5px;color:var(--plate-muted);margin-top:2px}
+.asset-act{grid-area:act;display:flex;align-items:center;gap:10px;flex:none}
+.asset-size{grid-area:size;font-family:var(--mono);font-size:11px;color:var(--plate-muted)}
+.dlbtn{
+  display:inline-flex;align-items:center;gap:6px;text-decoration:none;
+  font-size:12.5px;font-weight:600;padding:7px 12px;border-radius:3px;
+  background:var(--plate-ink);color:var(--plate);border:1px solid var(--plate-ink);
+}
+.dlbtn:hover{background:#fff}
+.dlbtn .ico{width:13px;height:13px}
+.dl-foot{margin-top:14px;font-size:12px;color:var(--plate-muted);display:flex;flex-wrap:wrap;gap:6px 16px}
+.dl-foot a{color:var(--plate-ink);text-underline-offset:3px}
+.cli{margin-top:26px;padding-top:22px;border-top:1px solid var(--plate-rule)}
+.cli-head{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;justify-content:space-between}
+.cli-title{font-size:14px;font-weight:650;color:var(--plate-ink);letter-spacing:-.01em}
+.cli-note{font-family:var(--mono);font-size:11px;color:var(--plate-muted)}
+.asset.rec{background:rgba(255,255,255,.05)}
+.rec-tag{
+  font-style:normal;font-size:10.5px;letter-spacing:.02em;color:#E8736A;
+  border:1px solid rgba(232,115,106,.5);padding:1px 5px;border-radius:2px;margin-left:5px;
+}
+
+/* 命令 */
+.cmds{display:grid;gap:14px}
+.cmd{display:grid;gap:8px}
+.cmd-head{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.cmd-name{font-size:14px;font-weight:650;letter-spacing:-.01em}
+.cmd-os{font-family:var(--mono);font-size:10.5px;color:var(--muted);letter-spacing:.05em;flex:none}
+.code{
+  position:relative;display:flex;align-items:flex-start;gap:12px;
+  background:#fff;border:1px solid var(--rule);border-radius:3px;
+  padding:12px 12px 12px 14px;overflow:hidden;
+}
+.code pre{
+  margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.65;
+  white-space:pre;overflow-x:auto;color:var(--ink);flex:1;min-width:0;
+  scrollbar-width:thin;
+}
+.copy{
+  flex:none;font-family:var(--sans);font-size:11.5px;font-weight:600;color:var(--ink-2);
+  border:1px solid var(--rule);background:var(--paper);border-radius:2px;
+  padding:4px 9px;cursor:pointer;
+}
+.copy:hover{border-color:var(--ink);color:var(--ink)}
+.copy[data-ok]{color:var(--seal);border-color:var(--seal)}
+
+/* FAQ */
+.faq{border-top:1px solid var(--rule)}
+.faq details{border-bottom:1px solid var(--rule-soft)}
+.faq summary{
+  list-style:none;cursor:pointer;padding:15px 0;font-size:15px;font-weight:600;
+  display:flex;align-items:center;gap:12px;letter-spacing:-.01em;
+}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary .plus{
+  flex:none;width:16px;height:16px;position:relative;margin-left:auto;
+}
+.faq summary .plus::before,.faq summary .plus::after{
+  content:"";position:absolute;background:var(--muted);transition:transform .25s ease,opacity .25s ease;
+}
+.faq summary .plus::before{inset:7px 0 auto;height:1.5px}
+.faq summary .plus::after{inset:0 7px;width:1.5px}
+.faq details[open] summary .plus::after{transform:scaleY(0);opacity:0}
+.faq .a{padding:0 0 16px;color:var(--ink-2);font-size:14.5px;max-width:46rem}
+.faq .a code{font-family:var(--mono);font-size:12.5px;background:var(--paper-2);padding:1px 5px;border-radius:2px}
+.faq .a .code{margin-top:10px}
+
+/* 页脚 */
+.foot{padding:44px 0 56px;color:var(--muted);font-size:13px}
+.foot-top{display:grid;gap:20px}
+.foot-brand{display:flex;align-items:center;gap:8px;color:var(--ink)}
+.foot-brand img{width:20px;height:20px;border-radius:50%}
+.foot-links{display:flex;flex-wrap:wrap;gap:8px 20px}
+.foot-links a{color:var(--ink-2);text-decoration:none}
+.foot-links a:hover{text-decoration:underline;text-underline-offset:3px}
+.foot-line{margin-top:18px;font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.02em}
+
+/* 宽屏 */
+@media (min-width:720px){
+  .wrap,.nav-inner{padding:0 28px}
+  .spec{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .caps{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:40px}
+  .cap{border-bottom:1px solid var(--rule-soft)}
+  .step{grid-template-columns:auto minmax(0,1fr);gap:18px}
+  .dl{padding:32px 30px}
+  .assets{grid-template-columns:1fr}
+  .asset{grid-template-columns:minmax(0,1fr) 74px auto;grid-template-areas:"info size act";gap:16px}
+  .cmds{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px}
+  .safe-grid{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:40px;align-items:start}
+  .foot-top{grid-template-columns:minmax(0,1fr) auto;align-items:start}
+}
+@media (min-width:960px){
+  .navlinks{display:flex}
+  .hero{padding:72px 0 60px}
+  .hero-grid{grid-template-columns:minmax(0,1.32fr) minmax(0,.78fr);gap:56px;align-items:start}
+  .emblem{min-height:420px;padding:32px}
+  .sec{padding:72px 0}
+  .caps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .step-no{width:46px;height:46px;font-size:12px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .emblem img{animation:none}
+  *{transition:none!important}
+}
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="/" aria-label="BrainTentacle BIT home">
+      <img src="/icon.png" alt="" width="26" height="26">
+      <span class="brand-name">BrainTentacle</span><span class="brand-tag">BIT</span>
+    </a>
+    <nav class="navlinks" aria-label="Primary navigation">
+      <a href="#caps">Features</a>
+      <a href="#extend">Extend</a>
+      <a href="#plugins">Plugins</a>
+      <a href="#safety">Security</a>
+      <a href="#download">Download</a>
+      <a href="#channels">Install</a>
+      <a href="#docs">Docs</a>
+    </nav>
+    <div class="nav-right">
+      <a class="btn ghost sm" href="/">中文</a>
+      <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle" target="_blank" rel="noopener">
+        <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>Source</span>
+      </a>
+      <a class="btn sm" href="#download">Download</a>
+    </div>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Local-first · <span id="ver-chip">v0.7.6</span> · Apache-2.0 · Free forever</p>
+        <h1>Give the AI<br>tentacles on your desktop.</h1>
+        <p class="hero-lead">
+          BrainTentacle BIT is a desktop agent hub: an Electron shell, a Rust core (bit-core), and a React UI.
+          Point it at any model and chat in streaming — let the AI call local tools, write scripts on the fly, and save conclusions as memory and skills.
+          Secrets are masked before they reach the model, data never leaves this machine, and every call leaves an audit trail.
+        </p>
+        <div class="hero-cta">
+          <a class="btn" id="cta-primary" href="#download">
+            <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7.25 1.5v7.44l-2.5-2.5-1.06 1.06L8 10.56l4.31-4.31-1.06-1.06-2.5 2.5V1.5h-1.5ZM2 12.25v1.5h12v-1.5H2Z"/></svg>
+            <span id="cta-label">Download installer</span>
+          </a>
+          <a class="btn ghost" href="https://github.com/yxpil/BrainTentacle" target="_blank" rel="noopener">Source &amp; docs</a>
+        </div>
+        <p class="hero-note">Or install it in one line: <a href="#channels">Homebrew · Scoop · npm · APT · DNF · pacman</a></p>
+        <dl class="spec">
+          <div><dt>Latest</dt><dd><span id="ver-spec">v0.7.6</span></dd></div>
+          <div><dt>Platform</dt><dd>Windows · macOS · Linux</dd></div>
+          <div><dt>Arch</dt><dd>x64 · arm64 · LoongArch · RISC-V</dd></div>
+          <div><dt>License</dt><dd>Apache-2.0</dd></div>
+        </dl>
+      </div>
+      <figure class="emblem">
+        <img src="/icon.png" alt="BrainTentacle BIT logo: white pixel tentacles on black" width="512" height="512">
+        <figcaption><b>5 CPU architectures</b>　·　<b>7 package managers</b><br>Every tentacle is a callable tool.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="caps">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>It gets the AI out of the chat box</h2>
+      <p class="lead">More than Q&amp;A. Tools run on your machine, scripts are written by the AI itself, and conclusions persist across sessions on your disk. Everything below works offline, with zero accounts required.</p>
+    </div>
+    <div class="caps">
+      <div class="cap">
+        <h3>Tool registry</h3>
+        <p>Register, toggle and call tools; local interpreters are auto-detected (Python / Node / PowerShell / Perl / Julia…). The AI writes a script that reads args on stdin and prints results to stdout, and it becomes a tool — hot-reloaded, with success rate and average latency shown for each one.</p>
+      </div>
+      <div class="cap">
+        <h3>Three extension layers</h3>
+        <p>A local plugin with one <code>plugin.json</code>, any standard MCP server, or your own long-running process hosted directly. All three end up in the same tool registry, and the AI calls them identically.</p>
+      </div>
+      <div class="cap">
+        <h3>Memory &amp; skills</h3>
+        <p>The AI saves things on its own via the built-in <code>add_memory</code> and <code>skill</code> tools: today’s gotcha, this project’s conventions, the way a given flow works — reused next time, no manual organizing.</p>
+      </div>
+      <div class="cap">
+        <h3>Sub-agents</h3>
+        <p>With Autopilot on, todos are dispatched to sub-agents and worked in parallel; plan goals and task progress are visible and deletable on the Memory page at any time.</p>
+      </div>
+      <div class="cap">
+        <h3>Long tasks don’t get cut off</h3>
+        <p>Close the window and it lives in the tray; right-click the task panel to inspect chat turns, background commands, sub-agents and active goals. Long commands auto-background and keep running when you switch away; enable “prevent system sleep” if needed.</p>
+      </div>
+      <div class="cap">
+        <h3>Remote access &amp; gateway</h3>
+        <p>Turn on remote access and a full HTTP API is exposed (default <code>0.0.0.0:8600</code>), including an OpenAI-compatible <code>/v1/chat/completions</code> endpoint — your desktop model and tools become a gateway on the LAN.</p>
+      </div>
+      <div class="cap">
+        <h3>MCP client &amp; server</h3>
+        <p>It is an MCP client (Streamable HTTP or stdio, to import external tools) and a standard MCP server at <code>POST /mcp</code> with automatic protocol version negotiation — Claude Desktop and MCP Inspector connect out of the box.</p>
+      </div>
+      <div class="cap">
+        <h3>Terminal mode</h3>
+        <p>After install, type <code>bit</code> in any terminal for the TUI: no window, no single-instance lock, no listening port — made for SSH and headless boxes.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="extend">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Three layers of extension, light to heavy</h2>
+      <p class="lead">Local plugins are the lightest lift, MCP plugs into an existing ecosystem, and WorkWith hosts your own process directly. All three feed the same tool registry, and the AI treats them the same.</p>
+    </div>
+    <div class="ladder">
+      <div class="step">
+        <span class="step-no" aria-hidden="true">01</span>
+        <div class="step-body">
+          <h3>Local plugins: one folder, one <code>plugin.json</code></h3>
+          <p>Drop the plugin folder into <code>toolhomes/plugins/</code> under your data dir and hit “rescan plugins” — tools, prompts, skills, memories and scheduled jobs go live together. You can also declare long-running services, standalone pages and chat-page icon entries in the same file.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-no" aria-hidden="true">02</span>
+        <div class="step-body">
+          <h3>MCP servers: paste an <code>mcpServers</code> block</h3>
+          <p>Same config format as Cursor and Claude Desktop (<code>command</code> + <code>args</code> + <code>env</code>); it can also scan a port range and auto-discover MCP servers already running on your LAN.</p>
+          <div class="code">
+            <pre>{ "mcpServers": { "files": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"] } } }</pre>
+            <button class="copy" type="button" data-copy='{ "mcpServers": { "files": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"] } } }'>Copy</button>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-no" aria-hidden="true">03</span>
+        <div class="step-body">
+          <h3>WorkWith: host your own long-running process</h3>
+          <p>Point it at an executable on the Services page and you’re done — the host launches the process, scans its port and wires up MCP automatically. Ports, logs and shutdown are all managed by the host.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="plugins">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>The plugin ecosystem: one folder is one new capability</h2>
+      <p class="lead">No packaging, no compiling, no host code to touch. Drop a <code class="k">plugin.json</code> into the plugins directory and tools, prompts, skills, memories, jobs, services and standalone pages are handed to the AI at once; hit rescan and your changes are live. Plugins are declarative local files — nothing runs until you download it.</p>
+    </div>
+
+    <dl class="plug-list">
+      <div class="plug-item">
+        <dt>Tools<span class="f">tools[]</span></dt>
+        <dd>Declare one tool the AI can call: parameters described by JSON Schema; the script reads args on stdin and prints results to stdout. It runs on a local interpreter (Python / Node / PowerShell / Perl / Julia…) or in the built-in Rhai sandbox. Every tool shows its success rate and average latency.</dd>
+      </div>
+      <div class="plug-item">
+        <dt>Prompts<span class="f">prompts[]</span></dt>
+        <dd>Appended to the system prompt when enabled. Write rules like “this project uses pnpm, not npm” or “lead with the conclusion” into a plugin; install it on another machine and the AI works the same way.</dd>
+      </div>
+      <div class="plug-item">
+        <dt>Skills<span class="f">skills[]</span></dt>
+        <dd>Inject reusable procedures (name + summary), same shape as skills the AI derives on its own. A good way to bake in a troubleshooting checklist or a document template.</dd>
+      </div>
+      <div class="plug-item">
+        <dt>Memories<span class="f">memories[]</span></dt>
+        <dd>Injected as long-term facts: this machine’s default working directory, internal hostnames, team conventions — present from install, no need to restate them every chat.</dd>
+      </div>
+      <div class="plug-item">
+        <dt>Jobs<span class="f">jobs[]</span></dt>
+        <dd>Run a script on a cadence like <code>every 30m</code> / <code>daily 09:00</code>; the output can be injected into a chosen session so the AI takes over, or just land in the audit log.</dd>
+      </div>
+      <div class="plug-item">
+        <dt>Services<span class="f">services[]</span></dt>
+        <dd>Up to 16: the plugin ships a process; the host assigns a port (write <code>0</code> for auto, delivered via <code>BIT_PLUGIN_PORT</code>) and manages logs and shutdown. With <code>mcp_mode</code> set to <code>http</code> the port is auto-wired as an MCP server once ready; with <code>stdio</code> the process itself is the MCP server.</dd>
+      </div>
+      <div class="plug-item">
+        <dt>Pages<span class="f">pages[] · status_page</span></dt>
+        <dd>Register standalone pages in the sidebar (sandboxed iframe, static <code>src</code> or dynamic <code>url</code>), plus a live status panel on the plugin detail page — dashboards, metrics, health checks all fit.</dd>
+      </div>
+      <div class="plug-item">
+        <dt>Chat entries<span class="f">chat_icons[] · takeover[]</span></dt>
+        <dd>Up to 4 icon entries: tapping one opens the plugin page, or fills a prompt into the composer. Go further and take over built-in buttons (voice / preview / attachments / plan / templates / web / background tasks) with your own entry — Settings is never takeover-able, and built-ins can be restored with one click.</dd>
+      </div>
+      <div class="plug-item">
+        <dt>Permissions<span class="f">permissions[] · bridge</span></dt>
+        <dd>Every capability must be declared up front; undeclared calls are refused outright. Settings lists permissions one by one with individual toggles — <code>exec</code> (run commands) and <code>write</code> (touch any file) are flagged high-risk. Exposing an endpoint (bundled server / page / settings UI) requires a <code>bridge</code> block; tokens are minted at each launch and never ship inside the plugin.</dd>
+      </div>
+    </dl>
+
+    <div class="sec-head" style="margin:42px 0 18px">
+      <h3 style="margin:0;font-size:19px;letter-spacing:-.02em">Three steps to get in</h3>
+    </div>
+
+    <div class="ladder">
+      <div class="step">
+        <span class="step-no" aria-hidden="true">01</span>
+        <div class="step-body">
+          <h3>Find the plugins directory</h3>
+          <p>It’s always <code>toolhomes/plugins/</code> under your data dir. With BIT installed, the Tools page → Local plugins block shows the full path with a one-click copy.</p>
+          <div class="paths">
+            <div class="path-row"><span class="os">Windows</span><code>%APPDATA%\com.bit.hub\toolhomes\plugins\</code></div>
+            <div class="path-row"><span class="os">macOS</span><code>~/Library/Application Support/com.bit.hub/toolhomes/plugins/</code></div>
+            <div class="path-row"><span class="os">Linux</span><code>${XDG_DATA_HOME:-~/.local/share}/com.bit.hub/toolhomes/plugins/</code></div>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-no" aria-hidden="true">02</span>
+        <div class="step-body">
+          <h3>Drop a folder in</h3>
+          <p>The folder name is the plugin id; the layout must be <code>plugins/&lt;plugin-name&gt;/plugin.json</code> — no extra nesting. Unzip a ready-made bundle here, or write your own <code>plugin.json</code>: it’s the single manifest, and scripts / pages / settings live next to it, referenced by relative path.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-no" aria-hidden="true">03</span>
+        <div class="step-body">
+          <h3>Hit “rescan plugins”</h3>
+          <p>Tools show up in the tool list immediately; <code>prompts</code> and <code>memories</code> apply from the next chat. Each plugin has its own on/off switch and rescans don’t reset your choices; plugins that fail to load are skipped with a reason listed, never dropped silently.</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="lead" style="margin:30px 0 10px">A minimal manifest that actually runs (tool + prompt + skill + memory + job):</p>
+    <div class="code">
+      <pre>{
+  "name": "my-plugin",
+  "version": "0.1.0",
+  "description": "One line about what this plugin does",
+  "tools": [{
+    "name": "disk_usage",
+    "description": "Disk usage of a given directory",
+    "parameters": {
+      "type": "object",
+      "properties": { "path": { "type": "string", "description": "Directory path" } },
+      "required": ["path"]
+    },
+    "kind": "interpreter",
+    "runtime": "py",
+    "file": "disk_usage.py"
+  }],
+  "prompts": ["Always answer in English."],
+  "skills": [{ "name": "Disk drilldown", "summary": "Run disk_usage first, then drill down level by level" }],
+  "memories": ["Default working directory on this machine is D:/work"],
+  "jobs": [{
+    "name": "daily-report",
+    "schedule": "daily 09:00",
+    "runtime": "py",
+    "file": "daily.py"
+  }]
+}</pre>
+      <button class="copy" type="button" data-copy='{
+  "name": "my-plugin",
+  "version": "0.1.0",
+  "description": "One line about what this plugin does",
+  "tools": [{
+    "name": "disk_usage",
+    "description": "Disk usage of a given directory",
+    "parameters": {
+      "type": "object",
+      "properties": { "path": { "type": "string", "description": "Directory path" } },
+      "required": ["path"]
+    },
+    "kind": "interpreter",
+    "runtime": "py",
+    "file": "disk_usage.py"
+  }],
+  "prompts": ["Always answer in English."],
+  "skills": [{ "name": "Disk drilldown", "summary": "Run disk_usage first, then drill down level by level" }],
+  "memories": ["Default working directory on this machine is D:/work"],
+  "jobs": [{
+    "name": "daily-report",
+    "schedule": "daily 09:00",
+    "runtime": "py",
+    "file": "daily.py"
+  }]
+}'>Copy</button>
+    </div>
+
+    <p class="lead" style="margin:22px 0 10px">Tool scripts speak the same protocol as hand-written tools — <b>read args JSON on stdin, print results to stdout</b>:</p>
+    <div class="code">
+      <pre>import json, sys, shutil
+
+params = json.loads(sys.stdin.read() or "{}")
+total, used, free = shutil.disk_usage(params.get("path", "."))
+print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=False))</pre>
+      <button class="copy" type="button" data-copy='import json, sys, shutil
+
+params = json.loads(sys.stdin.read() or "{}")
+total, used, free = shutil.disk_usage(params.get("path", "."))
+print(json.dumps({"total": total, "used": used, "free": free}, ensure_ascii=False))'>Copy</button>
+    </div>
+
+    <div class="sec-head" style="margin:42px 0 14px">
+      <h3 style="margin:0;font-size:19px;letter-spacing:-.02em">The repo already ships a plugin library — copy and adapt</h3>
+      <p class="lead">Around twenty examples, each demonstrating one capability surface: a bare-bones theme plugin, a price watcher with scheduled snapshots, a dashboard that runs its own server, a device bridge whose process is the MCP server. Copy the whole folder, rename it, and it’s yours.</p>
+    </div>
+    <div class="plugs">
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-notes" target="_blank" rel="noopener"><b>Sticky notes</b><em>data · storage</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/dash-kanban" target="_blank" rel="noopener"><b>Project board</b><em>pages · icon</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-price-watcher" target="_blank" rel="noopener"><b>Price watcher</b><em>jobs · dashboard</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-inventory" target="_blank" rel="noopener"><b>Inventory</b><em>multi-lang tools</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/srv-dashboard" target="_blank" rel="noopener"><b>Dashboard server</b><em>bundled server</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/svc-mcp-stdio" target="_blank" rel="noopener"><b>Device bridge</b><em>stdio MCP</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-net" target="_blank" rel="noopener"><b>External gateway</b><em>external MCP · settings</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/biz-alerts" target="_blank" rel="noopener"><b>Alerts</b><em>events · notify</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/ui-terminal" target="_blank" rel="noopener"><b>Ops console</b><em>React UI · settings</em></a>
+      <a class="chip" href="https://github.com/yxpil/BrainTentacle/tree/main/plugins/ui-theme" target="_blank" rel="noopener"><b>Theme tweak</b><em>minimal css</em></a>
+    </div>
+    <p class="lead" style="margin-top:18px">Full field reference: <a href="https://github.com/yxpil/BrainTentacle/wiki/扩展与插件" target="_blank" rel="noopener">Wiki · Extensions &amp; plugins</a>. To get your plugin into the library, open a PR in the repo or drop a link on the <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">feedback page</a>. Plugins live under the same security contract: per-capability grants, execution audit, secrets masked — <a href="#safety">see the security design</a>.</p>
+  </div>
+</section>
+
+<section class="sec" id="safety">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Keys never reach the model. Data never leaves this machine.</h2>
+      <p class="lead">Secrets are masked before anything is sent to the AI; risky tools get a second-pass review before they run; every call is replayable afterwards. No account system, no telemetry at all.</p>
+    </div>
+    <div class="safe-grid">
+      <div>
+        <div class="flow">
+          <svg viewBox="0 0 660 196" role="img" aria-label="HiddenCode masking flow: raw text is replaced with placeholders before being sent to the AI, then restored locally when tools run">
+            <g fill="none" stroke="#131416" stroke-width="1">
+              <rect x="1.5" y="20" width="190" height="66"/>
+              <rect x="244" y="20" width="148" height="66" stroke="#BE3428" fill="#FBF2F0"/>
+              <rect x="446" y="20" width="212" height="66"/>
+              <rect x="244" y="124" width="148" height="58"/>
+              <path d="M191.5 53h46"/>
+              <path d="M392 53h46"/>
+              <path d="M552 86v56h-149" stroke-dasharray="4 4"/>
+              <path d="M318 124v-30" stroke-dasharray="4 4"/>
+            </g>
+            <g fill="#131416" stroke="none">
+              <path d="M245 53l-7-4v8z"/>
+              <path d="M445 53l-7-4v8z"/>
+              <path d="M318 87l-4 7h8z"/>
+              <path d="M396 142l7-4v8z"/>
+            </g>
+            <g font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif" fill="#131416" stroke="none">
+              <text x="14" y="44" font-size="11" fill="#757C83">Your raw input</text>
+              <text x="14" y="70" font-family="ui-monospace,Consolas,monospace" font-size="12.5">sk-live-9f2a…</text>
+              <text x="116" y="70" font-family="ui-monospace,Consolas,monospace" font-size="12.5" fill="#757C83">138****</text>
+              <text x="258" y="44" font-size="11" fill="#BE3428">HiddenCode masking</text>
+              <text x="258" y="70" font-family="ui-monospace,Consolas,monospace" font-size="12.5">[HC:8f3a2c9e]</text>
+              <text x="460" y="44" font-size="11" fill="#757C83">AI model</text>
+              <text x="460" y="70" font-size="12.5">Only placeholders — never the raw value</text>
+              <text x="258" y="150" font-size="11" fill="#757C83">Tool runs locally</text>
+              <text x="258" y="174" font-size="12.5">Raw value restored on this machine</text>
+            </g>
+          </svg>
+        </div>
+        <p class="flow-cap">Dashed lines = tool call and local restore. Raw values never enter the model context.</p>
+      </div>
+      <div class="safe-list">
+        <div class="cap">
+          <h3>HiddenCode masking</h3>
+          <p>Keys, phone numbers, emails and usernames are swapped for placeholders or your own aliases (Alice → Bob) before anything leaves the machine, then restored when a tool runs. Built-in type masks, exact-value matching, custom regex and paste-time scanning are all supported.</p>
+        </div>
+        <div class="cap">
+          <h3>L2 PASS review</h3>
+          <p>Before a tool runs, a second model decides Allow / Deny and can override auto-approved tools. If the reviewer is unreachable, calls fall back to manual approval without interrupting normal use.</p>
+        </div>
+        <div class="cap">
+          <h3>Audit log</h3>
+          <p>Every tool call and key action is logged and filterable by subject / action / target — afterwards you can reconstruct who touched what, and when.</p>
+        </div>
+        <div class="cap">
+          <h3>Data stays local</h3>
+          <p>Chats, memories, skills and settings all live in the local data dir (Windows <code>%APPDATA%\com.bit.hub</code>, macOS <code>~/Library/Application Support/com.bit.hub</code>) and are gone on uninstall.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="download">
+  <div class="wrap">
+    <div class="dl">
+      <div class="dl-head">
+        <h2>Download</h2>
+        <p class="dl-meta">Detected platform: <span id="detected">Detecting…</span></p>
+      </div>
+      <p class="hint">Installers are hosted on GitHub Releases; SHA256 checksums are on each Release page. Downloads are relayed through this site — your client is never redirected away.</p>
+      <div class="tabs" id="tabs" role="group" aria-label="Choose a platform">
+        <button class="tab" aria-pressed="false" data-p="mac">macOS</button>
+        <button class="tab" aria-pressed="false" data-p="win">Windows</button>
+        <button class="tab" aria-pressed="false" data-p="linux">Linux / ChromeOS</button>
+        <button class="tab" aria-pressed="false" data-p="native">LoongArch / RISC-V</button>
+      </div>
+      <div class="assets" id="assets"></div>
+
+      <div class="cli">
+        <div class="cli-head">
+          <span class="cli-title">CLI · bit-cli (TUI, headless)</span>
+          <span class="cli-note">Same core, headless build — for servers and SSH</span>
+        </div>
+        <div class="assets" id="cli-assets"></div>
+      </div>
+
+      <div class="dl-foot">
+        <a href="https://github.com/yxpil/BrainTentacle/releases" target="_blank" rel="noopener">All releases &amp; SHA256</a>
+        <a href="https://github.com/yxpil/bit-mobile" target="_blank" rel="noopener">Android app · pair with desktop by QR</a>
+        <a href="#faq-mac">macOS says it’s “damaged”?</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="channels">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Install from seven channels</h2>
+      <p class="lead">One command per system, and upgrades go through the same package manager afterwards. Every repo URL here is public — inspect it yourself before running.</p>
+    </div>
+    <div class="cmds">
+      <div class="cmd">
+        <div class="cmd-head"><span class="cmd-name">macOS · Homebrew</span><span class="cmd-os">brew</span></div>
+        <div class="code"><pre>brew tap yxpil/bit
+brew install --cask bit</pre><button class="copy" type="button" data-copy="brew tap yxpil/bit
+brew install --cask bit">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="cmd-head"><span class="cmd-name">Windows · Scoop</span><span class="cmd-os">scoop</span></div>
+        <div class="code"><pre>scoop bucket add bit https://github.com/yxpil/scoop-bit
+scoop install bit</pre><button class="copy" type="button" data-copy="scoop bucket add bit https://github.com/yxpil/scoop-bit
+scoop install bit">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="cmd-head"><span class="cmd-name">All platforms · npm</span><span class="cmd-os">npm</span></div>
+        <div class="code"><pre>npm install -g bit-agent</pre><button class="copy" type="button" data-copy="npm install -g bit-agent">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="cmd-head"><span class="cmd-name">Debian / Ubuntu / Kylin</span><span class="cmd-os">APT</span></div>
+        <div class="code"><pre>echo "deb [trusted=yes] https://yxpil.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/bit.list
+sudo apt update &amp;&amp; sudo apt install bit</pre><button class="copy" type="button" data-copy='echo "deb [trusted=yes] https://yxpil.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/bit.list
+sudo apt update && sudo apt install bit'>Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="cmd-head"><span class="cmd-name">Fedora / RHEL / openSUSE</span><span class="cmd-os">DNF</span></div>
+        <div class="code"><pre>sudo dnf config-manager addrepo --from-repofile=https://yxpil.github.io/dnf-repo/bit.repo
+sudo dnf install bit</pre><button class="copy" type="button" data-copy="sudo dnf config-manager addrepo --from-repofile=https://yxpil.github.io/dnf-repo/bit.repo
+sudo dnf install bit">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="cmd-head"><span class="cmd-name">Arch / Manjaro</span><span class="cmd-os">pacman</span></div>
+        <div class="code"><pre>[bit]
+Server = https://yxpil.github.io/pacman-repo/$arch
+SigLevel = Never</pre><button class="copy" type="button" data-copy='[bit]
+Server = https://yxpil.github.io/pacman-repo/$arch
+SigLevel = Never'>Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="cmd-head"><span class="cmd-name">Windows · winget</span><span class="cmd-os">winget</span></div>
+        <div class="code"><pre>winget install yxpil.bit</pre><button class="copy" type="button" data-copy="winget install yxpil.bit">Copy</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="docs">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Docs &amp; FAQ</h2>
+      <p class="lead">Full install notes, the plugin spec, and API / MCP details live in the repo; these are the spots people get stuck on first.</p>
+    </div>
+    <div class="hero-cta" style="margin:0 0 26px">
+      <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle#readme" target="_blank" rel="noopener">Repo README</a>
+      <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle/wiki/快速上手" target="_blank" rel="noopener">Wiki · Quick start</a>
+      <a class="btn ghost sm" href="https://github.com/yxpil/BrainTentacle/blob/main/README_EN.md" target="_blank" rel="noopener">English README</a>
+    </div>
+    <div class="faq">
+      <details id="faq-mac">
+        <summary>macOS says it’s “damaged, can’t be opened”<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a">
+          <p>BIT is currently ad-hoc signed (no paid developer certificate), so browser downloads carry a quarantine flag that macOS misreports as “damaged”. The signature itself is fine — just clear the flag:</p>
+          <div class="code"><pre>xattr -cr /Applications/BIT.app</pre><button class="copy" type="button" data-copy="xattr -cr /Applications/BIT.app">Copy</button></div>
+          <p>Alternatively, open System Settings → Privacy &amp; Security and click “Open anyway”.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Windows SmartScreen blocked the app<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>The installer is not code-signed. On first run, click More info → Run anyway. Same for the portable build.</p></div>
+      </details>
+      <details>
+        <summary>What do I set up on first launch?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Open AI settings → Add provider → pick the protocol (OpenAI / Gemini / Claude), fill in the Base URL and API key, type the model name (or click “fetch from API” to pull the list), then press the play button on the row to activate. Only one provider is active at a time; the rest pause automatically.</p></div>
+      </details>
+      <details>
+        <summary>How do my tools show up in Claude Desktop?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Turn on remote access and BIT is a standard MCP server: endpoint <code>POST /mcp</code>, with <code>2024-11-05</code> / <code>2025-03-26</code> / <code>2025-06-18</code> auto-negotiated, <code>Mcp-Session-Id</code> sessions and <code>tools/list</code> / <code>tools/call</code> supported. Point your MCP client at <code>http://host:8600/mcp</code> — the auth is the same set used by the remote API.</p></div>
+      </details>
+      <details>
+        <summary>Where is data stored, and how do I uninstall cleanly?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Windows <code>%APPDATA%\com.bit.hub</code>, macOS <code>~/Library/Application Support/com.bit.hub</code>, Linux <code>${XDG_DATA_HOME:-~/.local/share}/com.bit.hub</code>. Deleting that directory wipes everything; if you set <code>BIT_DATA_DIR</code>, that wins.</p></div>
+      </details>
+      <details>
+        <summary>How do I use it behind a corporate proxy?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Settings → AI settings → Network proxy, three modes: follow system / force direct / custom proxy. Custom supports <code>http</code> / <code>https</code> / <code>socks5</code> and applies everywhere at once: model requests and update downloads, env vars for child processes like <code>curl</code> / <code>git</code> / <code>npm</code>, and the embedded browser. Address and password are always masked in the UI.</p></div>
+      </details>
+      <details>
+        <summary>Why is it free forever — and is there any telemetry?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="a"><p>Apache-2.0 open source, every feature free for personal and commercial use: no in-app purchases, no subscriptions, no feature locks, no telemetry — or build it yourself. There is no account system, and the app installs fine offline; the only outbound request is the version manifest check on update.</p></div>
+      </details>
+    </div>
+    <p class="lead" style="margin-top:22px">Still stuck? Describe what happened on the <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">feedback page</a> (OS, version, steps to reproduce are enough), or ask in the <a href="https://qm.qq.com/q/qlFr8ct0ps" target="_blank" rel="noopener">QQ group</a>.</p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-top">
+      <div>
+        <div class="foot-brand"><img src="/icon.png" alt="" width="20" height="20"><span class="brand-name">BrainTentacle</span><span class="brand-tag">BIT</span></div>
+        <p style="margin:10px 0 0;max-width:32rem">osbt.space is the home of BrainTentacle (BIT): os = Open Source, bt = BIT. Source, releases and issue tracking live on GitHub.</p>
+      </div>
+      <nav class="foot-links" aria-label="Related links">
+        <a href="https://github.com/yxpil/BrainTentacle" target="_blank" rel="noopener">Repository</a>
+        <a href="https://github.com/yxpil/BrainTentacle/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://yxpil.com/feedback" target="_blank" rel="noopener">Feedback</a>
+        <a href="https://qm.qq.com/q/qlFr8ct0ps" target="_blank" rel="noopener">QQ group</a>
+        <a href="/privacy">Privacy</a>
+        <a href="https://yxpil.com" target="_blank" rel="noopener">yxpil.com</a>
+        <a href="https://yxp.hk" target="_blank" rel="noopener">yxp.hk</a>
+        <a href="https://cidaiji.com" target="_blank" rel="noopener">cidaiji.com</a>
+      </nav>
+    </div>
+    <p class="foot-line">© 2026 yxpil · osbt.space · Apache-2.0 · no visitor data collected</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  var REPO = "yxpil/BrainTentacle";
+  var FALLBACK_VER = "0.7.6";
+  var RELEASES = "https://github.com/" + REPO + "/releases";
+
+  // 静态兜底清单：仅在 GitHub API 不可达时使用，保证页面永远有可用安装包
+  var FALLBACK = [
+    ["BIT_0.7.6_x64.dmg",201321506],["BIT_0.7.6_aarch64.dmg",191750473],
+    ["BIT_0.7.6_x64-app.zip",181761782],["BIT_0.7.6_aarch64-app.zip",173872136],
+    ["BIT_0.7.6_x64-setup.exe",151118595],["BIT_0.7.6_aarch64-setup.exe",139235598],
+    ["BIT_0.7.6_x64-portable.zip",205868953],["BIT_0.7.6_aarch64-portable.zip",194786032],
+    ["BIT_0.7.6_amd64.deb",136258040],["BIT_0.7.6_aarch64.deb",131414028],
+    ["BIT_0.7.6_amd64.rpm",119237581],["BIT_0.7.6_aarch64.rpm",117272309],
+    ["BIT_0.7.6_amd64.AppImage",138093375],["BIT_0.7.6_aarch64.AppImage",132230824],
+    ["bit-cli_0.7.6_x86_64-musl.tar.gz",12112770],["bit-cli_0.7.6_aarch64-musl.tar.gz",11770706],
+    ["bit-cli_0.7.6_loongarch64.deb",8306108],["bit-cli_0.7.6_loongarch64.tar.gz",11996985],
+    ["bit-cli_0.7.6_riscv64.deb",8963564],["bit-cli_0.7.6_riscv64.tar.gz",12359695],
+    ["bit-cli_0.7.6_ppc64le.deb",9661824],["bit-cli_0.7.6_ppc64le.tar.gz",14342849]
+  ];
+
+  var state = { ver: FALLBACK_VER, assets: [], plat: "win", arch: "x64" };
+
+  function groupOf(name){
+    if (/^bit-cli_/i.test(name)) return "cli";
+    if (/\.dmg$/i.test(name) || /-app\.zip$/i.test(name)) return "mac";
+    if (/-setup\.exe$/i.test(name) || /-portable\.zip$/i.test(name) || /\.msi$/i.test(name)) return "win";
+    if (/\.AppImage$/i.test(name) || /\.deb$/i.test(name) || /\.rpm$/i.test(name)) return "linux";
+    return null;
+  }
+  function archOf(name){
+    if (/loongarch64/i.test(name)) return "loong";
+    if (/riscv64/i.test(name)) return "riscv";
+    if (/ppc64le/i.test(name)) return "ppc";
+    if (/aarch64|arm64/i.test(name)) return "arm64";
+    if (/x86_64|x64|amd64/i.test(name)) return "x64";
+    return null;
+  }
+  var ARCH_LABEL = { x64:"x64", arm64:"arm64", loong:"LoongArch", riscv:"RISC-V", ppc:"POWER ppc64le", null:"Universal" };
+  function kindOf(name){
+    if (/\.dmg$/i.test(name)) return "Disk image — drag into /Applications";
+    if (/-app\.zip$/i.test(name)) return "No-install archive — unzip and run";
+    if (/-setup\.exe$/i.test(name)) return "Installer (NSIS)";
+    if (/-portable\.zip$/i.test(name)) return "Portable — unzip and run";
+    if (/\.msi$/i.test(name)) return "MSI installer";
+    if (/\.AppImage$/i.test(name)) return "AppImage — chmod +x and run";
+    if (/\.deb$/i.test(name)) return "Debian / Ubuntu package";
+    if (/\.rpm$/i.test(name)) return "Fedora / RHEL package";
+    if (/musl/i.test(name)) return "Statically linked (musl)";
+    if (/\.tar\.gz$/i.test(name)) return "Tarball — extract and put on PATH";
+    return "Installer";
+  }
+  function ratio(bytes){
+    if (!bytes) return "";
+    var mb = bytes / 1048576;
+    return (mb >= 1024 ? (mb/1024).toFixed(1) + " GB" : Math.round(mb) + " MB");
+  }
+
+  function detect(){
+    var ua = navigator.userAgent || "";
+    var p = "linux";
+    if (/iPhone|iPad/i.test(ua)) p = "mac";
+    else if (/Mac OS X|Macintosh/i.test(ua)) p = "mac";
+    else if (/Windows|Win64|Win32/i.test(ua)) p = "win";
+    var a = "x64";
+    try {
+      var d = navigator.userAgentData;
+      if (d && d.architecture === "arm") a = "arm64";
+    } catch (e) {}
+    if (/arm64|aarch64/i.test(ua) && !/Win/i.test(ua)) a = "arm64";
+    state.plat = p; state.arch = a;
+  }
+
+  function rows(plat){
+    var list = state.assets.filter(function(x){ return groupOf(x.name) === plat; });
+    if (plat === "native") {
+      list = state.assets.filter(function(x){
+        return groupOf(x.name) === "cli" && /loongarch64|riscv64|ppc64le/i.test(x.name);
+      });
+    }
+    return list;
+  }
+
+  function assetHTML(a, rec){
+    var arch = archOf(a.name);
+    var dl = "/dl/v" + state.ver + "/" + a.name;
+    return '<div class="asset' + (rec ? ' rec' : '') + '">' +
+      '<div class="asset-main"><div class="asset-name">' + a.name + '</div>' +
+      '<div class="asset-sub">' + (ARCH_LABEL[arch] || "Universal") + ' · ' + kindOf(a.name) + (rec ? ' <em class="rec-tag">Recommended</em>' : '') + '</div></div>' +
+      '<div class="asset-size mono">' + ratio(a.size) + '</div>' +
+      '<div class="asset-act"><a class="dlbtn" href="' + dl + '" download>' +
+      '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7.25 1.5v7.44l-2.5-2.5-1.06 1.06L8 10.56l4.31-4.31-1.06-1.06-2.5 2.5V1.5h-1.5ZM2 12.25v1.5h12v-1.5H2Z"/></svg>Download</a></div>' +
+      '</div>';
+  }
+
+  function recommendName(plat){
+    var want = state.arch === "arm64" ? "aarch64" : (plat === "linux" ? "amd64" : "x64");
+    var list = rows(plat);
+    for (var i=0;i<list.length;i++){
+      var n = list[i].name;
+      if (plat === "mac" && new RegExp(want + "\\.dmg$").test(n)) return n;
+      if (plat === "win" && new RegExp(want + "-setup\\.exe$").test(n)) return n;
+      if (plat === "linux" && new RegExp(want + "\\.AppImage$").test(n)) return n;
+    }
+    return null;
+  }
+
+  function render(){
+    var box = document.getElementById("assets");
+    var list = rows(state.plat);
+    var rec = recommendName(state.plat);
+    if (!list.length) {
+      box.innerHTML = '<div class="asset"><div class="asset-main"><div class="asset-name">No build uploaded for this platform yet</div>' +
+        '<div class="asset-sub">Check the Releases page instead</div></div><div class="asset-act">' +
+        '<a class="dlbtn" href="' + RELEASES + '" target="_blank" rel="noopener">Go to Releases</a></div></div>';
+    } else {
+      box.innerHTML = list.map(function(a){ return assetHTML(a, a.name === rec); }).join("");
+    }
+
+    var cli = document.getElementById("cli-assets");
+    var clis = state.assets.filter(function(x){ return groupOf(x.name) === "cli"; });
+    cli.innerHTML = clis.map(function(a){ return assetHTML(a, false); }).join("");
+
+    document.querySelectorAll("#tabs .tab").forEach(function(b){
+      b.setAttribute("aria-pressed", b.dataset.p === state.plat ? "true" : "false");
+    });
+  }
+
+  function setVersion(v){
+    if (!v) return;
+    state.ver = v;
+    ["ver-chip","ver-spec"].forEach(function(id){
+      var el = document.getElementById(id);
+      if (el) el.textContent = "v" + v;
+    });
+    var cur = document.getElementById("cta-label");
+    if (cur) {
+      var label = { mac:"macOS", win:"Windows", linux:"Linux", native:"LoongArch / RISC-V" }[state.plat];
+      cur.textContent = "Download for " + label;
+    }
+    var det = document.getElementById("detected");
+    if (det) {
+      var map = { mac:"macOS", win:"Windows", linux:"Linux", native:"LoongArch / RISC-V" }[state.plat];
+      det.textContent = map + " · " + (state.arch === "arm64" ? "arm64" : "x64");
+    }
+  }
+
+  function buildAssets(rel){
+    var ver = (rel.tag_name || "").replace(/^v/, "");
+    var list = (rel.assets || []).filter(function(a){ return !/\.json$/i.test(a.name); })
+      .map(function(a){ return { name:a.name, size:a.size, url:a.browser_download_url }; });
+    if (ver && list.length) { state.ver = ver; state.assets = list; }
+  }
+
+  function staticAssets(){
+    state.assets = FALLBACK.map(function(p){ return { name:p[0], size:p[1], url:null }; });
+  }
+
+  // 初始化
+  detect();
+  if (state.plat === "mac") state.plat = "mac";
+  else if (state.plat === "linux") state.plat = "linux";
+  staticAssets();
+  setVersion(FALLBACK_VER);
+  render();
+
+  document.querySelectorAll("#tabs .tab").forEach(function(b){
+    b.addEventListener("click", function(){ state.plat = b.dataset.p; render(); });
+  });
+
+  // 实时版本：GitHub API 可达则替换资产清单与版本号
+  fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { headers: { Accept: "application/vnd.github+json" } })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(rel){ if (rel) { buildAssets(rel); setVersion(state.ver); render(); } })
+    .catch(function(){ /* 保留静态兜底 */ });
+
+  // 复制
+  document.addEventListener("click", function(e){
+    var btn = e.target.closest(".copy");
+    if (!btn) return;
+    var text = btn.dataset.copy || (btn.parentNode.querySelector("pre") || {}).textContent || "";
+    var done = function(){ btn.textContent = "Copied"; btn.dataset.ok = "1"; setTimeout(function(){ btn.textContent = "Copy"; delete btn.dataset.ok; }, 1400); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function(){ fallback(text, done); });
+    } else { fallback(text, done); }
+  });
+  function fallback(text, done){
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); done(); } catch (err) {}
+    document.body.removeChild(ta);
+  }
+})();
+</script>
+</body>
+</html>
