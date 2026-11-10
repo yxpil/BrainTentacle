@@ -4,9 +4,4 @@ allowBuilds:
 # katex 0.16.x 有原型污染公告；minimatch 7-11.0.0 有 globparts 放大 DoS 公告
 overrides:
   katex: ^0.18.11
-  app-builder-lib>minimatch: ^11.0.1
-  '@electron/universal>minimatch': ^11.0.1
-  # glob 10（rimraf 5 引入）自带 minimatch 9；glob 7 仍在用 minimatch 3，不能一刀切
-  glob@10>minimatch: ^11.0.1
-  # minimatch 3 拉到的是 brace-expansion 1.1.18（有 DoS 公告），提到 1.1.21
-  minimatch@3>brace-expansion: ^1.1.21
+  minimatch: ^11.0.1

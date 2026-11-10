@@ -49,20 +49,10 @@
     "dompurify": "^3.4.17",
     "source-map-js": "^1.2.2",
     "katex": "$katex",
-    "app-builder-lib": {
-      "minimatch": "^11.0.1"
-    },
-    "@electron/universal": {
-      "minimatch": "^11.0.1"
-    },
+    "minimatch": "^11.0.1",
     "electron": {
       "@electron/get": {
         "undici": "^7.30.1"
-      }
-    },
-    "eslint": {
-      "minimatch": {
-        "brace-expansion": "^1.1.21"
       }
     }
   },
