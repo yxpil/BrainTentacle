@@ -3562,7 +3562,12 @@ fn notify_done(ctx: &Arc<Ctx>, session_id: &str, ok: bool, text: &str) {
         "notify-done",
         json!({ "session_id": session_id, "title": title, "reply": crate::plaintext::for_toast(text), "ok": ok }),
     );
-    crate::audit::record(ctx, "local-app", "turn.end", session_id, json!({ "ok": ok }), ok);
+    // 失败原因必须留痕：否则事后只看到 ok=false，无从判断是断流、鉴权还是额度问题
+    let mut detail = json!({ "ok": ok });
+    if !ok {
+        detail["error"] = json!(text.chars().take(500).collect::<String>());
+    }
+    crate::audit::record(ctx, "local-app", "turn.end", session_id, detail, ok);
 }
 
 /// 最后一条 assistant 正文（回合的成果就在那儿）。

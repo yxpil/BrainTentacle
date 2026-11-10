@@ -965,6 +965,8 @@ pub async fn chat_turn(
     let mut pending_images: Vec<String> = Vec::new();
     let mut round = 0usize;
     let mut continues = 0usize; // 自动续发（截断重试）计数：整个回合最多 3 次
+    // 自动续跑（只说不做 / XML 工具调用纠正）计数：避免模型空转时无限烧 token
+    let mut nudges = 0usize;
     // 瞬态网络错误（流被截断/连接失败/超时）自动重试本轮的剩余次数
     let mut net_retries = 2usize;
     // 幻觉防护：本回合已执行的「工具调用轮」计数（tool_loop_max 熔断）
@@ -1214,10 +1216,21 @@ pub async fn chat_turn(
 
         // 回复不完整（截断/纯思考残渣）：不结束回合，自动替用户补发「继续」。
         // 与下方原生分支同理：此处到达时本轮未发起工具调用，补发协议合法。
-        // 续发上限 3 次：模型反复输出不完整回复时（如永远撑爆 max_tokens 的超大 JSON），
-        // 无限续发会无限烧 token——超限后落库可见部分并按普通回复结束回合
-        if looks_truncated(&reply) && continues < 3 {
-            continues += 1;
+        // 续发上限：截断最多 3 次（超大 JSON 永远撑爆时避免无限续发烧 token）；
+        // 只说不做 / XML 工具调用纠正另有 nudges 上限，超限后落库可见部分并结束回合
+        let reason = continue_reason(&reply);
+        let can_continue = match reason {
+            Some(ContinueReason::Truncated) => continues < 3,
+            Some(ContinueReason::XmlTool) => nudges < 2,
+            Some(ContinueReason::PlanOnly) => nudges < 4,
+            None => false,
+        };
+        if let (Some(reason), true) = (reason, can_continue) {
+            if reason.is_truncated() {
+                continues += 1;
+            } else {
+                nudges += 1;
+            }
             // 自动接续时去掉「可回复继续」标注：程序替用户续发，提示已无意义
             let visible = strip_tool_json(&strip_think_blocks(&reply))
                 .replace(crate::ai::TRUNCATION_NOTICE, "")
@@ -1245,7 +1258,7 @@ pub async fn chat_turn(
             }
             // 续发提示词按协议区分：兼容模式继续沿用文本约定的 JSON 行格式，
             // 原生模式用中性提示词，避免把文本约定的指令灌给走原生协议的路
-            convo.push(ChatMessage::user(if native_mode { CONTINUE_PROMPT_NATIVE } else { CONTINUE_PROMPT }));
+            convo.push(ChatMessage::user(reason.prompt(native_mode)));
             continue;
         }
         // 纯文本回复：存入会话并结束（同时去掉思考块残渣）
@@ -1419,6 +1432,8 @@ async fn chat_turn_stream_inner(
     let mut pending_images: Vec<String> = Vec::new();
     let mut round = 0usize;
     let mut continues = 0usize; // 自动续发（截断重试）计数：整个回合最多 3 次
+    // 自动续跑（只说不做 / XML 工具调用纠正）计数：避免模型空转时无限烧 token
+    let mut nudges = 0usize;
     // 瞬态网络错误（流被截断/连接失败/超时）自动重试本轮的剩余次数
     let mut net_retries = 2usize;
     // 幻觉防护：本回合已执行的「工具调用轮」计数（tool_loop_max 熔断）
@@ -1765,9 +1780,21 @@ async fn chat_turn_stream_inner(
         // 文本约定模式与原生 function calling 模式都启用：原生模式到达此分支
         // 意味着本轮没有发起工具调用（有调用的分支在上面已 continue），
         // 此时上下文末尾是普通 assistant/user 消息，补发「继续」协议合法。
-        // 续发上限 3 次：模型反复截断时超限落库可见部分并结束回合，避免无限烧 token
-        if looks_truncated(&reply) && continues < 3 {
-            continues += 1;
+        // 续发上限：截断最多 3 次；只说不做 / XML 工具调用纠正另有 nudges 上限，
+        // 超限后落库可见部分并结束回合，避免模型空转时无限烧 token
+        let reason = continue_reason(&reply);
+        let can_continue = match reason {
+            Some(ContinueReason::Truncated) => continues < 3,
+            Some(ContinueReason::XmlTool) => nudges < 2,
+            Some(ContinueReason::PlanOnly) => nudges < 4,
+            None => false,
+        };
+        if let (Some(reason), true) = (reason, can_continue) {
+            if reason.is_truncated() {
+                continues += 1;
+            } else {
+                nudges += 1;
+            }
             // 自动接续时去掉「可回复继续」标注：程序替用户续发，提示已无意义
             let visible = strip_tool_json(&strip_think_blocks(&reply))
                 .replace(crate::ai::TRUNCATION_NOTICE, "")
@@ -1795,7 +1822,7 @@ async fn chat_turn_stream_inner(
                 convo.push(ChatMessage::assistant(reply.clone()));
             }
             // 续发提示词按协议区分：兼容模式沿用文本约定的 JSON 行格式，原生模式用中性提示词
-            convo.push(ChatMessage::user(if native_mode { CONTINUE_PROMPT_NATIVE } else { CONTINUE_PROMPT }));
+            convo.push(ChatMessage::user(reason.prompt(native_mode)));
             continue;
         }
         // 纯文本回复：存入会话并结束（同时去掉思考块残渣）
@@ -2012,9 +2039,113 @@ fn looks_truncated(reply: &str) -> bool {
 }
 
 /// 自动续发时补给模型的消息（兼容模式/文本约定版：延续单行 JSON 数组的工具调用格式）
-const CONTINUE_PROMPT: &str = "继续（你上一条回复未输出完整就被截断了，从中断处直接往下写，不要重复已输出的内容；若要调用工具请按协议单独一行输出 JSON 数组；如需写入大文件，请拆成多次较小的写入避免单次输出过长；若已完成请直接给出最终答案）";
+const CONTINUE_PROMPT: &str = "继续（继续完成当前任务。若上一步工具调用没有真正执行，请立即重新发起；若只是输出被截断，从中断处往下写，不要重复已输出内容；若要调用工具请按协议单独一行输出 JSON 数组；如需写入大文件，请拆成多次较小的写入避免单次输出过长；若已完成请直接给出最终答案）";
 /// 自动续发时补给模型的消息（标准原生模式版：不带任何文本约定指令，避免两种协议互相干扰）
-const CONTINUE_PROMPT_NATIVE: &str = "继续（你上一条回复未输出完整就被截断了，从中断处直接往下写，不要重复已输出的内容；如需调用工具请按原生工具调用协议发起；如需写入大文件，请拆成多次较小的写入避免单次输出过长；若已完成请直接给出最终答案）";
+const CONTINUE_PROMPT_NATIVE: &str = "继续（继续完成当前任务。若上一步工具调用没有真正执行，请立即按原生工具调用协议重新发起；若只是输出被截断，从中断处往下写，不要重复已输出内容；如需写入大文件，请拆成多次较小的写入避免单次输出过长；若已完成请直接给出最终答案）";
+
+/// 只说不做时推一轮：明确要求立刻动手，避免模型继续描述计划后结束回合
+const NUDGE_PROMPT: &str =
+    "继续（不要只描述计划或等待确认。任务还没完成就直接往下做：需要调用工具就立刻按协议单独一行输出 JSON 数组并发起调用；确实需要我提供信息或做决定时再明确提问并停下）";
+const NUDGE_PROMPT_NATIVE: &str =
+    "继续（不要只描述计划或等待确认。任务还没完成就直接往下做：需要调用工具就立刻按原生工具调用协议发起，不要只用文字描述；确实需要我提供信息或做决定时再明确提问并停下）";
+/// 工具调用被写成 XML 文本时的纠正提示：这种内容系统不会执行
+const XML_TOOL_PROMPT: &str = "你上一条把工具调用写成了 <invoke>/<function_calls> XML 文本，系统不会执行这种格式。请立刻改成协议规定的工具调用方式重新发起同一个操作：原生模式用 function call，兼容模式单独一行输出 JSON 数组。不要重复解释，也不要再用 XML。";
+
+/// 自动补发「继续」的原因
+#[derive(Clone, Copy, PartialEq)]
+enum ContinueReason {
+    /// 回复被截断/只有思考残渣
+    Truncated,
+    /// 只描述计划、没有实际动作，也没向用户提问
+    PlanOnly,
+    /// 把工具调用写成了 Claude 的 XML 文本
+    XmlTool,
+}
+
+impl ContinueReason {
+    fn is_truncated(self) -> bool {
+        matches!(self, ContinueReason::Truncated)
+    }
+    fn prompt(self, native_mode: bool) -> &'static str {
+        match (self, native_mode) {
+            (ContinueReason::Truncated, true) => CONTINUE_PROMPT_NATIVE,
+            (ContinueReason::Truncated, false) => CONTINUE_PROMPT,
+            (ContinueReason::XmlTool, _) => XML_TOOL_PROMPT,
+            (ContinueReason::PlanOnly, true) => NUDGE_PROMPT_NATIVE,
+            (ContinueReason::PlanOnly, false) => NUDGE_PROMPT,
+        }
+    }
+}
+
+/// 判定本轮是否需要程序替用户补发「继续」。
+/// 痛点：模型经常只回一句“我先去…”就结束回合，或把工具调用写成 Claude 的
+/// `<invoke>` XML 文本，程序识别不到就直接结束——用户只能反复手动发“继续”。
+fn continue_reason(reply: &str) -> Option<ContinueReason> {
+    if looks_truncated(reply) {
+        return Some(ContinueReason::Truncated);
+    }
+    if has_xml_tool_call(reply) {
+        return Some(ContinueReason::XmlTool);
+    }
+    if looks_like_plan_only(reply) {
+        return Some(ContinueReason::PlanOnly);
+    }
+    None
+}
+
+/// 只有计划、没有动作：收尾句是“我先/接下来我/我这就…”这类承诺，且没有向用户提问。
+/// 这类回复若直接结束回合，用户只能再发一次“继续”才能推动，因此替用户续跑。
+fn looks_like_plan_only(reply: &str) -> bool {
+    let stripped = strip_think_blocks(reply);
+    let t = stripped.trim();
+    if t.is_empty() || t.ends_with('？') || t.ends_with('?') {
+        return false;
+    }
+    let last = t
+        .lines()
+        .rev()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if last.is_empty() || last.chars().count() > 120 {
+        return false;
+    }
+    // 已有结论/交付物 → 正常结束，不续跑
+    for done in ["完成", "搞定", "已就绪", "全部通过", "已经可以", "已修复", "已提交"] {
+        if last.contains(done) {
+            return false;
+        }
+    }
+    let zh = [
+        "我先", "我这就", "我现在", "让我先", "接下来我", "下面我", "我马上", "接着我", "我继续",
+    ];
+    if zh.iter().any(|m| last.contains(m)) {
+        return true;
+    }
+    let lower = last.to_ascii_lowercase();
+    ["i'll ", "i will ", "let me ", "next, i", "next i", "now i"]
+        .iter()
+        .any(|m| lower.contains(m))
+}
+
+/// 模型把工具调用写成了 Claude 的 XML 文本（`<invoke name=...>` / `<function_calls>`）：
+/// OpenAI 兼容网关偶发这种降级输出，程序不识别就等于什么都没做。
+/// 跳过代码围栏内的内容，避免把“讲解 XML 代码”误判成工具调用。
+fn has_xml_tool_call(reply: &str) -> bool {
+    let mut outside = String::new();
+    let mut in_fence = false;
+    for line in reply.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence {
+            outside.push_str(line);
+            outside.push('\n');
+        }
+    }
+    outside.contains("<invoke") || outside.contains("<function_calls")
+}
 
 /// 扫描 JSON 文本（对象/字符串状态机），到达末尾时是否仍未闭合
 fn is_unbalanced_json(text: &str) -> bool {
@@ -2597,6 +2728,35 @@ mod tests {
         )));
         // 干净回复（无标注）不得误判
         assert!(!looks_truncated("清理完成，共删除 12 个文件。"));
+    }
+
+    /// 用户痛点：模型只回一句计划就结束回合，用户被迫反复手动发「继续」
+    #[test]
+    fn test_plan_only_reply_triggers_continue() {
+        assert!(matches!(
+            continue_reason("好的，我先找 BIT 的 UI 源码和 VmTyper 的 git 状态，再开始搭建。"),
+            Some(ContinueReason::PlanOnly)
+        ));
+        assert!(matches!(
+            continue_reason("我先看一下当前前端代码的结构。"),
+            Some(ContinueReason::PlanOnly)
+        ));
+        assert!(matches!(
+            continue_reason("Next I will update the README."),
+            Some(ContinueReason::PlanOnly)
+        ));
+        // 正常收尾 / 向用户提问不续跑
+        assert!(continue_reason("全部完成，改动已提交。").is_none());
+        assert!(continue_reason("窗口渲染没问题吗？").is_none());
+        // 代码块里的 XML 示例不误判
+        assert!(continue_reason("示例：\n```xml\n<invoke name=\"shell\"></invoke>\n```").is_none());
+    }
+
+    /// 模型把工具调用写成 XML 文本（会话里真实出现）：必须纠正续跑，不能静默结束回合
+    #[test]
+    fn test_xml_tool_call_triggers_continue() {
+        let reply = "<invoke name=\"shell\">\n<parameter name=\"command\">ls</parameter>\n</invoke>";
+        assert!(matches!(continue_reason(reply), Some(ContinueReason::XmlTool)));
     }
 
     /// 截图中的真实案例：write_file 的 content 输出到一半被截断——

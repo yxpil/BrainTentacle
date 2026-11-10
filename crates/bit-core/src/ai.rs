@@ -265,6 +265,18 @@ pub fn http_client_for(base: &str, timeout_secs: u64) -> reqwest::Result<reqwest
     crate::netproxy::apply_to_builder(base, b).build()
 }
 
+/// 流式客户端：只限建连与「两次收数据之间的空闲」，不设整请求总时长。
+/// reqwest 的 `timeout` 覆盖到响应体读完为止——长思考/长回复（Claude 开思考时单轮
+/// 三到五分钟很常见）会被这个总时长从中间掐断，表现就是「任务跑到一半突然断联」。
+/// 流式请求改用空闲超时：只要上游还在出 token 就让它跑完，真卡死才断开。
+pub fn http_stream_client_for(base: &str, idle_secs: u64) -> reqwest::Result<reqwest::Client> {
+    let b = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(idle_secs))
+        .tcp_keepalive(std::time::Duration::from_secs(30));
+    crate::netproxy::apply_to_builder(base, b).build()
+}
+
 /// 流式被调用方中止的哨兵错误（中断会话时立即断开 SSE 读取，不回退非流式）
 pub const STREAM_STOP: &str = "__BIT_STREAM_STOP__";
 
@@ -398,7 +410,7 @@ pub async fn chat_stream_with_images<F: FnMut(TokenKind, &str) -> bool>(
         let cfg = ctx.ai_config.lock().unwrap();
         cfg.clone()
     };
-    let client = http_client_for(&p.base_url, 180).map_err(|e| e.to_string())?;
+    let client = http_stream_client_for(&p.base_url, 120).map_err(|e| e.to_string())?;
 
     let res = match p.protocol.as_str() {
         "gemini" => stream_gemini(&client, &p, messages, images, &params, &mut on_token).await,
@@ -2274,7 +2286,9 @@ pub async fn chat_native_round(
             p.name
         )));
     }
-    let client = http_client_for(&p.base_url, 180).map_err(|e| NativeErr::Other(e.to_string()))?;
+    // 一次性请求同样不能用 180s 卡死：开思考的 Claude 单轮（思考+正文）经常超过 3 分钟，
+    // 超时会被误判成网络故障并触发无意义重试
+    let client = http_client_for(&p.base_url, 600).map_err(|e| NativeErr::Other(e.to_string()))?;
     let defs = native_tool_defs(ctx, session);
     // 原生 Function Calling 的正文与工具结果回喂都可能是会话原文，统一脱敏后再发
     let masked_convo = crate::hidden_code::maybe_mask_messages(ctx, convo);
@@ -2538,7 +2552,8 @@ pub async fn chat_native_round_stream<F: FnMut(NativeEvent) -> bool + Send>(
             p.name
         )));
     }
-    let client = http_client_for(&p.base_url, 180).map_err(|e| NativeErr::Other(e.to_string()))?;
+    let client =
+        http_stream_client_for(&p.base_url, 120).map_err(|e| NativeErr::Other(e.to_string()))?;
     let defs = native_tool_defs(ctx, session);
 
     // 原生流式与一次性回退共用同一份脱敏副本（工具结果同样掩码）
@@ -2822,6 +2837,7 @@ async fn native_round_claude_stream(
     let mut stopped = false;
     let mut usage = TokenUsage::default();
     let mut stop_reason = String::new();
+    let mut saw_stop = false; // 是否收到 message_stop（未收到 = 连接异常中断）
     let mut got_any = false;
     read_sse(resp, |data| {
         got_any = true;
@@ -2882,7 +2898,10 @@ async fn native_round_claude_stream(
                 stop_reason = v.pointer("/delta/stop_reason").and_then(|x| x.as_str()).unwrap_or_default().to_string();
                 usage.completion_tokens = v.pointer("/usage/output_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
             }
-            Some("message_stop") => return true,
+            Some("message_stop") => {
+                saw_stop = true;
+                return true;
+            }
             _ => {}
         }
         stopped
@@ -2895,6 +2914,12 @@ async fn native_round_claude_stream(
     // 端点忽略 stream 参数返回整段 JSON：SSE 解析无任何事件 → 交由入口退回一次性请求
     if !got_any {
         return Err(NativeErr::Other("端点未返回 SSE 流".into()));
+    }
+    // 上游/代理在正文中途正常关闭连接时 read_sse 不会报错。缺少 message_stop 就说明
+    // 这一轮没结束；若当成完整答案返回，半截回复会被保存并结束回合（表现为「任务
+    // 突然中断」）。按断流处理，交给 agent 层自动重试。
+    if !saw_stop {
+        return Err(NativeErr::Other(STREAM_CUT.into()));
     }
 
     let mut content = String::new();
@@ -3502,6 +3527,31 @@ mod native_tests {
         assert_eq!(req["tools"][0]["name"], "shell");
         assert!(req["tools"][0].get("input_schema").is_some(), "claude 工具应为 input_schema");
         assert_eq!(req["tool_choice"]["type"], "auto");
+    }
+
+    #[tokio::test]
+    async fn test_native_claude_stream_cut_without_message_stop() {
+        // 上游/代理在正文中途正常关闭连接：缺少 message_stop 说明本轮没结束，
+        // 必须按断流报错（agent 会重试），不能把半截回复当完整答案结束回合
+        let url = spawn_raw_sse(vec![
+            json!({"type":"message_start","message":{"usage":{"input_tokens":10}}}).to_string(),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text"}}).to_string(),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我先把"}}).to_string(),
+        ])
+        .await;
+        let p = test_provider("claude", &url);
+        let client = reqwest::Client::new();
+        let defs = vec![json!({"name":"shell","description":"执行命令","parameters":{"type":"object","properties":{}}})];
+        let r = native_round_claude_stream(
+            &client, &p,
+            &[ChatMessage::user("干点活".to_string())], &[], &[], &defs, &AiConfig::default(),
+            &mut |_e| true,
+        )
+        .await;
+        assert!(
+            matches!(r, Err(NativeErr::Other(ref e)) if e.starts_with(NET_TRANSIENT)),
+            "缺 message_stop 应判为可重试的断流: {r:?}"
+        );
     }
 
     #[tokio::test]
