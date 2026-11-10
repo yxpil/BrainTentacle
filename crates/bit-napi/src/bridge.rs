@@ -398,6 +398,14 @@ pub async fn dispatch(
                 a_str(&args, "base_url")?,
                 a_str(&args, "api_key")?,
                 a_str(&args, "model")?,
+                opt_str(&args, "profile"),
+                opt_str(&args, "tool_mode"),
+                opt_u64(&args, "continue_nudges").map(|n| n as usize),
+                opt_u64(&args, "stream_idle_secs"),
+                arg(&args, "temperature").and_then(|v| v.as_f64()),
+                opt_str(&args, "reasoning_effort"),
+                opt_u64(&args, "max_output_tokens"),
+                opt_u64(&args, "request_timeout_secs"),
             )
         }
         "update_provider" => {
@@ -409,6 +417,14 @@ pub async fn dispatch(
                 a_str(&args, "base_url")?,
                 a_str(&args, "api_key")?,
                 a_str(&args, "model")?,
+                opt_str(&args, "profile"),
+                opt_str(&args, "tool_mode"),
+                opt_u64(&args, "continue_nudges").map(|n| n as usize),
+                opt_u64(&args, "stream_idle_secs"),
+                arg(&args, "temperature").and_then(|v| v.as_f64()),
+                opt_str(&args, "reasoning_effort"),
+                opt_u64(&args, "max_output_tokens"),
+                opt_u64(&args, "request_timeout_secs"),
             )
         }
         "remove_provider" => bit_core::commands_api::remove_provider(ctx, a_str(&args, "id")?),
@@ -416,6 +432,11 @@ pub async fn dispatch(
             bit_core::commands_api::set_provider_active(ctx, a_str(&args, "id")?, a_bool(&args, "active")?)
         }
         "get_ai_params" => bit_core::commands_api::get_ai_params(ctx),
+        "set_model_aliases" => bit_core::commands_api::set_model_aliases(ctx, a_str(&args, "text")?),
+        "ai_effective_profile" => {
+            bit_core::commands_api::ai_effective_profile(ctx, a_val(&args, "form"))
+        }
+        "ai_last_request" => bit_core::commands_api::ai_last_request(ctx),
         "set_ai_params" => {
             bit_core::commands_api::set_ai_params(
                 ctx,

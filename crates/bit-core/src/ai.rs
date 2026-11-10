@@ -17,9 +17,211 @@ pub struct Provider {
     pub model: String,
     /// 是否为当前激活项（全局仅一个为 true）
     pub active: bool,
+    /// 模型能力档位覆盖：""/"auto"=按模型家族推断，或 strong / standard / weak
+    #[serde(default)]
+    pub profile: String,
+    /// 工具协议覆盖：""/"auto"=按档位默认，或 native / text
+    #[serde(default)]
+    pub tool_mode: String,
+    /// 「只说不做 / XML 工具调用」自动推动上限覆盖（None=按档位）
+    #[serde(default)]
+    pub continue_nudges: Option<usize>,
+    /// 流式空闲超时秒数覆盖（None=按档位）：思考型模型需要更长的静默容忍
+    #[serde(default)]
+    pub stream_idle_secs: Option<u64>,
+    /// 温度覆盖（None=回落全局 AiConfig.temperature）
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    /// 思考强度覆盖（None=回落全局）：""/low/medium/high
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    /// 回复长度上限覆盖（None=回落全局 AiConfig.max_output_tokens）
+    #[serde(default)]
+    pub max_output_tokens: Option<u64>,
+    /// 请求总超时秒数覆盖（None=按调用场景默认：普通 120 / 原生 600）
+    #[serde(default)]
+    pub request_timeout_secs: Option<u64>,
+}
+
+/// 模型名别名：配置里维护「关键词 → 档位/协议」，省得每次换模型重调。
+/// 匹配规则：模型名小写包含关键词，列表顺序首个命中生效
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct ModelAlias {
+    pub pattern: String,
+    #[serde(default)]
+    pub profile: String,
+    #[serde(default)]
+    pub tool_mode: String,
+}
+
+/// 模型能力档位：决定工具协议默认值、自动续跑上限与流式空闲超时
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Tier {
+    Strong,
+    Standard,
+    Weak,
+}
+
+/// 单个模型的适配档案。
+/// 不同模型族的习惯差异很大：强模型能稳定用原生 function calling；弱模型/本地端点
+/// 常把调用写成正文 JSON 或 `<invoke>` XML，还习惯「我先…」只说不做收尾，需要更积极
+/// 地在回合内推动它动手；思考型模型单轮静默可能超过两分钟，空闲超时要放宽。
+#[derive(Clone, Copy, Debug)]
+pub struct ModelProfile {
+    pub tier: Tier,
+    /// 默认是否走原生 function calling
+    pub native_tools: bool,
+    /// 「只说不做」自动推动上限
+    pub plan_nudges: usize,
+    /// XML 工具调用纠正上限
+    pub xml_nudges: usize,
+    /// 截断续写上限
+    pub trunc_continues: usize,
+    /// 流式请求的空闲超时（秒）
+    pub stream_idle_secs: u64,
+}
+
+impl ModelProfile {
+    /// 档位默认值
+    pub fn for_tier(tier: Tier) -> Self {
+        match tier {
+            Tier::Strong => ModelProfile {
+                tier,
+                native_tools: true,
+                plan_nudges: 2,
+                xml_nudges: 2,
+                trunc_continues: 3,
+                stream_idle_secs: 300,
+            },
+            Tier::Standard => ModelProfile {
+                tier,
+                native_tools: true,
+                plan_nudges: 3,
+                xml_nudges: 2,
+                trunc_continues: 3,
+                stream_idle_secs: 180,
+            },
+            Tier::Weak => ModelProfile {
+                tier,
+                // 弱模型/本地端点默认文本约定：原生协议里它们常把调用写成正文 JSON
+                native_tools: false,
+                plan_nudges: 5,
+                xml_nudges: 3,
+                trunc_continues: 4,
+                stream_idle_secs: 120,
+            },
+        }
+    }
+
+    /// 按模型名推断档位（小写包含匹配，弱优先）；未知模型给中间档
+    pub fn for_model(model: &str, protocol: &str) -> Self {
+        let m = model.to_ascii_lowercase();
+        const WEAK: &[&str] = &[
+            "qwen", "glm", "llama", "mistral", "mixtral", "gemma", "phi", "local",
+            "modelscope", "internlm", "baichuan", "minicpm", "yi-",
+        ];
+        const STRONG: &[&str] = &[
+            "claude", "gpt-4", "gpt-5", "gpt-6", "o1", "o3", "o4", "gemini-pro",
+            "gemini-2", "gemini-3", "deepseek", "kimi-k", "grok",
+        ];
+        let tier = if WEAK.iter().any(|k| m.contains(k)) {
+            Tier::Weak
+        } else if STRONG.iter().any(|k| m.contains(k)) || protocol == "claude" {
+            Tier::Strong
+        } else {
+            Tier::Standard
+        };
+        ModelProfile::for_tier(tier)
+    }
+}
+
+/// 该模型命中的别名条目（小写包含匹配，列表顺序首个命中）
+fn alias_for<'a>(model: &str, aliases: &'a [ModelAlias]) -> Option<&'a ModelAlias> {
+    let m = model.to_ascii_lowercase();
+    aliases.iter().find(|a| {
+        let p = a.pattern.trim().to_ascii_lowercase();
+        !p.is_empty() && m.contains(&p)
+    })
 }
 
 impl Provider {
+    /// 该提供方的适配档案：模型家族推断 → 档位显式覆盖 → 上限/超时覆盖
+    pub fn profile(&self) -> ModelProfile {
+        self.profile_with(&[])
+    }
+
+    /// 带模型名别名的适配档案：提供方显式 > 别名命中 > 模型名启发式
+    pub fn profile_with(&self, aliases: &[ModelAlias]) -> ModelProfile {
+        let own = self.profile.trim().to_ascii_lowercase();
+        let tier_override = if own.is_empty() || own == "auto" {
+            alias_for(&self.model, aliases)
+                .map(|a| a.profile.trim().to_ascii_lowercase())
+                .unwrap_or_default()
+        } else {
+            own
+        };
+        let mut mp = match tier_override.as_str() {
+            "strong" => ModelProfile::for_tier(Tier::Strong),
+            "standard" => ModelProfile::for_tier(Tier::Standard),
+            "weak" => ModelProfile::for_tier(Tier::Weak),
+            _ => ModelProfile::for_model(&self.model, &self.protocol),
+        };
+        if let Some(n) = self.continue_nudges {
+            mp.plan_nudges = n;
+            mp.xml_nudges = n;
+        }
+        if let Some(s) = self.stream_idle_secs {
+            mp.stream_idle_secs = s;
+        }
+        mp
+    }
+
+    /// 有效工具协议：显式 tool_mode 优先，auto 时先看别名，最后按档位默认
+    pub fn native_tools(&self) -> bool {
+        self.native_tools_with(&[])
+    }
+
+    /// 带模型名别名的有效工具协议
+    pub fn native_tools_with(&self, aliases: &[ModelAlias]) -> bool {
+        let own = self.tool_mode.trim().to_ascii_lowercase();
+        let mode = if own.is_empty() || own == "auto" {
+            alias_for(&self.model, aliases)
+                .map(|a| a.tool_mode.trim().to_ascii_lowercase())
+                .unwrap_or_default()
+        } else {
+            own
+        };
+        match mode.as_str() {
+            "native" => true,
+            "text" => false,
+            _ => self.profile_with(aliases).native_tools,
+        }
+    }
+
+    /// 温度：提供方覆盖优先，否则回落全局
+    pub fn temperature_with(&self, cfg: &AiConfig) -> Option<f64> {
+        self.temperature.or(cfg.temperature)
+    }
+
+    /// 思考强度：提供方覆盖优先，否则回落全局（空串=不发送参数）
+    pub fn reasoning_effort_with<'a>(&'a self, cfg: &'a AiConfig) -> &'a str {
+        self.reasoning_effort
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(cfg.reasoning_effort.as_str())
+    }
+
+    /// 回复上限：提供方覆盖优先，否则回落全局
+    pub fn max_output_tokens_with(&self, cfg: &AiConfig) -> Option<u64> {
+        self.max_output_tokens.or(cfg.max_output_tokens)
+    }
+
+    /// 请求总超时：提供方覆盖优先，否则用调用场景默认值
+    pub fn request_timeout_secs_with(&self, default: u64) -> u64 {
+        self.request_timeout_secs.filter(|s| *s > 0).unwrap_or(default)
+    }
+
     /// 某协议的默认 base_url
     pub fn default_base_url(protocol: &str) -> &'static str {
         match protocol {
@@ -57,6 +259,9 @@ pub struct AiConfig {
     /// Claude 协议必填该字段，退回 8192）。此前硬编码 8192，长回复（如整幅 SVG 卡片）会被截断
     #[serde(default)]
     pub max_output_tokens: Option<u64>,
+    /// 模型名别名表：关键词 → 档位/协议（提供方未显式指定时生效）
+    #[serde(default)]
+    pub model_profiles: Vec<ModelAlias>,
 }
 
 impl AiConfig {
@@ -71,6 +276,246 @@ impl AiConfig {
     pub fn is_configured(&self) -> bool {
         self.active().map(|p| !p.api_key.is_empty()).unwrap_or(false)
     }
+}
+
+/// 回合开始时的协议与适配档案快照（回合内不中途变轨）：
+/// 优先级 compat_mode（全局强制文本的杀开关）> 提供方 tool_mode > 别名 > 档位默认
+pub fn turn_profile(ctx: &Arc<crate::state::Ctx>) -> (bool, ModelProfile) {
+    let compat = ctx.config.lock().unwrap().compat_mode;
+    let (active, aliases) = {
+        let cfg = ctx.ai_config.lock().unwrap();
+        (cfg.active().cloned(), cfg.model_profiles.clone())
+    };
+    let profile = active
+        .as_ref()
+        .map(|p| p.profile_with(&aliases))
+        .unwrap_or_else(|| ModelProfile::for_tier(Tier::Standard));
+    let native_tools = active
+        .as_ref()
+        .map(|p| p.native_tools_with(&aliases))
+        .unwrap_or(true);
+    (!compat && native_tools, profile)
+}
+
+/// 端点明确拒绝 tools 参数时自动降级：把当前激活提供方的工具协议固化为 text 并持久化。
+/// 已是 text 时返回 None（不重复写配置）；返回提供方名称供前端提示。
+pub fn degrade_to_text(ctx: &Arc<Ctx>) -> Option<String> {
+    let name = {
+        let mut cfg = ctx.ai_config.lock().unwrap();
+        let idx = cfg
+            .providers
+            .iter()
+            .position(|p| p.active)
+            .or(if cfg.providers.is_empty() { None } else { Some(0) })?;
+        let p = &mut cfg.providers[idx];
+        if p.tool_mode.trim().eq_ignore_ascii_case("text") {
+            return None;
+        }
+        p.tool_mode = "text".to_string();
+        p.name.clone()
+    };
+    ctx.save_ai_config();
+    Some(name)
+}
+
+/// 别名文本（设置页文本域）：一行一条 `关键词 = 档位 [/ 协议]`
+pub fn parse_aliases(text: &str) -> Vec<ModelAlias> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((pat, rest)) = line.split_once('=') else { continue };
+        let pat = pat.trim().to_ascii_lowercase();
+        if pat.is_empty() {
+            continue;
+        }
+        let mut parts = rest.split('/');
+        let profile = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+        let tool_mode = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+        let profile = matches!(profile.as_str(), "strong" | "standard" | "weak")
+            .then_some(profile)
+            .unwrap_or_default();
+        let tool_mode = matches!(tool_mode.as_str(), "native" | "text")
+            .then_some(tool_mode)
+            .unwrap_or_default();
+        if profile.is_empty() && tool_mode.is_empty() {
+            continue;
+        }
+        out.push(ModelAlias { pattern: pat, profile, tool_mode });
+    }
+    out
+}
+
+/// 别名表 → 文本（与 parse_aliases 互逆）
+pub fn format_aliases(aliases: &[ModelAlias]) -> String {
+    aliases
+        .iter()
+        .map(|a| {
+            let mut s = a.pattern.clone();
+            if !a.profile.is_empty() {
+                s.push_str(" = ");
+                s.push_str(&a.profile);
+                if !a.tool_mode.is_empty() {
+                    s.push_str(" / ");
+                    s.push_str(&a.tool_mode);
+                }
+            } else {
+                s.push_str(" = / ");
+                s.push_str(&a.tool_mode);
+            }
+            s
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 按表单值计算生效适配（不落盘）：表单没给的字段取当前激活提供方，供设置页回显
+pub fn effective_profile(ctx: &Arc<Ctx>, form: &serde_json::Value) -> serde_json::Value {
+    let compat = ctx.config.lock().unwrap().compat_mode;
+    let (mut p, cfg) = {
+        let cfg = ctx.ai_config.lock().unwrap();
+        // 带 id 的表单 = 正在编辑某一条，取它做底；新增表单（id 为空/null）从空白起，
+        // 不然会把当前激活项的覆盖值当成新表单的生效值
+        let editing = form
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .and_then(|id| cfg.providers.iter().find(|p| p.id == id));
+        let base = if form.get("id").is_some() { editing } else { cfg.active() };
+        let p = base.cloned().unwrap_or_else(|| Provider {
+            id: String::new(),
+            name: String::new(),
+            protocol: "openai".into(),
+            base_url: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            active: true,
+            profile: String::new(),
+            tool_mode: String::new(),
+            continue_nudges: None,
+            stream_idle_secs: None,
+            temperature: None,
+            reasoning_effort: None,
+            max_output_tokens: None,
+            request_timeout_secs: None,
+        });
+        (p, cfg.clone())
+    };
+    if let Some(v) = form.get("protocol").and_then(|v| v.as_str()) {
+        if !v.trim().is_empty() {
+            p.protocol = v.trim().to_string();
+        }
+    }
+    if let Some(v) = form.get("model").and_then(|v| v.as_str()) {
+        if !v.trim().is_empty() {
+            p.model = v.trim().to_string();
+        }
+    }
+    if let Some(v) = form.get("profile") {
+        p.profile = v.as_str().unwrap_or("").to_string();
+    }
+    if let Some(v) = form.get("tool_mode") {
+        p.tool_mode = v.as_str().unwrap_or("").to_string();
+    }
+    if let Some(v) = form.get("continue_nudges") {
+        p.continue_nudges = v.as_u64().map(|n| n as usize).filter(|n| *n > 0);
+    }
+    if let Some(v) = form.get("stream_idle_secs") {
+        p.stream_idle_secs = v.as_u64().filter(|n| *n > 0);
+    }
+    if let Some(v) = form.get("temperature") {
+        p.temperature = v.as_f64().filter(|t| (0.0..=2.0).contains(t));
+    }
+    if let Some(v) = form.get("reasoning_effort") {
+        let s = v.as_str().unwrap_or("").trim().to_ascii_lowercase();
+        p.reasoning_effort = (!s.is_empty()).then_some(s);
+    }
+    if let Some(v) = form.get("max_output_tokens") {
+        p.max_output_tokens = v.as_u64().filter(|n| *n > 0);
+    }
+    if let Some(v) = form.get("request_timeout_secs") {
+        p.request_timeout_secs = v.as_u64().filter(|n| *n > 0);
+    }
+
+    let aliases = &cfg.model_profiles;
+    let mp = p.profile_with(aliases);
+    let own = p.profile.trim().to_ascii_lowercase();
+    let source = if !own.is_empty() && own != "auto" {
+        "provider"
+    } else if alias_for(&p.model, aliases).is_some() {
+        "alias"
+    } else {
+        "heuristic"
+    };
+    serde_json::json!({
+        "provider": p.name,
+        "model": p.model,
+        "tier": match mp.tier {
+            Tier::Strong => "strong",
+            Tier::Standard => "standard",
+            Tier::Weak => "weak",
+        },
+        "native": !compat && p.native_tools_with(aliases),
+        "plan_nudges": mp.plan_nudges,
+        "xml_nudges": mp.xml_nudges,
+        "trunc_continues": mp.trunc_continues,
+        "stream_idle_secs": mp.stream_idle_secs,
+        "request_timeout_secs": p.request_timeout_secs_with(120),
+        "temperature": p.temperature_with(&cfg),
+        "reasoning_effort": p.reasoning_effort_with(&cfg),
+        "max_output_tokens": p.max_output_tokens_with(&cfg),
+        "source": source,
+    })
+}
+
+/// 记录最近一次真正发出的请求（只存协议/URL/请求体；鉴权只在 header，不入库）。
+/// 超长字符串（图片 data URL）裁成前 400 字符 + 原长度，避免预览卡顿
+pub fn record_request(ctx: &Arc<Ctx>, protocol: &str, url: &str, body: &serde_json::Value) {
+    let mut body = body.clone();
+    truncate_long_strings(&mut body, 4000, 400);
+    let entry = serde_json::json!({
+        "at": now_ts(),
+        "protocol": protocol,
+        "url": url,
+        "body": body,
+    });
+    *ctx.ai_last_request.lock().unwrap() = Some(entry.clone());
+    // worker → host：设置页跑在宿主进程，必须显式同步（同 usage-sync）
+    if crate::worker::IN_WORKER.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some(tx) = crate::worker::event_tx() {
+            let _ = tx.send(("ai-request".to_string(), entry));
+        }
+    }
+}
+
+fn truncate_long_strings(v: &mut serde_json::Value, threshold: usize, keep: usize) {
+    match v {
+        serde_json::Value::String(s) => {
+            let n = s.chars().count();
+            if n > threshold {
+                let head: String = s.chars().take(keep).collect();
+                *s = format!("{head}…(共 {n} 字符)");
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for x in a.iter_mut() {
+                truncate_long_strings(x, threshold, keep);
+            }
+        }
+        serde_json::Value::Object(o) => {
+            for x in o.values_mut() {
+                truncate_long_strings(x, threshold, keep);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 最近一次请求原文（无记录时 None）
+pub fn last_request(ctx: &Arc<Ctx>) -> Option<serde_json::Value> {
+    ctx.ai_last_request.lock().unwrap().clone()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -137,9 +582,9 @@ pub async fn chat(ctx: &Arc<crate::state::Ctx>, messages: &[ChatMessage]) -> Res
 /// - OpenAI：reasoning_effort + temperature
 /// - Claude：thinking.budget_tokens（low=2048/medium=8192/high=16384），max_tokens 自动放大；温度范围 0-1，开思考时忽略
 /// - Gemini：generationConfig.thinkingBudget（low=1024/medium=8192/high=24576）+ temperature
-fn apply_params(protocol: &str, body: &mut serde_json::Value, cfg: &AiConfig) {
-    let effort = cfg.reasoning_effort.as_str();
-    let temp = cfg.temperature;
+fn apply_params(protocol: &str, body: &mut serde_json::Value, cfg: &AiConfig, p: &Provider) {
+    let effort = p.reasoning_effort_with(cfg);
+    let temp = p.temperature_with(cfg);
     match protocol {
         "openai" => {
             if let Some(t) = temp {
@@ -214,12 +659,12 @@ pub async fn chat_with_images(
         cfg.clone()
     };
 
-    let client = http_client_for(&p.base_url, 120).map_err(|e| e.to_string())?;
+    let client = http_client_for(&p.base_url, p.request_timeout_secs_with(120)).map_err(|e| e.to_string())?;
 
     match p.protocol.as_str() {
-        "gemini" => chat_gemini(&client, &p, messages, images, &params).await,
-        "claude" => chat_claude(&client, &p, messages, images, &params).await,
-        _ => chat_openai(&client, &p, messages, images, &params).await,
+        "gemini" => chat_gemini(ctx, &client, &p, messages, images, &params).await,
+        "claude" => chat_claude(ctx, &client, &p, messages, images, &params).await,
+        _ => chat_openai(ctx, &client, &p, messages, images, &params).await,
     }
 }
 
@@ -249,9 +694,9 @@ pub async fn simple_chat(
     // 默认参数：不带 reasoning_effort/temperature，轻量请求
     let params = AiConfig::default();
     let (text, _) = match p.protocol.as_str() {
-        "gemini" => chat_gemini(&client, &p, &msgs, &[], &params).await?,
-        "claude" => chat_claude(&client, &p, &msgs, &[], &params).await?,
-        _ => chat_openai(&client, &p, &msgs, &[], &params).await?,
+        "gemini" => chat_gemini(ctx, &client, &p, &msgs, &[], &params).await?,
+        "claude" => chat_claude(ctx, &client, &p, &msgs, &[], &params).await?,
+        _ => chat_openai(ctx, &client, &p, &msgs, &[], &params).await?,
     };
     Ok(text)
 }
@@ -410,12 +855,13 @@ pub async fn chat_stream_with_images<F: FnMut(TokenKind, &str) -> bool>(
         let cfg = ctx.ai_config.lock().unwrap();
         cfg.clone()
     };
-    let client = http_stream_client_for(&p.base_url, 120).map_err(|e| e.to_string())?;
+    let client = http_stream_client_for(&p.base_url, p.profile_with(&params.model_profiles).stream_idle_secs)
+        .map_err(|e| e.to_string())?;
 
     let res = match p.protocol.as_str() {
-        "gemini" => stream_gemini(&client, &p, messages, images, &params, &mut on_token).await,
-        "claude" => stream_claude(&client, &p, messages, images, &params, &mut on_token).await,
-        _ => stream_openai(&client, &p, messages, images, &params, &mut on_token).await,
+        "gemini" => stream_gemini(ctx, &client, &p, messages, images, &params, &mut on_token).await,
+        "claude" => stream_claude(ctx, &client, &p, messages, images, &params, &mut on_token).await,
+        _ => stream_openai(ctx, &client, &p, messages, images, &params, &mut on_token).await,
     };
     match res {
         Ok((full, usage)) => Ok((full, usage)),
@@ -424,9 +870,9 @@ pub async fn chat_stream_with_images<F: FnMut(TokenKind, &str) -> bool>(
         // 流式失败（部分服务不支持 SSE）时退回一次性请求并把整段作为单个 token 回调
         Err(_) => {
             let (full, usage) = match p.protocol.as_str() {
-                "gemini" => chat_gemini(&client, &p, messages, images, &params).await,
-                "claude" => chat_claude(&client, &p, messages, images, &params).await,
-                _ => chat_openai(&client, &p, messages, images, &params).await,
+                "gemini" => chat_gemini(ctx, &client, &p, messages, images, &params).await,
+                "claude" => chat_claude(ctx, &client, &p, messages, images, &params).await,
+                _ => chat_openai(ctx, &client, &p, messages, images, &params).await,
             }?;
             on_token(TokenKind::Text, &full);
             Ok((full, usage))
@@ -590,6 +1036,7 @@ fn gemini_contents(messages: &[ChatMessage], images: &[String]) -> (String, Vec<
 
 /// OpenAI 流式：/chat/completions stream=true
 async fn stream_openai<F: FnMut(TokenKind, &str) -> bool>(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     messages: &[ChatMessage],
@@ -604,7 +1051,8 @@ async fn stream_openai<F: FnMut(TokenKind, &str) -> bool>(
         "model": p.model, "messages": msgs, "stream": true,
         "stream_options": {"include_usage": true},
     });
-    apply_params("openai", &mut body, params);
+    apply_params("openai", &mut body, params, p);
+    record_request(ctx, "openai", &url, &body);
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", p.api_key))
@@ -748,6 +1196,7 @@ async fn stream_openai<F: FnMut(TokenKind, &str) -> bool>(
 
 /// Claude 流式：/v1/messages stream=true（content_block_delta）
 async fn stream_claude<F: FnMut(TokenKind, &str) -> bool>(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     messages: &[ChatMessage],
@@ -759,14 +1208,15 @@ async fn stream_claude<F: FnMut(TokenKind, &str) -> bool>(
     // Claude 协议 max_tokens 必填：默认 8192，配置了 max_output_tokens 则跟随
     let mut body = serde_json::json!({
         "model": p.model,
-        "max_tokens": params.max_output_tokens.filter(|&n| n > 0).unwrap_or(8192),
+        "max_tokens": p.max_output_tokens_with(params).filter(|&n| n > 0).unwrap_or(8192),
         "messages": msgs,
         "stream": true
     });
-    apply_params("claude", &mut body, params);
+    apply_params("claude", &mut body, params, p);
     claude_apply_cache(&mut body, &system_txt, &mut msgs);
     body["messages"] = serde_json::json!(msgs);
     let url = format!("{}/v1/messages", p.base_url.trim_end_matches('/'));
+    record_request(ctx, "claude", &url, &body);
     let resp = client
         .post(&url)
         .header("x-api-key", &p.api_key)
@@ -878,6 +1328,7 @@ async fn stream_claude<F: FnMut(TokenKind, &str) -> bool>(
 
 /// Gemini 流式：streamGenerateContent?alt=sse
 async fn stream_gemini<F: FnMut(TokenKind, &str) -> bool>(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     messages: &[ChatMessage],
@@ -887,7 +1338,7 @@ async fn stream_gemini<F: FnMut(TokenKind, &str) -> bool>(
 ) -> Result<(String, TokenUsage), String> {
     let (system_txt, contents) = gemini_contents(messages, images);
     let mut body = serde_json::json!({ "contents": contents });
-    apply_params("gemini", &mut body, params);
+    apply_params("gemini", &mut body, params, p);
     if !system_txt.is_empty() {
         body["systemInstruction"] = serde_json::json!({ "parts": [{ "text": system_txt }] });
     }
@@ -896,6 +1347,7 @@ async fn stream_gemini<F: FnMut(TokenKind, &str) -> bool>(
         p.base_url.trim_end_matches('/'),
         p.model
     );
+    record_request(ctx, "gemini", &url, &body);
     let resp = client
         .post(&url)
         .header("x-goog-api-key", &p.api_key)
@@ -1017,6 +1469,7 @@ fn parse_call_args(args: &str) -> serde_json::Value {
 
 /// OpenAI 兼容协议：/chat/completions
 async fn chat_openai(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     messages: &[ChatMessage],
@@ -1027,11 +1480,12 @@ async fn chat_openai(
     // 只发送 role/content（图片挂到最后一条 user），剥离本地可视化用的 tool_calls 字段
     let msgs = openai_messages(messages, images);
     let mut body = serde_json::json!({ "model": p.model, "messages": msgs });
-    apply_params("openai", &mut body, params);
+    apply_params("openai", &mut body, params, p);
     // 回复长度：默认不限制（不发 max_tokens，端点给默认最大）；配置了 max_output_tokens 才显式发送
-    if let Some(n) = params.max_output_tokens.filter(|&n| n > 0) {
+    if let Some(n) = p.max_output_tokens_with(params).filter(|&n| n > 0) {
         body["max_tokens"] = serde_json::json!(n);
     }
+    record_request(ctx, "openai", &url, &body);
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", p.api_key))
@@ -1079,6 +1533,7 @@ async fn chat_openai(
 
 /// Google Gemini 原生协议：generateContent
 async fn chat_gemini(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     messages: &[ChatMessage],
@@ -1088,7 +1543,7 @@ async fn chat_gemini(
     // system 合并进 systemInstruction，其余转为 contents（role: user/model），图片挂到最后一条 user
     let (system_txt, contents) = gemini_contents(messages, images);
     let mut body = serde_json::json!({ "contents": contents });
-    apply_params("gemini", &mut body, params);
+    apply_params("gemini", &mut body, params, p);
     if !system_txt.is_empty() {
         body["systemInstruction"] = serde_json::json!({ "parts": [{ "text": system_txt }] });
     }
@@ -1097,6 +1552,7 @@ async fn chat_gemini(
         p.base_url.trim_end_matches('/'),
         p.model
     );
+    record_request(ctx, "gemini", &url, &body);
     let resp = client
         .post(&url)
         .header("x-goog-api-key", &p.api_key)
@@ -1177,6 +1633,7 @@ fn claude_apply_cache(
 }
 
 async fn chat_claude(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     messages: &[ChatMessage],
@@ -1188,13 +1645,14 @@ async fn chat_claude(
     let mut body = serde_json::json!({
         "model": p.model,
         // Claude 协议 max_tokens 必填：默认 8192，配置了 max_output_tokens 则跟随
-        "max_tokens": params.max_output_tokens.filter(|&n| n > 0).unwrap_or(8192),
+        "max_tokens": p.max_output_tokens_with(params).filter(|&n| n > 0).unwrap_or(8192),
         "messages": msgs,
     });
-    apply_params("claude", &mut body, params);
+    apply_params("claude", &mut body, params, p);
     claude_apply_cache(&mut body, &system_txt, &mut msgs);
     body["messages"] = serde_json::json!(msgs);
     let url = format!("{}/v1/messages", p.base_url.trim_end_matches('/'));
+    record_request(ctx, "claude", &url, &body);
     let resp = client
         .post(&url)
         .header("x-api-key", &p.api_key)
@@ -2288,7 +2746,7 @@ pub async fn chat_native_round(
     }
     // 一次性请求同样不能用 180s 卡死：开思考的 Claude 单轮（思考+正文）经常超过 3 分钟，
     // 超时会被误判成网络故障并触发无意义重试
-    let client = http_client_for(&p.base_url, 600).map_err(|e| NativeErr::Other(e.to_string()))?;
+    let client = http_client_for(&p.base_url, p.request_timeout_secs_with(600)).map_err(|e| NativeErr::Other(e.to_string()))?;
     let defs = native_tool_defs(ctx, session);
     // 原生 Function Calling 的正文与工具结果回喂都可能是会话原文，统一脱敏后再发
     let masked_convo = crate::hidden_code::maybe_mask_messages(ctx, convo);
@@ -2296,9 +2754,9 @@ pub async fn chat_native_round(
     let convo = &masked_convo[..];
     let exchanges = &masked_exchanges[..];
     match p.protocol.as_str() {
-        "claude" => native_round_claude(&client, &p, convo, images, exchanges, &defs, &params).await,
-        "gemini" => native_round_gemini(&client, &p, convo, images, exchanges, &defs, &params).await,
-        _ => native_round_openai(&client, &p, convo, images, exchanges, &defs, &params).await,
+        "claude" => native_round_claude(ctx, &client, &p, convo, images, exchanges, &defs, &params).await,
+        "gemini" => native_round_gemini(ctx, &client, &p, convo, images, exchanges, &defs, &params).await,
+        _ => native_round_openai(ctx, &client, &p, convo, images, exchanges, &defs, &params).await,
     }
 }
 
@@ -2393,8 +2851,8 @@ fn openai_native_body(
         "tools": tools,
         "tool_choice": "auto",
     });
-    apply_params("openai", &mut body, params);
-    if let Some(n) = params.max_output_tokens.filter(|&n| n > 0) {
+    apply_params("openai", &mut body, params, p);
+    if let Some(n) = p.max_output_tokens_with(params).filter(|&n| n > 0) {
         body["max_tokens"] = serde_json::json!(n);
     }
     body
@@ -2450,12 +2908,12 @@ fn claude_native_body(
     let mut body = serde_json::json!({
         "model": p.model,
         // Claude 协议 max_tokens 必填：默认 8192，配置了 max_output_tokens 则跟随
-        "max_tokens": params.max_output_tokens.filter(|&n| n > 0).unwrap_or(8192),
+        "max_tokens": p.max_output_tokens_with(params).filter(|&n| n > 0).unwrap_or(8192),
         "messages": msgs,
         "tools": tools,
         "tool_choice": {"type": "auto"},
     });
-    apply_params("claude", &mut body, params);
+    apply_params("claude", &mut body, params, p);
     claude_apply_cache(&mut body, &system_txt, &mut msgs);
     body["messages"] = serde_json::json!(msgs);
     body
@@ -2463,6 +2921,7 @@ fn claude_native_body(
 
 /// 构造 Gemini 原生工具调用请求体（流式/一次性共用）
 fn gemini_native_body(
+    p: &Provider,
     convo: &[ChatMessage],
     images: &[String],
     exchanges: &[ToolExchange],
@@ -2512,7 +2971,7 @@ fn gemini_native_body(
         "contents": contents,
         "tools": [{"functionDeclarations": decls}],
     });
-    apply_params("gemini", &mut body, params);
+    apply_params("gemini", &mut body, params, p);
     if !system_txt.is_empty() {
         body["systemInstruction"] =
             serde_json::json!({"parts": [{"text": system_txt}]});
@@ -2552,8 +3011,8 @@ pub async fn chat_native_round_stream<F: FnMut(NativeEvent) -> bool + Send>(
             p.name
         )));
     }
-    let client =
-        http_stream_client_for(&p.base_url, 120).map_err(|e| NativeErr::Other(e.to_string()))?;
+    let client = http_stream_client_for(&p.base_url, p.profile_with(&params.model_profiles).stream_idle_secs)
+        .map_err(|e| NativeErr::Other(e.to_string()))?;
     let defs = native_tool_defs(ctx, session);
 
     // 原生流式与一次性回退共用同一份脱敏副本（工具结果同样掩码）
@@ -2573,13 +3032,13 @@ pub async fn chat_native_round_stream<F: FnMut(NativeEvent) -> bool + Send>(
         };
         match p.protocol.as_str() {
             "claude" => {
-                native_round_claude_stream(&client, &p, convo, images, exchanges, &defs, &params, &mut wrapped).await
+                native_round_claude_stream(ctx, &client, &p, convo, images, exchanges, &defs, &params, &mut wrapped).await
             }
             "gemini" => {
-                native_round_gemini_stream(&client, &p, convo, images, exchanges, &defs, &params, &mut wrapped).await
+                native_round_gemini_stream(ctx, &client, &p, convo, images, exchanges, &defs, &params, &mut wrapped).await
             }
             _ => {
-                native_round_openai_stream(&client, &p, convo, images, exchanges, &defs, &params, &mut wrapped).await
+                native_round_openai_stream(ctx, &client, &p, convo, images, exchanges, &defs, &params, &mut wrapped).await
             }
         }
     };
@@ -2605,6 +3064,7 @@ pub async fn chat_native_round_stream<F: FnMut(NativeEvent) -> bool + Send>(
 }
 
 async fn native_round_openai_stream(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     convo: &[ChatMessage],
@@ -2619,6 +3079,7 @@ async fn native_round_openai_stream(
     body["stream"] = serde_json::json!(true);
     // 末 chunk 携带 usage（主流端点支持；不支持的端点报错则由入口退回一次性请求）
     body["stream_options"] = serde_json::json!({"include_usage": true});
+    record_request(ctx, "openai", &url, &body);
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", p.api_key))
@@ -2800,6 +3261,7 @@ async fn native_round_openai_stream(
 }
 
 async fn native_round_claude_stream(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     convo: &[ChatMessage],
@@ -2812,6 +3274,7 @@ async fn native_round_claude_stream(
     let url = format!("{}/v1/messages", p.base_url.trim_end_matches('/'));
     let mut body = claude_native_body(p, convo, images, exchanges, defs, params);
     body["stream"] = serde_json::json!(true);
+    record_request(ctx, "claude", &url, &body);
     let resp = client
         .post(&url)
         .header("x-api-key", &p.api_key)
@@ -2948,6 +3411,7 @@ async fn native_round_claude_stream(
 }
 
 async fn native_round_gemini_stream(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     convo: &[ChatMessage],
@@ -2962,7 +3426,8 @@ async fn native_round_gemini_stream(
         p.base_url.trim_end_matches('/'),
         p.model
     );
-    let body = gemini_native_body(convo, images, exchanges, defs, params);
+    let body = gemini_native_body(p, convo, images, exchanges, defs, params);
+    record_request(ctx, "gemini", &url, &body);
     let resp = client
         .post(&url)
         .header("x-goog-api-key", &p.api_key)
@@ -3041,6 +3506,7 @@ async fn native_round_gemini_stream(
 }
 
 async fn native_round_openai(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     convo: &[ChatMessage],
@@ -3051,6 +3517,7 @@ async fn native_round_openai(
 ) -> Result<NativeRound, NativeErr> {
     let url = format!("{}/chat/completions", p.base_url.trim_end_matches('/'));
     let body = openai_native_body(p, convo, images, exchanges, defs, params);
+    record_request(ctx, "openai", &url, &body);
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", p.api_key))
@@ -3139,6 +3606,7 @@ async fn native_round_openai(
 }
 
 async fn native_round_claude(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     convo: &[ChatMessage],
@@ -3149,6 +3617,7 @@ async fn native_round_claude(
 ) -> Result<NativeRound, NativeErr> {
     let body = claude_native_body(p, convo, images, exchanges, defs, params);
     let url = format!("{}/v1/messages", p.base_url.trim_end_matches('/'));
+    record_request(ctx, "claude", &url, &body);
     let resp = client
         .post(&url)
         .header("x-api-key", &p.api_key)
@@ -3207,6 +3676,7 @@ async fn native_round_claude(
 }
 
 async fn native_round_gemini(
+    ctx: &Arc<crate::state::Ctx>,
     client: &reqwest::Client,
     p: &Provider,
     convo: &[ChatMessage],
@@ -3215,12 +3685,13 @@ async fn native_round_gemini(
     defs: &[serde_json::Value],
     params: &AiConfig,
 ) -> Result<NativeRound, NativeErr> {
-    let body = gemini_native_body(convo, images, exchanges, defs, params);
+    let body = gemini_native_body(p, convo, images, exchanges, defs, params);
     let url = format!(
         "{}/v1beta/models/{}:generateContent",
         p.base_url.trim_end_matches('/'),
         p.model
     );
+    record_request(ctx, "gemini", &url, &body);
     let resp = client
         .post(&url)
         .header("x-goog-api-key", &p.api_key)
@@ -3379,7 +3850,21 @@ mod native_tests {
             api_key: "test-key".into(),
             model: "test-model".into(),
             active: true,
+            profile: String::new(),
+            tool_mode: String::new(),
+            continue_nudges: None,
+            stream_idle_secs: None,
+            temperature: None,
+            reasoning_effort: None,
+            max_output_tokens: None,
+            request_timeout_secs: None,
         }
+    }
+
+    /// 测试用 Ctx（懒加载单例）：只在记录请求原文时被写入
+    fn tctx() -> Arc<crate::state::Ctx> {
+        static CTX: std::sync::OnceLock<Arc<crate::state::Ctx>> = std::sync::OnceLock::new();
+        CTX.get_or_init(|| crate::plugins::test_ctx("ai")).clone()
     }
 
     #[tokio::test]
@@ -3420,6 +3905,7 @@ mod native_tests {
         let convo = vec![ChatMessage::user("1+2".to_string())];
         let mut events: Vec<(&'static str, String)> = Vec::new();
         let r = native_round_openai_stream(
+            &tctx(),
             &client, &p, &convo, &[], &[], &[],
             &AiConfig::default(),
             &mut |ev| {
@@ -3474,7 +3960,7 @@ mod native_tests {
         let client = reqwest::Client::new();
         let convo = vec![ChatMessage::system("sys".to_string()), ChatMessage::user("算 1+2".to_string())];
 
-        let r1 = native_round_openai(&client, &p, &convo, &[], &[], &[], &AiConfig::default()).await.unwrap();
+        let r1 = native_round_openai(&tctx(), &client, &p, &convo, &[], &[], &[], &AiConfig::default()).await.unwrap();
         assert_eq!(r1.calls.len(), 2);
         assert_eq!(r1.calls[0].name, "shell");
         assert_eq!(r1.calls[0].args["command"], "echo hi");
@@ -3488,7 +3974,7 @@ mod native_tests {
                 ToolResult { ok: true, value: json!({"sum": 3}) },
             ],
         };
-        let r2 = native_round_openai(&client, &p, &convo, &[], &[ex], &[], &AiConfig::default()).await.unwrap();
+        let r2 = native_round_openai(&tctx(), &client, &p, &convo, &[], &[ex], &[], &AiConfig::default()).await.unwrap();
         assert_eq!(r2.content, "答案是 3");
 
         let sent = bodies.lock().unwrap();
@@ -3517,7 +4003,7 @@ mod native_tests {
         let p = test_provider("claude", &url);
         let client = reqwest::Client::new();
         let defs = vec![json!({"name":"shell","description":"执行命令","parameters":{"type":"object","properties":{}}})];
-        let r = native_round_claude(&client, &p, &[ChatMessage::user("列目录".to_string())], &[], &[], &defs, &AiConfig::default()).await.unwrap();
+        let r = native_round_claude(&tctx(), &client, &p, &[ChatMessage::user("列目录".to_string())], &[], &[], &defs, &AiConfig::default()).await.unwrap();
         assert_eq!(r.content, "我用工具查一下");
         assert_eq!(r.calls.len(), 1);
         assert_eq!(r.calls[0].id, "tu_1");
@@ -3543,6 +4029,7 @@ mod native_tests {
         let client = reqwest::Client::new();
         let defs = vec![json!({"name":"shell","description":"执行命令","parameters":{"type":"object","properties":{}}})];
         let r = native_round_claude_stream(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("干点活".to_string())], &[], &[], &defs, &AiConfig::default(),
             &mut |_e| true,
@@ -3567,7 +4054,7 @@ mod native_tests {
         let p = test_provider("gemini", &url);
         let client = reqwest::Client::new();
         let defs = vec![json!({"name":"add","description":"加法","parameters":{"type":"object","properties":{}}})];
-        let r = native_round_gemini(&client, &p, &[ChatMessage::user("算 20+22".to_string())], &[], &[], &defs, &AiConfig::default()).await.unwrap();
+        let r = native_round_gemini(&tctx(), &client, &p, &[ChatMessage::user("算 20+22".to_string())], &[], &[], &defs, &AiConfig::default()).await.unwrap();
         assert_eq!(r.calls.len(), 1);
         assert_eq!(r.calls[0].name, "add");
         assert_eq!(r.calls[0].args["b"], 22);
@@ -3587,13 +4074,13 @@ mod native_tests {
         let p = test_provider("openai", &url);
         let client = reqwest::Client::new();
         let defs = vec![json!({"name":"shell","description":"","parameters":{}})];
-        let r = native_round_openai(&client, &p, &[ChatMessage::user("hi".to_string())], &[], &[], &defs, &AiConfig::default()).await;
+        let r = native_round_openai(&tctx(), &client, &p, &[ChatMessage::user("hi".to_string())], &[], &[], &defs, &AiConfig::default()).await;
         assert!(matches!(r, Err(NativeErr::Unsupported(_))), "应识别为不支持原生工具: {r:?}");
 
         // 401 鉴权错误 → Other（不应误分类为不支持工具）
         let (url2, _) = spawn_mock_ai(vec![(401, json!({"error":{"message":"invalid api key"}}).to_string())]).await;
         let p2 = test_provider("openai", &url2);
-        let r2 = native_round_openai(&client, &p2, &[ChatMessage::user("hi".to_string())], &[], &[], &defs, &AiConfig::default()).await;
+        let r2 = native_round_openai(&tctx(), &client, &p2, &[ChatMessage::user("hi".to_string())], &[], &[], &defs, &AiConfig::default()).await;
         assert!(matches!(r2, Err(NativeErr::Other(_))), "鉴权错误不应判定为不支持: {r2:?}");
     }
 
@@ -3634,6 +4121,7 @@ mod native_tests {
         let client = reqwest::Client::new();
         let mut tokens: Vec<String> = Vec::new();
         let (full, usage) = stream_openai(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
             &mut |_kind, t| { tokens.push(t.to_string()); true },
@@ -3678,6 +4166,7 @@ mod native_tests {
         let client = reqwest::Client::new();
         let mut got: Vec<(TokenKind, String)> = Vec::new();
         let (full, _) = stream_openai(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
             &mut |kind, t| { got.push((kind, t.to_string())); true },
@@ -3734,6 +4223,7 @@ mod native_tests {
         let p = test_provider("openai", &url);
         let client = reqwest::Client::new();
         let (full, _) = stream_openai(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
             &mut |_kind, _t| true,
@@ -3767,6 +4257,7 @@ mod native_tests {
         let p = test_provider("claude", &url);
         let client = reqwest::Client::new();
         let (full, _) = stream_claude(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
             &mut |_kind, _t| true,
@@ -3796,6 +4287,7 @@ mod native_tests {
         let p = test_provider("claude", &url);
         let client = reqwest::Client::new();
         let (full, _) = chat_claude(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
         )
@@ -3818,6 +4310,7 @@ mod native_tests {
         )])
         .await;
         let (full2, _) = chat_claude(
+            &tctx(),
             &client, &test_provider("claude", &url2),
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
         )
@@ -3840,6 +4333,7 @@ mod native_tests {
         let p = test_provider("gemini", &url);
         let client = reqwest::Client::new();
         let (full, usage) = stream_gemini(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
             &mut |_kind, _t| true,
@@ -3861,6 +4355,7 @@ mod native_tests {
         ])
         .await;
         let (full2, _) = stream_gemini(
+            &tctx(),
             &client, &test_provider("gemini", &url2),
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
             &mut |_kind, _t| true,
@@ -3914,6 +4409,7 @@ mod native_tests {
         let start = std::time::Instant::now();
         let mut n = 0;
         let r = stream_openai(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
             &mut |_kind, _t| { n += 1; n < 2 },
@@ -3935,6 +4431,7 @@ mod native_tests {
         let p = test_provider("openai", &url);
         let client = reqwest::Client::new();
         let (full, _) = stream_openai(
+            &tctx(),
             &client, &p,
             &[ChatMessage::user("hi".to_string())], &[], &AiConfig::default(),
             &mut |_kind, _t| true,
@@ -3943,6 +4440,90 @@ mod native_tests {
         .unwrap();
         assert_eq!(full, expect, "500 块应全部有序到达且无损拼接");
         assert!(full.starts_with("t0;t1;") && full.ends_with("t498;t499;"));
+    }
+}
+
+/// 模型适配档案测试：档位推断 / 配置覆盖 / 旧配置兼容
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    fn provider(model: &str) -> Provider {
+        Provider {
+            id: "t".into(),
+            name: "t".into(),
+            protocol: "openai".into(),
+            base_url: String::new(),
+            api_key: String::new(),
+            model: model.into(),
+            active: true,
+            profile: String::new(),
+            tool_mode: String::new(),
+            continue_nudges: None,
+            stream_idle_secs: None,
+            temperature: None,
+            reasoning_effort: None,
+            max_output_tokens: None,
+            request_timeout_secs: None,
+        }
+    }
+
+    #[test]
+    fn tier_follows_model_family() {
+        assert_eq!(ModelProfile::for_model("claude-sonnet-5-5", "openai").tier, Tier::Strong);
+        assert_eq!(ModelProfile::for_model("DeepSeek-V3", "openai").tier, Tier::Strong);
+        assert_eq!(ModelProfile::for_model("qwen3", "openai").tier, Tier::Weak);
+        assert_eq!(ModelProfile::for_model("glm-5.2", "openai").tier, Tier::Weak);
+        assert_eq!(ModelProfile::for_model("my-private-model", "openai").tier, Tier::Standard);
+        // 协议兜底：模型名未命中时，claude 协议按强模型
+        assert_eq!(ModelProfile::for_model("some-model", "claude").tier, Tier::Strong);
+    }
+
+    #[test]
+    fn provider_fields_override_tier() {
+        let mut p = provider("qwen3");
+        // 自动推断：弱档 → 文本协议 + 更高的推动上限
+        assert_eq!(p.profile().tier, Tier::Weak);
+        assert!(!p.native_tools());
+        assert_eq!(p.profile().plan_nudges, 5);
+
+        // 显式档位覆盖：弱模型也可按强档跑原生
+        p.profile = "strong".into();
+        assert_eq!(p.profile().tier, Tier::Strong);
+        assert!(p.native_tools());
+        assert_eq!(p.profile().trunc_continues, 3);
+
+        // 上限与流式超时覆盖
+        p.continue_nudges = Some(1);
+        p.stream_idle_secs = Some(600);
+        assert_eq!(p.profile().plan_nudges, 1);
+        assert_eq!(p.profile().xml_nudges, 1);
+        assert_eq!(p.profile().stream_idle_secs, 600);
+    }
+
+    #[test]
+    fn tool_mode_explicit_beats_tier() {
+        let mut p = provider("claude-sonnet-5-5");
+        assert!(p.native_tools());
+        p.tool_mode = "text".into();
+        assert!(!p.native_tools());
+        p.tool_mode = "native".into();
+        p.model = "qwen3".into();
+        assert!(p.native_tools());
+        p.tool_mode = "auto".into();
+        assert!(!p.native_tools());
+    }
+
+    #[test]
+    fn old_config_without_new_fields_still_loads() {
+        // 0.7.6 及更早落库的 ai_config 不含适配字段：必须能反序列化并按模型名推断
+        let old = r#"{"id":"p1","name":"旧配置","protocol":"openai","base_url":"https://x","api_key":"k","model":"qwen3","active":true}"#;
+        let p: Provider = serde_json::from_str(old).unwrap();
+        assert!(p.profile.is_empty());
+        assert!(p.tool_mode.is_empty());
+        assert_eq!(p.continue_nudges, None);
+        assert_eq!(p.stream_idle_secs, None);
+        assert_eq!(p.profile().tier, Tier::Weak);
     }
 }
 
@@ -4800,5 +5381,120 @@ mod prompt_tests {
         ] {
             assert!(text.contains(needle), "missing {needle}");
         }
+    }
+}
+
+#[cfg(test)]
+mod compat_tests {
+    use super::*;
+
+    fn prov(model: &str) -> Provider {
+        Provider {
+            id: "p1".into(),
+            name: "测试".into(),
+            protocol: "openai".into(),
+            base_url: "https://example.com/v1".into(),
+            api_key: "k".into(),
+            model: model.into(),
+            active: true,
+            profile: String::new(),
+            tool_mode: String::new(),
+            continue_nudges: None,
+            stream_idle_secs: None,
+            temperature: None,
+            reasoning_effort: None,
+            max_output_tokens: None,
+            request_timeout_secs: None,
+        }
+    }
+
+    /// 别名文本解析：`关键词 = 档位 [/ 协议]`，空行与注释忽略，非法值丢弃
+    #[test]
+    fn alias_parse_and_format_roundtrip() {
+        let a = parse_aliases("# 注释\nqwen = weak / text\n\nGLM = weak\nbad = super\n");
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].pattern, "qwen");
+        assert_eq!(a[0].profile, "weak");
+        assert_eq!(a[0].tool_mode, "text");
+        assert_eq!(a[1].pattern, "glm");
+        assert_eq!(format_aliases(&a), "qwen = weak / text\nglm = weak");
+    }
+
+    /// 优先级：提供方显式 > 别名 > 模型名启发式；协议与档位各自独立回退
+    #[test]
+    fn alias_priority_provider_alias_heuristic() {
+        let aliases = parse_aliases("qwen = weak / text");
+        let mut p = prov("qwen3-32b");
+        assert_eq!(p.profile_with(&aliases).tier, Tier::Weak);
+        assert!(!p.native_tools_with(&aliases));
+        p.profile = "strong".into();
+        assert_eq!(p.profile_with(&aliases).tier, Tier::Strong);
+        // 协议仍由别名决定（provider 未显式指定）
+        assert!(!p.native_tools_with(&aliases));
+        p.tool_mode = "native".into();
+        assert!(p.native_tools_with(&aliases));
+        // 别名未命中 → 模型名启发式
+        assert_eq!(prov("mystery-model").profile_with(&aliases).tier, Tier::Standard);
+    }
+
+    /// 采样/超时：提供方覆盖优先，空值回落全局
+    #[test]
+    fn provider_param_fallbacks() {
+        let mut cfg = AiConfig::default();
+        cfg.temperature = Some(0.3);
+        cfg.reasoning_effort = "low".into();
+        cfg.max_output_tokens = Some(2048);
+        let mut p = prov("m");
+        assert_eq!(p.temperature_with(&cfg), Some(0.3));
+        assert_eq!(p.reasoning_effort_with(&cfg), "low");
+        assert_eq!(p.max_output_tokens_with(&cfg), Some(2048));
+        assert_eq!(p.request_timeout_secs_with(600), 600);
+
+        p.temperature = Some(1.2);
+        p.reasoning_effort = Some("high".into());
+        p.max_output_tokens = Some(8192);
+        p.request_timeout_secs = Some(60);
+        assert_eq!(p.temperature_with(&cfg), Some(1.2));
+        assert_eq!(p.reasoning_effort_with(&cfg), "high");
+        assert_eq!(p.max_output_tokens_with(&cfg), Some(8192));
+        assert_eq!(p.request_timeout_secs_with(600), 60);
+
+        // 空串 = 未设置，回落全局
+        p.reasoning_effort = Some(String::new());
+        assert_eq!(p.reasoning_effort_with(&cfg), "low");
+    }
+
+    /// 请求原文：超长字符串（图片 data URL）裁成 400 字符 + 原长度
+    #[test]
+    fn request_record_truncates_long_strings() {
+        let ctx = crate::plugins::test_ctx("ai-record");
+        let big = format!("data:image/png;base64,{}", "A".repeat(5000));
+        record_request(
+            &ctx,
+            "openai",
+            "https://example.com/v1/chat/completions",
+            &serde_json::json!({"messages":[{"role":"user","content": big}]}),
+        );
+        let r = last_request(&ctx).expect("记录应存在");
+        assert_eq!(r["protocol"], "openai");
+        let c = r["body"]["messages"][0]["content"].as_str().unwrap();
+        assert!(c.starts_with("data:image/png;base64,AAAA"));
+        assert!(c.ends_with("字符)"));
+        assert!(c.chars().count() < 500);
+    }
+
+    /// 自动降级：原生/自动 → 固化为 text；已是 text 不再重复写
+    #[test]
+    fn degrade_marks_provider_text() {
+        let ctx = crate::plugins::test_ctx("ai-degrade");
+        {
+            let mut cfg = ctx.ai_config.lock().unwrap();
+            let mut p = prov("qwen3");
+            p.name = "本地".into();
+            cfg.providers.push(p);
+        }
+        assert_eq!(degrade_to_text(&ctx).as_deref(), Some("本地"));
+        assert_eq!(ctx.ai_config.lock().unwrap().providers[0].tool_mode, "text");
+        assert!(degrade_to_text(&ctx).is_none());
     }
 }

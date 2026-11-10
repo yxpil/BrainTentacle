@@ -153,7 +153,7 @@ impl Default for Tuning {
         Self {
             start_delay_ms: 300,
             ready_secs: DEFAULT_READY_SECS as u32,
-            retries: 2,
+            retries: 3,
             stop_grace_secs: 5,
             log_lines: DEFAULT_LOG_LINES as u32,
         }
@@ -173,12 +173,15 @@ pub fn tuning(ctx: &Arc<crate::state::Ctx>) -> Tuning {
     .clamp()
 }
 
-/// 第 attempt 次（1 起）重试前总共要等多久：以启动延时为基数翻倍，封顶 15 秒。
-/// 崩溃循环不该变成机关枪——退避是它唯一的刹车。
-pub fn retry_backoff_ms(base_delay_ms: u32, attempt: u32) -> u64 {
-    let step = base_delay_ms.max(200) as u64;
-    let factor = 1u64 << (attempt.saturating_sub(1).min(3)); // 1,2,4,8 后保持 8
-    (step * factor).min(15_000)
+/// 崩溃自动重启的固定退避：第 1 次 3 秒、第 2 次 10 秒、第 3 次 30 秒，之后不再等待。
+/// 不用指数翻倍的原因是它从几百毫秒起步，崩溃循环会变成「刚挂就重拉」的机关枪；
+/// 固定且明显变长的间隔让用户能看清状态，也给依赖环境（端口释放、外部服务）留出恢复时间。
+pub fn restart_backoff_ms(attempt: u32) -> u64 {
+    match attempt {
+        1 => 3_000,
+        2 => 10_000,
+        _ => 30_000,
+    }
 }
 
 /// 进程活过这个秒数就算"跑稳了"：连续失败计数归零，之后的崩溃重新拿到完整重试预算。
@@ -634,8 +637,9 @@ async fn monitor_exit(ctx: Arc<crate::state::Ctx>, e: WorkWithEntry, running: Ar
 /// 意外退出后的自动重启：只对「本该常驻」的条目生效——插件清单声明的服务（declared）
 /// 或勾了新会话自动拉起的条目（auto_with_session）。用户手动建、没勾常驻的条目崩了就停着，
 /// 悄悄给他重拉一个进程反而是惊吓。
-/// 次数上限来自设置 svc_retries，退避以 svc_start_delay_ms 为基数翻倍；
-/// 到上限就明确放弃并留一条事件（页眉异常灯此时已经亮着，别再无限重启掩盖它）。
+/// 次数上限来自设置 svc_retries（默认 3 = 3s/10s/30s 三次重启）；
+/// 到上限就明确放弃、把原因登记到页眉异常灯并留一条事件，等用户手动启动，
+/// 而不是崩溃后立刻再拉一个，用无限重启掩盖真实错误。
 fn maybe_retry(ctx: &Arc<crate::state::Ctx>, e: &WorkWithEntry, running: &Arc<Running>) {
     if !(e.declared || e.auto_with_session) {
         return;
@@ -651,13 +655,20 @@ fn maybe_retry(ctx: &Arc<crate::state::Ctx>, e: &WorkWithEntry, running: &Arc<Ru
     let attempt = bump_attempt(&e.id);
     if attempt > t.retries {
         note_steady(&e.id); // 这局放弃，下次手动启动重新拿满预算
+        let msg = format!(
+            "启动失败 {} 次（3s/10s/30s 退避），已停止自动重启，请手动启动或查看日志",
+            attempt
+        );
         ctx.emit(
             if e.id.starts_with("plugin:") || e.declared { "plugin-server" } else { "workwith" },
             json!({
                 "phase": "retry-given-up", "id": e.id, "name": e.name,
                 "attempts": attempt - 1, "max": t.retries,
+                "manual": true, "message": msg,
             }),
         );
+        let owner = health_owner(e).unwrap_or_else(|| e.id.clone());
+        crate::plugins::mark_unhealthy(ctx, &owner, &e.name, "giveup", &msg);
         crate::audit::record(
             ctx,
             "local-app",
@@ -668,7 +679,7 @@ fn maybe_retry(ctx: &Arc<crate::state::Ctx>, e: &WorkWithEntry, running: &Arc<Ru
         );
         return;
     }
-    let backoff = retry_backoff_ms(t.start_delay_ms, attempt);
+    let backoff = restart_backoff_ms(attempt);
     // start_entry 自己还会等一轮启动延时，这里只补到退避总额，避免重复累加
     let extra = backoff.saturating_sub(t.start_delay_ms as u64);
     ctx.emit(
@@ -1129,7 +1140,7 @@ mod tests {
     fn tuning_defaults_and_clamps() {
         assert_eq!(Tuning::default(), Tuning {
             start_delay_ms: 300, ready_secs: DEFAULT_READY_SECS as u32,
-            retries: 2, stop_grace_secs: 5, log_lines: DEFAULT_LOG_LINES as u32,
+            retries: 3, stop_grace_secs: 5, log_lines: DEFAULT_LOG_LINES as u32,
         });
         let r = TUNING_RANGE;
         // 每个字段各摆一个「太小」和一个「太大」，两头都得落回区间端点
@@ -1194,20 +1205,15 @@ mod tests {
         assert_eq!((t.ready_secs, t.log_lines), (TUNING_RANGE[1].1, TUNING_RANGE[4].2));
     }
 
-    /// 退避：以启动延时为基数翻倍，最多四档，封顶 15 秒
+    /// 退避：固定 3s / 10s / 30s，之后不再加长（重试次数已到上限，等用户手动）
     #[test]
-    fn retry_backoff_doubles_then_caps() {
-        assert_eq!(retry_backoff_ms(300, 1), 300);
-        assert_eq!(retry_backoff_ms(300, 2), 600);
-        assert_eq!(retry_backoff_ms(300, 3), 1200);
-        assert_eq!(retry_backoff_ms(300, 4), 2400);
-        // 第 5 次不再继续翻倍：因子停在 8
-        assert_eq!(retry_backoff_ms(300, 5), 2400);
-        assert_eq!(retry_backoff_ms(300, 99), 2400);
-        // 封顶：10s × 8 也不能把退避变成分钟级
-        assert_eq!(retry_backoff_ms(10_000, 4), 15_000);
-        // 启动延时设成 0 也要留出至少 200ms 的刹车
-        assert_eq!(retry_backoff_ms(0, 1), 200);
+    fn restart_backoff_is_fixed_schedule() {
+        assert_eq!(restart_backoff_ms(1), 3_000);
+        assert_eq!(restart_backoff_ms(2), 10_000);
+        assert_eq!(restart_backoff_ms(3), 30_000);
+        assert_eq!(restart_backoff_ms(4), 30_000);
+        assert_eq!(restart_backoff_ms(99), 30_000);
+        assert_eq!(restart_backoff_ms(0), 30_000);
     }
 
     /// 连续失败计数：站稳/手动启动清零，之后重新拿满预算

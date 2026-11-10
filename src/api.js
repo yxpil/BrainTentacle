@@ -136,16 +136,51 @@ export const api = {
   // 自定 STUN 列表（NAT 探测数据源），空数组恢复内置默认
   saveStunServers: (servers) => invoke("save_stun_servers", { servers }),
   listProviders: () => invoke("list_providers"),
-  addProvider: (name, protocol, base_url, api_key, model) =>
-    invoke("add_provider", { name, protocol, baseUrl: base_url, apiKey: api_key, model }),
-  updateProvider: (id, name, protocol, base_url, api_key, model) =>
-    invoke("update_provider", { id, name, protocol, baseUrl: base_url, apiKey: api_key, model }),
+  addProvider: (name, protocol, base_url, api_key, model, profile, tool_mode, continue_nudges, stream_idle_secs, temperature, reasoning_effort, max_output_tokens, request_timeout_secs) =>
+    invoke("add_provider", {
+      name,
+      protocol,
+      baseUrl: base_url,
+      apiKey: api_key,
+      model,
+      profile: profile || null,
+      toolMode: tool_mode || null,
+      continueNudges: continue_nudges || null,
+      streamIdleSecs: stream_idle_secs || null,
+      temperature: temperature ?? null,
+      reasoningEffort: reasoning_effort || null,
+      maxOutputTokens: max_output_tokens || null,
+      requestTimeoutSecs: request_timeout_secs || null,
+    }),
+  updateProvider: (id, name, protocol, base_url, api_key, model, profile, tool_mode, continue_nudges, stream_idle_secs, temperature, reasoning_effort, max_output_tokens, request_timeout_secs) =>
+    invoke("update_provider", {
+      id,
+      name,
+      protocol,
+      baseUrl: base_url,
+      apiKey: api_key,
+      model,
+      profile: profile || null,
+      toolMode: tool_mode || null,
+      continueNudges: continue_nudges || null,
+      streamIdleSecs: stream_idle_secs || null,
+      temperature: temperature ?? null,
+      reasoningEffort: reasoning_effort || null,
+      maxOutputTokens: max_output_tokens || null,
+      requestTimeoutSecs: request_timeout_secs || null,
+    }),
   removeProvider: (id) => invoke("remove_provider", { id }),
   setProviderActive: (id, active) => invoke("set_provider_active", { id, active }),
   // 模型采样参数：temperature null=默认（0-2）；reasoningEffort ""=默认 / low / medium / high
   getAiParams: () => invoke("get_ai_params"),
   setAiParams: (temperature, reasoning_effort) =>
     invoke("set_ai_params", { temperature, reasoningEffort: reasoning_effort }),
+  // 模型名别名表（文本域：一行 `关键词 = 档位 [/ 协议]`）
+  setModelAliases: (text) => invoke("set_model_aliases", { text }),
+  // 按表单值回显当前生效档位/协议/上限/超时/采样（Rust 单一真源，不落盘）
+  aiEffectiveProfile: (form) => invoke("ai_effective_profile", { form: form || {} }),
+  // 最近一次真正发出的请求原文（无记录返回 null）
+  aiLastRequest: () => invoke("ai_last_request"),
   // 从提供方 API 拉取可用模型列表（OpenAI /models、Gemini /v1beta/models、Claude /v1/models）
   listProviderModels: (protocol, base_url, api_key) =>
     invoke("list_provider_models", { protocol, baseUrl: base_url, apiKey: api_key }),

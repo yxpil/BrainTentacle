@@ -96,6 +96,7 @@ pub struct Config {
     #[serde(default = "default_svc_ready_secs")]
     pub svc_ready_secs: u32,
     /// 进程意外退出后的自动重启次数上限（0 = 关掉自动重启，上限 10）。
+    /// 默认 3：退避 3s / 10s / 30s 各重启一次，第 4 次失败就停止自动重启并提示用户手动处理。
     /// 只算连续失败：端口就绪/握手成功，或进程活过 60 秒，计数就归零
     #[serde(default = "default_svc_retries")]
     pub svc_retries: u32,
@@ -304,7 +305,7 @@ fn default_svc_ready_secs() -> u32 {
 }
 
 fn default_svc_retries() -> u32 {
-    2
+    3
 }
 
 fn default_svc_stop_grace_secs() -> u32 {

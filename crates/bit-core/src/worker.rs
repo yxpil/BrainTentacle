@@ -178,6 +178,11 @@ async fn start_event_sink(ctx: &Arc<Ctx>) -> Result<String, String> {
             }
             return StatusCode::OK;
         }
+        // 特殊事件：ai-request — worker 记录最近一次请求原文给 host（内存态，不走 webview）
+        if name == "ai-request" {
+            *s.ctx.ai_last_request.lock().unwrap() = Some(payload);
+            return StatusCode::OK;
+        }
         s.ctx.emit(name, payload);
         StatusCode::OK
     }

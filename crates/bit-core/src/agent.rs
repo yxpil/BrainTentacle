@@ -186,7 +186,44 @@ fn opt_thinking(t: &std::sync::Mutex<String>) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// 取出工具结果里的文件快照 id（核心内部字段）：挂到记录上供「回退到此」恢复文件，
+/// 回合内构造/重建对话：system 提示词随协议模式切换，历史只取窗口内的 role/content。
+/// 自动降级时用它重建——原生提示词教的是 function calling，不能拿来跑文本约定。
+fn rebuild_convo(ctx: &Arc<Ctx>, target: &str, native: bool) -> Result<Vec<ChatMessage>, String> {
+    let history: Vec<(String, String)> = {
+        let store = ctx.sessions.lock().unwrap();
+        store
+            .sessions
+            .iter()
+            .find(|s| s.id == target)
+            .map(|sess| {
+                history_window(&sess.messages)
+                    .iter()
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .collect()
+            })
+            .ok_or("会话不存在")?
+    };
+    let sys = if native {
+        ai::system_prompt_native(ctx, Some(target))
+    } else {
+        ai::system_prompt(ctx, Some(target))
+    };
+    let mut v = vec![ChatMessage::system(sys)];
+    for (role, content) in history {
+        v.push(ChatMessage {
+            role,
+            content,
+            tool_calls: Vec::new(),
+            thinking: None,
+            ts: None,
+            diagram: None,
+            images: Vec::new(),
+        });
+    }
+    Ok(v)
+}
+
+/// 工具结果里的文件快照 id（核心内部字段）：挂到记录上供「回退到此」恢复文件，
 /// 留在 result 里会污染前端展示与模型回喂，所以取完即删
 fn take_checkpoints(result: &mut serde_json::Value) -> Vec<String> {
     let ids = result
@@ -925,46 +962,23 @@ pub async fn chat_turn(
     let iflag = register_interrupt(ctx, &target);
 
     // 协议选择：默认标准原生 function calling（请求带 tools 参数）；「兼容模式」开启时改用
-    // 文本约定（提示词注入 JSON 调用契约、解析正文单行 JSON 数组工具调用）。开关是全局
-    // 静态值，回合内不再探测、不中途变轨——端点不支持 tools 时直接报错指路兼容模式
-    let native_mode = !ctx.config.lock().unwrap().compat_mode;
+    // 文本约定（提示词注入 JSON 调用契约、解析正文单行 JSON 数组工具调用）。
+    // 具体走哪种由激活提供方的适配档案决定（模型名推断 + 提供方显式覆盖，见 ai::turn_profile），
+    // 回合内不中途变轨；端点明确拒绝 tools 时只降级一次（固化为文本约定并持久化）
+    let (mut native_mode, profile) = ai::turn_profile(ctx);
 
-// 2) 构造发给模型的对话（system + 历史 + 每轮追加的工具反馈）
+    // 2) 构造发给模型的对话（system + 历史 + 每轮追加的工具反馈）
     // 提示词随协议选择切换：原生模式不教文本调用格式，避免两种约定互相干扰
     // 锁治理：sessions 锁只在“快照历史”时持有，构建 system prompt（内部取 memories/config 等锁）在锁外进行
-    let mut convo: Vec<ChatMessage> = {
-        let history: Vec<(String, String)> = {
-            let store = ctx.sessions.lock().unwrap();
-            store
-                .sessions
-                .iter()
-                .find(|s| s.id == target)
-                .map(|sess| {
-                    history_window(&sess.messages)
-                        .iter()
-                        .map(|m| (m.role.clone(), m.content.clone()))
-                        .collect()
-                })
-                .ok_or("会话不存在")?
-        };
-        let sys = if native_mode {
-            ai::system_prompt_native(ctx, Some(&target))
-        } else {
-            ai::system_prompt(ctx, Some(&target))
-        };
-        let mut v = vec![ChatMessage::system(sys)];
-        // 只取最近若干条，且剥离 tool_calls（模型请求只需 role/content）
-        for (role, content) in history {
-            v.push(ChatMessage { role, content, tool_calls: Vec::new(), thinking: None, ts: None, diagram: None, images: Vec::new() });
-        }
-        v
-    };
+    let mut convo = rebuild_convo(ctx, &target, native_mode)?;
+    // 自动降级只尝试一次：端点明确拒绝 tools → 固化 text 模式并重建对话重试，避免死循环
+    let mut degraded = false;
 
     // 工具调用轮次不设上限：链式任务可能需要任意多轮，由模型自行决定何时给出最终答案
     let mut native_exchanges: Vec<ai::ToolExchange> = Vec::new();
     let mut pending_images: Vec<String> = Vec::new();
     let mut round = 0usize;
-    let mut continues = 0usize; // 自动续发（截断重试）计数：整个回合最多 3 次
+    let mut continues = 0usize; // 自动续发（截断重试）计数：上限按模型档位
     // 自动续跑（只说不做 / XML 工具调用纠正）计数：避免模型空转时无限烧 token
     let mut nudges = 0usize;
     // 瞬态网络错误（流被截断/连接失败/超时）自动重试本轮的剩余次数
@@ -1011,11 +1025,34 @@ pub async fn chat_turn(
                     }
                     (content, r.calls)
                 }
+                Err(ai::NativeErr::Unsupported(e)) if !degraded => {
+                    // 端点明确拒绝 tools：把该提供方固化为文本约定并持久化，同回合重建对话重试一次。
+                    // 用户不用理解 tool_mode；下一回合 turn_profile 直接走文本，不再反复试探
+                    match ai::degrade_to_text(ctx) {
+                        Some(name) => {
+                            degraded = true;
+                            native_mode = false;
+                            // 原生交换记录在文本约定里没有对应物；工具结果已落历史，重建即可
+                            native_exchanges.clear();
+                            convo = rebuild_convo(ctx, &target, false)?;
+                            round -= 1; // 本次不算轮次
+                            net_retries = 2;
+                            continues = 0;
+                            nudges = 0;
+                            ctx.emit("ai-degraded", json!({ "session": target, "provider": name }));
+                            continue;
+                        }
+                        None => {
+                            return Err(format!(
+                                "AI 端点不支持原生工具调用（{}），自动降级未成功，请在「AI 设置 → 兼容性优化」把工具协议改为「文本」后重试",
+                                ai::user_err(&e)
+                            ));
+                        }
+                    }
+                }
                 Err(ai::NativeErr::Unsupported(e)) => {
-                    // 端点拒绝 tools 参数：标准协议直接报错，不做自动降级/探测重试。
-                    // 确认该端点只支持文本时，在「AI 设置 → AI 行为设置」开启「兼容模式」后重试
                     return Err(format!(
-                        "AI 端点不支持原生工具调用（{}）。若确认该端点仅支持文本约定，请在「AI 设置 → AI 行为设置」中开启「兼容模式」后重试",
+                        "AI 端点不支持原生工具调用（{}）。若确认该端点仅支持文本约定，请在「AI 设置 → 兼容性优化」中把工具协议改为「文本」后重试",
                         ai::user_err(&e)
                     ));
                 }
@@ -1214,15 +1251,13 @@ pub async fn chat_turn(
             continue;
         }
 
-        // 回复不完整（截断/纯思考残渣）：不结束回合，自动替用户补发「继续」。
-        // 与下方原生分支同理：此处到达时本轮未发起工具调用，补发协议合法。
-        // 续发上限：截断最多 3 次（超大 JSON 永远撑爆时避免无限续发烧 token）；
-        // 只说不做 / XML 工具调用纠正另有 nudges 上限，超限后落库可见部分并结束回合
+        // 续发上限按模型档位（ai::ModelProfile）：截断、只说不做、XML 工具调用三类分开计数；
+        // 弱模型更容易空转，档位给了更高上限，强模型则尽早收敛避免烧 token
         let reason = continue_reason(&reply);
         let can_continue = match reason {
-            Some(ContinueReason::Truncated) => continues < 3,
-            Some(ContinueReason::XmlTool) => nudges < 2,
-            Some(ContinueReason::PlanOnly) => nudges < 4,
+            Some(ContinueReason::Truncated) => continues < profile.trunc_continues,
+            Some(ContinueReason::XmlTool) => nudges < profile.xml_nudges,
+            Some(ContinueReason::PlanOnly) => nudges < profile.plan_nudges,
             None => false,
         };
         if let (Some(reason), true) = (reason, can_continue) {
@@ -1394,44 +1429,21 @@ async fn chat_turn_stream_inner(
     let iflag = register_interrupt(ctx, &target);
 
     // 协议选择：默认标准原生 function calling；「兼容模式」开启时改用文本约定。
-    // 全局静态开关，回合内不再探测、不中途变轨，提示词随协议选择切换
-    let native_mode = !ctx.config.lock().unwrap().compat_mode;
+    // 具体走哪种由激活提供方的适配档案决定（ai::turn_profile），回合内不中途变轨
+    let (mut native_mode, profile) = ai::turn_profile(ctx);
 
-// 锁治理：sessions 锁只在“快照历史 + 确认会话存在”时持有，构建 system prompt
+    // 锁治理：sessions 锁只在“快照历史 + 确认会话存在”时持有，构建 system prompt
     // （内部会取 memories/config 等锁）必须在释放 sessions 锁后进行，避免跨锁死锁。
-    let mut convo: Vec<ChatMessage> = {
-        let history: Vec<(String, String)> = {
-            let store = ctx.sessions.lock().unwrap();
-            store
-                .sessions
-                .iter()
-                .find(|s| s.id == target)
-                .map(|sess| {
-                    history_window(&sess.messages)
-                        .iter()
-                        .map(|m| (m.role.clone(), m.content.clone()))
-                        .collect()
-                })
-                .ok_or("会话不存在")?
-        };
-        let sys = if native_mode {
-            ai::system_prompt_native(ctx, Some(&target))
-        } else {
-            ai::system_prompt(ctx, Some(&target))
-        };
-        let mut v = vec![ChatMessage::system(sys)];
-        for (role, content) in history {
-            v.push(ChatMessage { role, content, tool_calls: Vec::new(), thinking: None, ts: None, diagram: None, images: Vec::new() });
-        }
-        v
-    };
+    let mut convo = rebuild_convo(ctx, &target, native_mode)?;
+    // 自动降级只尝试一次：端点明确拒绝 tools → 固化 text 模式并重建对话重试，避免死循环
+    let mut degraded = false;
 
     // 工具调用轮次不设上限：链式任务可能需要任意多轮，由模型自行决定何时给出最终答案
     // 原生模式下本轮回复一次性下发（调用已随协议字段返回）
     let mut native_exchanges: Vec<ai::ToolExchange> = Vec::new();
     let mut pending_images: Vec<String> = Vec::new();
     let mut round = 0usize;
-    let mut continues = 0usize; // 自动续发（截断重试）计数：整个回合最多 3 次
+    let mut continues = 0usize; // 自动续发（截断重试）计数：上限按模型档位
     // 自动续跑（只说不做 / XML 工具调用纠正）计数：避免模型空转时无限烧 token
     let mut nudges = 0usize;
     // 瞬态网络错误（流被截断/连接失败/超时）自动重试本轮的剩余次数
@@ -1506,12 +1518,36 @@ async fn chat_turn_stream_inner(
                     };
                     (content, calls)
                 }
+                Err(ai::NativeErr::Unsupported(e)) if !degraded => {
+                    // 端点明确拒绝 tools：固化文本约定并持久化，同回合重建对话重试一次
+                    match ai::degrade_to_text(ctx) {
+                        Some(name) => {
+                            degraded = true;
+                            native_mode = false;
+                            native_exchanges.clear();
+                            convo = rebuild_convo(ctx, &target, false)?;
+                            round -= 1;
+                            net_retries = 2;
+                            continues = 0;
+                            nudges = 0;
+                            emit(json!({ "type": "ai-degraded", "provider": name }));
+                            continue;
+                        }
+                        None => {
+                            clear_interrupt(ctx, &target, &iflag);
+                            let e = format!(
+                                "AI 端点不支持原生工具调用（{}），自动降级未成功，请在「AI 设置 → 兼容性优化」把工具协议改为「文本」后重试",
+                                ai::user_err(&e)
+                            );
+                            emit(json!({ "type": "error", "error": e.clone() }));
+                            return Err(e);
+                        }
+                    }
+                }
                 Err(ai::NativeErr::Unsupported(e)) => {
-                    // 端点拒绝 tools 参数：标准协议直接报错，不做自动降级。
-                    // 确认该端点只支持文本时，在「AI 设置 → AI 行为设置」开启「兼容模式」后重试
                     clear_interrupt(ctx, &target, &iflag);
                     let e = format!(
-                        "AI 端点不支持原生工具调用（{}）。若确认该端点仅支持文本约定，请在「AI 设置 → AI 行为设置」中开启「兼容模式」后重试",
+                        "AI 端点不支持原生工具调用（{}）。若确认该端点仅支持文本约定，请在「AI 设置 → 兼容性优化」中把工具协议改为「文本」后重试",
                         ai::user_err(&e)
                     );
                     emit(json!({ "type": "error", "error": e.clone() }));
@@ -1776,17 +1812,14 @@ async fn chat_turn_stream_inner(
             continue;
         }
 
-        // 回复不完整（截断/纯思考残渣）：不结束回合，自动补发「继续」。
-        // 文本约定模式与原生 function calling 模式都启用：原生模式到达此分支
-        // 意味着本轮没有发起工具调用（有调用的分支在上面已 continue），
-        // 此时上下文末尾是普通 assistant/user 消息，补发「继续」协议合法。
-        // 续发上限：截断最多 3 次；只说不做 / XML 工具调用纠正另有 nudges 上限，
-        // 超限后落库可见部分并结束回合，避免模型空转时无限烧 token
+        // 续发上限按模型档位（ai::ModelProfile）：文本约定与原生模式都启用。
+        // 原生模式到达此分支意味着本轮没有发起工具调用（有调用的分支在上面已 continue），
+        // 此时上下文末尾是普通 assistant/user 消息，补发「继续」协议合法
         let reason = continue_reason(&reply);
         let can_continue = match reason {
-            Some(ContinueReason::Truncated) => continues < 3,
-            Some(ContinueReason::XmlTool) => nudges < 2,
-            Some(ContinueReason::PlanOnly) => nudges < 4,
+            Some(ContinueReason::Truncated) => continues < profile.trunc_continues,
+            Some(ContinueReason::XmlTool) => nudges < profile.xml_nudges,
+            Some(ContinueReason::PlanOnly) => nudges < profile.plan_nudges,
             None => false,
         };
         if let (Some(reason), true) = (reason, can_continue) {
@@ -2798,5 +2831,50 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0]["tool"], "shell");
         assert_eq!(strip_tool_json(reply), "");
+    }
+
+    /// Claude 经中转的常见降级形态：正文先解释，再输出 <function_calls> 包裹的 XML
+    #[test]
+    fn test_xml_function_calls_wrapper() {
+        let reply = "好的，我来执行。\n<function_calls>\n<invoke name=\"shell\">\n\
+                     <parameter name=\"command\">git status</parameter>\n</invoke>\n</function_calls>";
+        assert!(matches!(continue_reason(reply), Some(ContinueReason::XmlTool)));
+    }
+
+    /// 代码围栏未闭合 = 输出被截断（应自动续写），不能被当成 XML 工具调用
+    #[test]
+    fn test_unterminated_fence_is_truncated() {
+        let reply = "下面是完整实现：\n```rust\nfn main() {\n    println!(\"hi\");\n}";
+        assert!(matches!(continue_reason(reply), Some(ContinueReason::Truncated)));
+    }
+
+    /// 续跑上限按档位取值：弱模型更宽容（更容易空转），强模型更早收敛
+    #[test]
+    fn test_profile_caps_by_tier() {
+        use crate::ai::{ModelProfile, Tier};
+        let weak = ModelProfile::for_tier(Tier::Weak);
+        let strong = ModelProfile::for_tier(Tier::Strong);
+        assert!(weak.plan_nudges > strong.plan_nudges);
+        assert!(weak.trunc_continues >= strong.trunc_continues);
+        assert!(strong.stream_idle_secs > weak.stream_idle_secs);
+        assert!(!weak.native_tools && strong.native_tools);
+    }
+
+    /// 降级重建：两种协议各自取对应的系统提示词，历史 role/content 保留
+    #[test]
+    fn test_rebuild_convo_switches_prompt() {
+        let ctx = crate::plugins::test_ctx("agent-rebuild");
+        let mut sess = crate::session::Session::new("t");
+        sess.messages.push(ChatMessage::user("你好"));
+        let sid = sess.id.clone();
+        ctx.sessions.lock().unwrap().sessions.push(sess);
+
+        let native = rebuild_convo(&ctx, &sid, true).unwrap();
+        let text = rebuild_convo(&ctx, &sid, false).unwrap();
+        assert_eq!(native[0].role, "system");
+        assert_eq!(text[0].role, "system");
+        assert_ne!(native[0].content, text[0].content, "两种协议的系统提示词不应相同");
+        assert_eq!(text.last().unwrap().content, "你好");
+        assert!(rebuild_convo(&ctx, "missing", false).is_err());
     }
 }

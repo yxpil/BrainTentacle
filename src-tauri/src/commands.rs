@@ -1232,6 +1232,24 @@ pub fn list_providers(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
     json!({ "providers": cfg.providers.clone() })
 }
 
+/// 模型档位归一：只接受 strong/standard/weak，其余（含空/auto）一律清空=按模型名推断
+fn norm_profile(v: Option<String>) -> Option<String> {
+    let s = v?.trim().to_ascii_lowercase();
+    matches!(s.as_str(), "strong" | "standard" | "weak").then_some(s)
+}
+
+/// 思考强度归一：只接受 low/medium/high；空/其他一律清空=不发送参数
+fn norm_effort(v: Option<String>) -> Option<String> {
+    let s = v?.trim().to_ascii_lowercase();
+    matches!(s.as_str(), "low" | "medium" | "high").then_some(s)
+}
+
+/// 工具协议归一：只接受 native/text，其余（含空/auto）一律清空=按档位默认
+fn norm_tool_mode(v: Option<String>) -> Option<String> {
+    let s = v?.trim().to_ascii_lowercase();
+    matches!(s.as_str(), "native" | "text").then_some(s)
+}
+
 /// base_url 归一化：去首尾空白与尾部斜杠；scheme 缺失时默认补 https://
 /// （本机/局域网 http 端点在模型列表探测时会自动降级并回写正确 scheme）
 fn normalize_base_url(b: &str) -> String {
@@ -1252,6 +1270,14 @@ pub fn add_provider(
     base_url: String,
     api_key: String,
     model: String,
+    profile: Option<String>,
+    tool_mode: Option<String>,
+    continue_nudges: Option<usize>,
+    stream_idle_secs: Option<u64>,
+    temperature: Option<f64>,
+    reasoning_effort: Option<String>,
+    max_output_tokens: Option<u64>,
+    request_timeout_secs: Option<u64>,
 ) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
     let protocol = match protocol.as_str() {
@@ -1286,6 +1312,15 @@ pub fn add_provider(
         api_key: api_key.trim().to_string(),
         model,
         active: false,
+        // 适配覆盖：空/auto=按模型名推断；0=按档位默认
+        profile: norm_profile(profile).unwrap_or_default(),
+        tool_mode: norm_tool_mode(tool_mode).unwrap_or_default(),
+        continue_nudges: continue_nudges.filter(|n| *n > 0),
+        stream_idle_secs: stream_idle_secs.filter(|s| *s > 0),
+        temperature: temperature.filter(|t| (0.0..=2.0).contains(t)),
+        reasoning_effort: norm_effort(reasoning_effort),
+        max_output_tokens: max_output_tokens.filter(|n| *n > 0),
+        request_timeout_secs: request_timeout_secs.filter(|n| *n > 0),
     };
     let id = p.id.clone();
     {
@@ -1311,6 +1346,14 @@ pub fn update_provider(
     base_url: String,
     api_key: String,
     model: String,
+    profile: Option<String>,
+    tool_mode: Option<String>,
+    continue_nudges: Option<usize>,
+    stream_idle_secs: Option<u64>,
+    temperature: Option<f64>,
+    reasoning_effort: Option<String>,
+    max_output_tokens: Option<u64>,
+    request_timeout_secs: Option<u64>,
 ) -> Result<serde_json::Value, String> {
     let ctx = ctx(state);
     {
@@ -1335,6 +1378,31 @@ pub fn update_provider(
         };
         p.api_key = api_key.trim().to_string();
         p.protocol = protocol;
+        // 适配覆盖：None=保持不变；Some("")/auto=清空改回按模型名推断；0=按档位默认
+        if let Some(v) = profile {
+            p.profile = norm_profile(Some(v)).unwrap_or_default();
+        }
+        if let Some(v) = tool_mode {
+            p.tool_mode = norm_tool_mode(Some(v)).unwrap_or_default();
+        }
+        if let Some(n) = continue_nudges {
+            p.continue_nudges = (n > 0).then_some(n);
+        }
+        if let Some(s) = stream_idle_secs {
+            p.stream_idle_secs = (s > 0).then_some(s);
+        }
+        if let Some(t) = temperature {
+            p.temperature = (0.0..=2.0).contains(&t).then_some(t);
+        }
+        if let Some(v) = reasoning_effort {
+            p.reasoning_effort = norm_effort(Some(v));
+        }
+        if let Some(n) = max_output_tokens {
+            p.max_output_tokens = (n > 0).then_some(n);
+        }
+        if let Some(n) = request_timeout_secs {
+            p.request_timeout_secs = (n > 0).then_some(n);
+        }
     }
     ctx.save_ai_config();
     crate::audit::record(&ctx, "local-user", "ai.provider.update", &id, json!({}), true);
@@ -1555,7 +1623,39 @@ pub fn set_autostart(
 pub fn get_ai_params(state: State<'_, Arc<Ctx>>) -> serde_json::Value {
     let ctx = ctx(state);
     let cfg = ctx.ai_config.lock().unwrap();
-    json!({ "temperature": cfg.temperature, "reasoning_effort": cfg.reasoning_effort })
+    json!({
+        "temperature": cfg.temperature,
+        "reasoning_effort": cfg.reasoning_effort,
+        "max_output_tokens": cfg.max_output_tokens,
+        "model_aliases": crate::ai::format_aliases(&cfg.model_profiles),
+    })
+}
+
+/// 保存模型名别名表（文本域，一行 `关键词 = 档位 [/ 协议]`）
+#[tauri::command]
+pub fn set_model_aliases(
+    state: State<'_, Arc<Ctx>>,
+    text: String,
+) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::set_model_aliases(&ctx, text)
+}
+
+/// 按表单值回显生效适配（不落盘）
+#[tauri::command]
+pub fn ai_effective_profile(
+    state: State<'_, Arc<Ctx>>,
+    form: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::ai_effective_profile(&ctx, form)
+}
+
+/// 最近一次真正发出的请求原文
+#[tauri::command]
+pub fn ai_last_request(state: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, String> {
+    let ctx = ctx(state);
+    crate::commands_api::ai_last_request(&ctx)
 }
 
 /// 设置模型采样参数：temperature None=默认（0-2）；reasoning_effort ""=默认 / low / medium / high

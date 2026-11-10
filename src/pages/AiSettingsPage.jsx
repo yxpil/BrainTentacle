@@ -123,6 +123,29 @@ const EMPTY = {
   base_url: "",
   api_key: "",
   model: "",
+  // 模型适配覆盖（空=按模型名自动推断，配置落在 ai_config 里，不往提示词里堆指令）
+  profile: "",
+  tool_mode: "",
+  continue_nudges: "",
+  stream_idle_secs: "",
+  // 采样/超时覆盖（空=回落全局设置，不逐条重填）
+  temperature: "",
+  reasoning_effort: "",
+  max_output_tokens: "",
+  request_timeout_secs: "",
+};
+
+// 数字输入 → null（空/非法/0 都表示「按档位默认」）
+const numOrNull = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+// 浮点输入 → null（温度 0-2；空/非法都表示「回落全局」）
+const floatOrNull = (v) => {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n >= 0 && n <= 2 ? n : null;
 };
 
 // ── 语音合成（TTS）：本地 sherpa 系 8 个引擎 + 在线 4 家 ──
@@ -1128,6 +1151,13 @@ export default function AiSettingsPage({ onStats, stats, group }) {
     reasoning_effort: "",
   });
   const [paramsSaved, setParamsSaved] = useState(false);
+  // 模型名别名表（文本域）：一行 `关键词 = 档位 [/ 协议]`
+  const [aliases, setAliases] = useState("");
+  const [aliasesSaved, setAliasesSaved] = useState(false);
+  // 当前生效适配回显（由 Rust 按表单值算，auto 到底解析成什么一目了然）
+  const [effective, setEffective] = useState(null);
+  // 最近一次真正发出的请求原文（undefined=未拉取 / null=暂无记录）
+  const [lastReq, setLastReq] = useState(undefined);
   // 幻觉防护阈值：word_repeat_max=单回复词重复上限 / tool_loop_max=单回合工具轮上限（0=关闭）
   const [limits, setLimits] = useState({
     word_repeat_max: 20,
@@ -1144,7 +1174,7 @@ export default function AiSettingsPage({ onStats, stats, group }) {
   const [svcTuning, setSvcTuning] = useState({
     start_delay_ms: 300,
     ready_secs: 60,
-    retries: 2,
+    retries: 3,
     stop_grace_secs: 5,
     log_lines: 1000,
     ranges: [],
@@ -1455,12 +1485,13 @@ export default function AiSettingsPage({ onStats, stats, group }) {
     load();
     api
       .getAiParams()
-      .then((r) =>
+      .then((r) => {
         setParams({
           temperature: r?.temperature ?? null,
           reasoning_effort: r?.reasoning_effort || "",
-        }),
-      )
+        });
+        setAliases(r?.model_aliases || "");
+      })
       .catch(() => {});
     api
       .getGuardLimits()
@@ -2019,6 +2050,41 @@ export default function AiSettingsPage({ onStats, stats, group }) {
     }
   };
 
+  // 表单变化 → 300ms 防抖回显生效值（档位/协议/上限/超时/采样都由核心算）；失败静默
+  useEffect(() => {
+    if (!showForm) return;
+    const timer = setTimeout(() => {
+      api
+        .aiEffectiveProfile(form)
+        .then(setEffective)
+        .catch(() => setEffective(null));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [showForm, form]);
+
+  // 别名表是全局配置，跟着表单一起显示，但单独保存（不参与提供方提交）
+  const saveAliases = async () => {
+    setError("");
+    try {
+      const r = await api.setModelAliases(aliases);
+      setAliases(r?.text ?? aliases);
+      setAliasesSaved(true);
+      setTimeout(() => setAliasesSaved(false), 1500);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  // 展开「请求原文」时才去拉，避免每次打开表单都打扰核心
+  const openLastRequest = async () => {
+    if (lastReq !== undefined) return;
+    try {
+      setLastReq(await api.aiLastRequest());
+    } catch {
+      setLastReq(null);
+    }
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     setError("");
@@ -2031,6 +2097,14 @@ export default function AiSettingsPage({ onStats, stats, group }) {
           form.base_url,
           form.api_key,
           form.model,
+          form.profile,
+          form.tool_mode,
+          numOrNull(form.continue_nudges),
+          numOrNull(form.stream_idle_secs),
+          floatOrNull(form.temperature),
+          form.reasoning_effort || null,
+          numOrNull(form.max_output_tokens),
+          numOrNull(form.request_timeout_secs),
         );
       } else {
         await api.addProvider(
@@ -2039,6 +2113,14 @@ export default function AiSettingsPage({ onStats, stats, group }) {
           form.base_url,
           form.api_key,
           form.model,
+          form.profile,
+          form.tool_mode,
+          numOrNull(form.continue_nudges),
+          numOrNull(form.stream_idle_secs),
+          floatOrNull(form.temperature),
+          form.reasoning_effort || null,
+          numOrNull(form.max_output_tokens),
+          numOrNull(form.request_timeout_secs),
         );
       }
       setForm(EMPTY);
@@ -2060,6 +2142,14 @@ export default function AiSettingsPage({ onStats, stats, group }) {
       base_url: p.base_url,
       api_key: p.api_key,
       model: p.model,
+      profile: p.profile || "",
+      tool_mode: p.tool_mode || "",
+      continue_nudges: p.continue_nudges ?? "",
+      stream_idle_secs: p.stream_idle_secs ?? "",
+      temperature: p.temperature ?? "",
+      reasoning_effort: p.reasoning_effort || "",
+      max_output_tokens: p.max_output_tokens ?? "",
+      request_timeout_secs: p.request_timeout_secs ?? "",
     });
     setRemoteModels(null);
     setFetchModelsErr("");
@@ -4092,6 +4182,213 @@ export default function AiSettingsPage({ onStats, stats, group }) {
                   {t("ai.noModels")}
                 </p>
               )}
+            </div>
+
+            {/* 兼容性优化：默认按模型名自动推断，覆盖项存在 ai_config 里并由工具侧消费
+                （协议/续跑上限/流式超时），不往系统提示词里追加任何约束 */}
+            <div className="rounded-2xl border border-neutral-200/80 p-3 dark:border-neutral-800">
+              <p className="mb-2 px-1 text-xs font-medium">
+                {t("ai.advancedAdapt")}
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block px-2 text-xs text-neutral-500">
+                    {t("ai.modelProfile")}
+                  </label>
+                  <select
+                    className="field"
+                    value={form.profile}
+                    onChange={(e) =>
+                      setForm({ ...form, profile: e.target.value })
+                    }
+                  >
+                    <option value="">{t("ai.profileAuto")}</option>
+                    <option value="strong">{t("ai.profileStrong")}</option>
+                    <option value="standard">{t("ai.profileStandard")}</option>
+                    <option value="weak">{t("ai.profileWeak")}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block px-2 text-xs text-neutral-500">
+                    {t("ai.toolMode")}
+                  </label>
+                  <select
+                    className="field"
+                    value={form.tool_mode}
+                    title={t("ai.toolModeHint")}
+                    onChange={(e) =>
+                      setForm({ ...form, tool_mode: e.target.value })
+                    }
+                  >
+                    <option value="">{t("ai.toolModeAuto")}</option>
+                    <option value="native">{t("ai.toolModeNative")}</option>
+                    <option value="text">{t("ai.toolModeText")}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block px-2 text-xs text-neutral-500">
+                    {t("ai.continueNudges")}
+                  </label>
+                  <input
+                    className="field font-mono"
+                    type="number"
+                    min="1"
+                    value={form.continue_nudges}
+                    onChange={(e) =>
+                      setForm({ ...form, continue_nudges: e.target.value })
+                    }
+                    placeholder="auto"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block px-2 text-xs text-neutral-500">
+                    {t("ai.streamIdle")}
+                  </label>
+                  <input
+                    className="field font-mono"
+                    type="number"
+                    min="30"
+                    value={form.stream_idle_secs}
+                    onChange={(e) =>
+                      setForm({ ...form, stream_idle_secs: e.target.value })
+                    }
+                    placeholder="auto"
+                    title={t("ai.streamIdleHint")}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block px-2 text-xs text-neutral-500">
+                    {t("ai.temperatureOverride")}
+                  </label>
+                  <input
+                    className="field font-mono"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="2"
+                    value={form.temperature}
+                    onChange={(e) =>
+                      setForm({ ...form, temperature: e.target.value })
+                    }
+                    placeholder="—"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block px-2 text-xs text-neutral-500">
+                    {t("ai.reasoningOverride")}
+                  </label>
+                  <select
+                    className="field"
+                    value={form.reasoning_effort}
+                    onChange={(e) =>
+                      setForm({ ...form, reasoning_effort: e.target.value })
+                    }
+                  >
+                    <option value="">—</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block px-2 text-xs text-neutral-500">
+                    {t("ai.maxOutputOverride")}
+                  </label>
+                  <input
+                    className="field font-mono"
+                    type="number"
+                    min="1"
+                    value={form.max_output_tokens}
+                    onChange={(e) =>
+                      setForm({ ...form, max_output_tokens: e.target.value })
+                    }
+                    placeholder="—"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block px-2 text-xs text-neutral-500">
+                    {t("ai.requestTimeout")}
+                  </label>
+                  <input
+                    className="field font-mono"
+                    type="number"
+                    min="5"
+                    value={form.request_timeout_secs}
+                    onChange={(e) =>
+                      setForm({ ...form, request_timeout_secs: e.target.value })
+                    }
+                    placeholder="120"
+                    title={t("ai.requestTimeoutHint")}
+                  />
+                </div>
+              </div>
+              <p className="mt-2 px-1 text-[11px] leading-snug text-neutral-400">
+                {t("ai.modelProfileHint")}
+              </p>
+              {effective && (
+                <p className="mt-1 px-1 font-mono text-[11px] leading-snug text-neutral-500">
+                  {t("ai.effectiveNow")}：
+                  {effective.tier === "strong"
+                    ? t("ai.profileStrong")
+                    : effective.tier === "standard"
+                      ? t("ai.profileStandard")
+                      : t("ai.profileWeak")}
+                  {" / "}
+                  {effective.native ? t("ai.toolModeNative") : t("ai.toolModeText")}
+                  {" / "}
+                  {t("ai.continueNudges")} {effective.plan_nudges}
+                  {" / "}
+                  {t("ai.streamIdle")} {effective.stream_idle_secs}s
+                  {" / "}
+                  {t("ai.requestTimeout")} {effective.request_timeout_secs}s
+                  {" / "}
+                  {t("ai.temperatureOverride")} {effective.temperature ?? "—"}
+                </p>
+              )}
+              {/* 别名是全局配置：一行 `关键词 = 档位 [/ 协议]`，提供方没显式指定时生效 */}
+              <div className="mt-3 border-t border-neutral-200/70 pt-3 dark:border-neutral-800">
+                <label className="mb-1 block px-1 text-xs text-neutral-500">
+                  {t("ai.modelAliases")}
+                </label>
+                <textarea
+                  className="field min-h-[72px] font-mono text-xs"
+                  value={aliases}
+                  onChange={(e) => setAliases(e.target.value)}
+                  placeholder={"qwen = weak / text\nglm = weak"}
+                  title={t("ai.modelAliasesHint")}
+                />
+                <div className="mt-1 flex items-center justify-end gap-3">
+                  {aliasesSaved && (
+                    <span className="flex items-center gap-1 text-xs text-neutral-500">
+                      <IconCheck size={14} />
+                      {t("common.saved")}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="pill pill-hover"
+                    onClick={saveAliases}
+                  >
+                    {t("ai.aliasSave")}
+                  </button>
+                </div>
+              </div>
+              {/* 请求原文：内存态、仅本机可见，超长 data URL 已在核心裁剪 */}
+              <details
+                className="mt-2 px-1"
+                onToggle={(e) => e.currentTarget.open && openLastRequest()}
+              >
+                <summary className="cursor-pointer text-[11px] text-neutral-500">
+                  {t("ai.lastRequest")}
+                </summary>
+                <pre className="mt-1 max-h-72 overflow-auto rounded-lg bg-neutral-100 p-2 text-[10px] leading-relaxed dark:bg-neutral-900">
+                  {lastReq === undefined
+                    ? t("ai.loading")
+                    : lastReq === null
+                      ? t("ai.noRequestYet")
+                      : `${lastReq.at}  ${(lastReq.protocol || "").toUpperCase()}\n${lastReq.url}\n\n${JSON.stringify(lastReq.body, null, 2).slice(0, 200000)}`}
+                </pre>
+              </details>
             </div>
 
             {error && <p className="px-2 text-xs text-red-600">{error}</p>}

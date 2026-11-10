@@ -162,6 +162,9 @@ pub struct Ctx {
     pub workspace_root: Mutex<Option<PathBuf>>,
     /// 进程启动时刻（诊断报告的运行时长）
     pub started: std::time::Instant,
+    /// 最近一次真正发给模型的请求（协议/URL/请求体，不含鉴权头）：设置页「请求原文」用。
+    /// 内存态，重启即清；超长字符串已在写入时裁剪
+    pub ai_last_request: Mutex<Option<serde_json::Value>>,
 }
 
 pub const AUDIT_MAX: usize = 2000;
@@ -407,6 +410,7 @@ impl Ctx {
             tool_loaded: Mutex::new(HashMap::new()),
             workspace_root: Mutex::new(None),
             started: std::time::Instant::now(),
+            ai_last_request: Mutex::new(None),
         })
     }
 
