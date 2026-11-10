@@ -93,11 +93,11 @@ jobs:
           s2 = re.sub(r'^version = "[\d.]+"', f'version = "{new}"', s, count=1, flags=re.M)
           assert s2 != s, "Cargo.toml 未匹配到 version"
           open("src-tauri/Cargo.toml", "w").write(s2)
-          # Cargo.lock：bit 包自身的版本条目
-          s = open("src-tauri/Cargo.lock").read()
+          # Cargo.lock：bit 包自身的版本条目（src-tauri 是 workspace 成员，锁文件在仓库根目录）
+          s = open("Cargo.lock").read()
           s2 = re.sub(r'(\[\[package\]\]\nname = "bit"\nversion = )"[\d.]+"', r'\1"' + new + '"', s)
           assert s2 != s, "Cargo.lock 中未找到 bit 包版本"
-          open("src-tauri/Cargo.lock", "w").write(s2)
+          open("Cargo.lock", "w").write(s2)
           EOF
           git diff --stat
 
