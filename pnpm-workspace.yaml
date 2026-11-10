@@ -1,7 +1,9 @@
 allowBuilds:
   esbuild: true
 # 安全修复（与 package.json 的 npm overrides 保持一致）：
-# katex 0.16.x 有原型污染公告；minimatch 7-11.0.0 有 globparts 放大 DoS 公告
+# katex 0.16.x 有原型污染公告；minimatch 7-11.0.0 有 globparts 放大 DoS 公告；ejs <3.1.10 有模板注入公告
 overrides:
   katex: ^0.18.11
   minimatch: ^11.0.1
+  # app-builder-lib 的 ejs 依赖范围 ^3.1.8 会把 pnpm 钉在 3.1.8（<3.1.10 有模板注入公告）
+  ejs: ^3.1.10

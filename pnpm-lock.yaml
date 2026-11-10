@@ -7,6 +7,7 @@ settings:
 overrides:
   katex: ^0.18.11
   minimatch: ^11.0.1
+  ejs: ^3.1.10
 
 importers:
 
@@ -1708,8 +1709,8 @@ packages:
   eastasianwidth@0.2.0:
     resolution: {integrity: sha512-I88TYZWc9XiYHRQ4/3c5rjjfgkjhLyW2luGIheGERbNQ6OY7yTybanSpDXZa8y7VUP9YmDcYa+eyq4ca7iLqWA==}
 
-  ejs@3.1.8:
-    resolution: {integrity: sha512-/sXZeMlhS0ArkfX2Aw780gJzXSMPnKjtspYZv+f3NiKLlubezAHDU5+9xz6gd3/NhG3txQCo6xlglmTS+oTGEQ==}
+  ejs@3.1.10:
+    resolution: {integrity: sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA==}
     engines: {node: '>=0.10.0'}
     hasBin: true
 
@@ -4371,7 +4372,7 @@ snapshots:
       dmg-builder: 26.18.0(electron-builder-squirrel-windows@26.18.0)
       dotenv: 16.4.5
       dotenv-expand: 11.0.6
-      ejs: 3.1.8
+      ejs: 3.1.10
       electron-builder-squirrel-windows: 26.18.0(dmg-builder@26.18.0)
       electron-publish: 26.18.0
       fs-extra: 10.1.0
@@ -4860,7 +4861,7 @@ snapshots:
 
   eastasianwidth@0.2.0: {}
 
-  ejs@3.1.8:
+  ejs@3.1.10:
     dependencies:
       jake: 10.8.5
 
