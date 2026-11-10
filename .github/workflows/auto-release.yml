@@ -88,16 +88,26 @@ jobs:
               with open(f, "w") as fp:
                   json.dump(j, fp, indent=2, ensure_ascii=False)
                   fp.write("\n")
-          # Cargo.toml：[package] 段第一处 version = "..."
+          # Cargo.toml：根 [workspace.package] 版本（bit-core / bit-napi 继承）+ 壳层字面版本
+          s = open("Cargo.toml").read()
+          s2 = re.sub(r'(\[workspace\.package\]\n(?:.*\n)*?version = )"[\d.]+"', r'\1"' + new + '"', s, count=1)
+          assert s2 != s, "根 Cargo.toml 未匹配到 [workspace.package] version"
+          open("Cargo.toml", "w").write(s2)
           s = open("src-tauri/Cargo.toml").read()
           s2 = re.sub(r'^version = "[\d.]+"', f'version = "{new}"', s, count=1, flags=re.M)
-          assert s2 != s, "Cargo.toml 未匹配到 version"
+          assert s2 != s, "src-tauri/Cargo.toml 未匹配到 version"
           open("src-tauri/Cargo.toml", "w").write(s2)
-          # Cargo.lock：bit 包自身的版本条目（src-tauri 是 workspace 成员，锁文件在仓库根目录）
+          # Cargo.lock：三个 workspace 成员（bit / bit-core / bit-napi）的版本条目
           s = open("Cargo.lock").read()
-          s2 = re.sub(r'(\[\[package\]\]\nname = "bit"\nversion = )"[\d.]+"', r'\1"' + new + '"', s)
-          assert s2 != s, "Cargo.lock 中未找到 bit 包版本"
-          open("Cargo.lock", "w").write(s2)
+          for pkg in ("bit", "bit-core", "bit-napi"):
+              s2 = re.sub(
+                  r'(\[\[package\]\]\nname = "' + pkg + r'"\nversion = )"[\d.]+"',
+                  r'\1"' + new + '"',
+                  s,
+              )
+              assert s2 != s, f"Cargo.lock 中未找到 {pkg} 包版本"
+              s = s2
+          open("Cargo.lock", "w").write(s)
           EOF
           git diff --stat
 
@@ -115,16 +125,16 @@ jobs:
           git push origin main
           git push origin "$TAG"
 
-      - name: 触发 release 构建 + E2E + Gitee 同步
+      - name: 触发 release 构建 + E2E + 渠道同步
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
           gh workflow run release.yml -f tag="$TAG" --repo "$GITHUB_REPOSITORY"
           gh workflow run e2e.yml --repo "$GITHUB_REPOSITORY"
-          gh workflow run sync-gitee.yml --repo "$GITHUB_REPOSITORY"
+          gh workflow run sync-channels.yml -f tag="$TAG" --repo "$GITHUB_REPOSITORY"
           echo "### 发布 $TAG 已启动" >> "$GITHUB_STEP_SUMMARY"
           echo "- release：全平台构建安装包并上传 Release" >> "$GITHUB_STEP_SUMMARY"
           echo "- e2e：三平台 TUI 测试" >> "$GITHUB_STEP_SUMMARY"
-          echo "- sync-gitee：镜像同步到 Gitee" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sync-channels：Homebrew/Scoop/APT/pacman/dnf/winget 渠道同步" >> "$GITHUB_STEP_SUMMARY"
           echo "- 构建完成后 finalize 自动上传 latest.json 并刷新 Pages 镜像" >> "$GITHUB_STEP_SUMMARY"

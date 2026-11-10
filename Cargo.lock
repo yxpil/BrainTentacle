@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "bit-core"
-version = "0.7.6"
+version = "0.7.7"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "bit-napi"
-version = "0.7.6"
+version = "0.7.7"
 dependencies = [
  "bit-core",
  "napi",
